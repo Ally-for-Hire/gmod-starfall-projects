@@ -1,0 +1,588 @@
+--@name 2024 Cam Controller and Hud
+--@author Merydian9
+--@shared
+--@model models/jaanus/wiretool/wiretool_range.mdl
+
+if SERVER then
+    print("Started Successfuly")
+    
+    // Gun Settings
+    ROTATESPEED = 120
+    MAXELEVATION = 90
+    MAXDEPRESSION = 15
+    MAXYAW = 180 // Not currently functional
+    
+    // PID Constants 
+    local Kp = 80   -- Proportional gain
+    local Ki = 120    -- Integral gain
+    local Kd = 35    -- Derivative gain
+        
+    /*
+        Kp (Proportional Gain): Controls how aggressively the system reacts to the error. Higher values lead to faster correction but may cause overshoot or instability.
+        Ki (Integral Gain): Corrects accumulated errors over time. Helps reduce steady-state error but can cause oscillation if too high.
+        Kd (Derivative Gain): Reacts to the rate of change of the error. Helps dampen oscillations and stabilize the system.
+    */ 
+    
+    // PID Controller Variables
+    local lastError = Angle(0, 0, 0)
+    local integral = Angle(0, 0, 0)
+    local dt = game.getTickInterval() -- Time step for the PID loop (adjust as needed)   
+    local lastHitPos = Vector()
+    
+    ROTATESPEED = ROTATESPEED * dt
+    
+    // Global variable initialization
+    HITPOS = Vector()
+    HITNORMAL = Vector()
+    INERTIA = Angle()
+    GUNVALID = false
+    RelCamPos = Vector(0, 0, 100)
+    CamDist = 300
+    AIMHOLOGRAM = hologram.create(Vector(), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl", Vector())
+    
+    // Wire port setup
+    wire.adjustPorts({Active = "number", Base = "entity", Aimer = "entity", Gun = "entity", Smokes = "entity", Filter = "array", TargetPos = "vector", LeadPos = "vector", TargetName = "string"}, {HitPos = "vector"})
+    hook.add("input", "sendInputs", function(name, value)
+        if name == "Active" then
+            net.start("sendActive")
+            net.writeInt(value, 8)
+            net.send()
+        elseif name == "Base" then
+            net.start("sendBase")
+            net.writeEntity(value)
+            net.send()
+        elseif name == "Gun" then
+            net.start("sendGun")
+            net.writeEntity(value)
+            net.send()
+        elseif name == "Aimer" then
+            GUNVALID = value:isValid()
+            if GUNVALID then
+                local temp = Angle(value:getInertia().x, value:getInertia().y, value:getInertia().z)
+                INERTIA = Angle(temp.yaw, temp.roll, temp.pitch)
+                INERTIA.roll = 0
+            end
+        elseif name == "Filter" then
+            net.start("sendFilter")
+            net.writeTable(value)
+            net.send()
+        end
+    end)
+    
+    // Ammo categorization
+    ALLCRATES = find.byClass("acf_ammo")
+    UNSORTEDAMMOTYPES = {}
+    local ammoTypeArray = {}
+    
+    local count = table.count(ALLCRATES)
+    for i = 1, count do
+        local type = ALLCRATES[i]:acfCaliber() .. " " .. ALLCRATES[i]:acfName()
+        if string.explode(" ", type)[3] == "Refill" then continue end
+        
+        if UNSORTEDAMMOTYPES[type] == nil then
+            UNSORTEDAMMOTYPES[type] = {Info = Vector(ALLCRATES[i]:acfMuzzleVel(), ALLCRATES[i]:acfPenetration(), 0)}
+        end
+        
+        UNSORTEDAMMOTYPES[type][table.count(UNSORTEDAMMOTYPES[type])] = ALLCRATES[i]
+    end
+    
+    SORTEDAMMOTYPES = {}
+    while table.count(UNSORTEDAMMOTYPES) > 0 do
+        local keys = table.getKeys(UNSORTEDAMMOTYPES) 
+        local maxValue = 99999 // actually minValue
+        local maxValueKey = ""
+        
+        for index = 1, table.count(keys) do
+            local value = keys[index]
+            local caliber = tonumber(string.explode(" ", value)[1])
+            
+            if caliber < maxValue then
+                maxValue = caliber
+                maxValueKey = value
+            end
+        end
+        
+        UNSORTEDAMMOTYPES[maxValueKey]["Name"] = maxValueKey
+        table.insert(SORTEDAMMOTYPES, UNSORTEDAMMOTYPES[maxValueKey])  
+        table.removeByValue(UNSORTEDAMMOTYPES, UNSORTEDAMMOTYPES[maxValueKey])
+    end
+    
+    AMMOTYPES = SORTEDAMMOTYPES
+    
+    //print(table.count(AMMOTYPES) .. " ammo types found")
+    //printTable(SORTEDAMMOTYPES)
+    
+    // Exchange between CLIENT and SERVER
+    // Recieve CLIENT data and send SERVER initial data
+    net.receive("requestGlobals", function(_, ply)
+        // Send SERVER data
+        net.start("sendServerGlobals")
+        net.writeVector(RelCamPos)
+        net.writeInt(CamDist, 12)
+        net.writeInt(wire.ports.Active, 8)
+        net.writeEntity(wire.ports.Base)
+        net.writeEntity(wire.ports.Gun)
+        net.writeTable(wire.ports.Filter)
+        net.writeEntity(AIMHOLOGRAM)
+        net.writeTable(AMMOTYPES)
+        net.send(ply, false)
+    end)
+    
+    // Send SERVER gun data
+    timer.create("sendGunData",0.1,0,function()
+        local Gun = wire.ports.Gun
+        if Gun == nil then return end
+        
+        net.start("sendGunData")
+        net.writeBool(Gun:acfReady())
+        net.writeFloat(Gun:acfReloadTime())
+        net.writeFloat(Gun:acfReloadProgress())
+        if wire.ports.Smokes:isValid() then
+            net.writeFloat(wire.ports.Smokes:acfReloadTime())
+            net.writeFloat(wire.ports.Smokes:acfReloadProgress())
+        else
+            net.writeFloat(0)
+            net.writeFloat(0)
+        end
+        net.writeString(Gun:acfState())
+        
+        for key, value in pairs(AMMOTYPES) do
+            local totalAmmo = 0
+            for i = 1, (table.count(value) - 1) do
+                if value[i] == nil or !value[i]:isValid() then continue end
+                totalAmmo = totalAmmo + value[i]:acfRounds()
+            end
+            value["Info"].z = totalAmmo
+        end
+
+        net.writeTable(AMMOTYPES)
+        net.send(owner(), false)
+        
+    end)
+    
+    // Recieve CLIENT wire data
+    net.receive("sendClientData", function(_, ply)
+        HITPOS = Vector(net.readFloat(), net.readFloat(), net.readFloat())
+        HITNORMAL = Vector(net.readFloat(), net.readFloat(), net.readFloat())
+        //wire.ports.HitPos = HITPOS  
+    end)
+    
+    function angClamp(ang1, ang2, ang3) // angle, lowangle, highangle
+        return Angle(math.clamp(ang1.pitch, ang2.pitch, ang3.pitch), math.clamp(ang1.yaw, ang2.yaw, ang3.yaw), math.clamp(ang1.roll, ang2.roll, ang3.roll))    
+    end
+    
+    // Gun Aiming
+    hook.add("tick", "main", function()
+        if !GUNVALID then return end
+        
+        local gun = wire.ports.Aimer
+        local base = wire.ports.Base
+        
+        local aimPos = (HITPOS)
+        local currentCamPos = base:getPos() + RelCamPos
+        idealAng = (aimPos - currentCamPos):getNormalized():getAngle()
+        local angOffset = idealAng - HITNORMAL:getAngle()
+        
+        local gunAng = HITNORMAL:getAngle() + angOffset
+        
+        if (wire.ports.TargetName != "") then
+            wire.ports.HitPos = wire.ports.TargetPos  
+            gunAng = (wire.ports.LeadPos - gun:getMassCenterW()):getNormalized():getAngle()
+        else
+            wire.ports.HitPos = HITPOS      
+        end
+        
+        
+        AIMHOLOGRAM:setPos(trace.line(gun:getMassCenterW() + gunAng:getForward() * 100, gun:getMassCenterW() + gunAng:getForward() * 80000)["HitPos"])
+
+        local force = gun:worldToLocalAngles(gunAng)
+        force = angClamp(force, Angle(-ROTATESPEED), Angle(ROTATESPEED))
+        
+        local error = force
+        local derivative = (error - lastError) / dt
+        local output = (error * Kp) + (integral * Ki) + (derivative * Kd)
+        
+        lastError = error   
+        lastHitPos = HITPOS
+        
+        if (math.abs(force.pitch) + math.abs(force.yaw)) < 1 then
+            integral = integral + (error * dt)
+        else
+            integral = Angle(0)
+        end
+        //output = angClamp(output, Angle(-ROTATESPEED), Angle(ROTATESPEED))
+        
+        gun:applyAngForce(output * INERTIA)
+    end)
+elseif CLIENT then
+    // Only run for the owner, saves usage
+    if player() != owner() then return end
+    
+    // Server global variable initialization
+    local ACTIVE = 0
+    local BASE = chip()
+    local GUN = chip()
+    
+    local RELCAMPOS = Vector()
+    local CAMDIST = 0
+    local FILTER = nil
+    
+    local READY = false
+    local RELOADTIME = 0
+    local RELOADPROGRESS = 0
+    local SMRELOADTIME = 0
+    local SMRELOADPROGRESS = 0
+    local STATE = ""
+    local AMMOTYPES = {}
+    
+    local AIMHOLOGRAM = chip()
+    
+    // Client global variable initialization
+    local FOV = 90
+    local CAMPOS = Vector()
+    local CAMANG = Angle()
+    local HITPOS = Vector()
+    local TRACEDIST = 0
+    local AIMTRACE = nil
+    
+    local SPEED = 0
+    
+    local ZOOMMUL = 1
+    local CAMPUSH = { fov = FOV, znear = 3, zfar = 80000 }
+    
+    local MAINCOL = Color(255, 255, 255) // Color of reticle
+    local SECCOL = Color(255, 0, 0) // Color of reticle details and text when not loaded
+    local TERCOL = Color(255,191,0) // Color of rest of the hud
+    local FONTEXTRABIG = render.createFont("Roboto Mono", 40, 2, true, false, false, true)
+    local FONTBIG = render.createFont("Roboto Mono", 30, 2, true, false, false, true)
+    local FONTMED = render.createFont("Roboto Mono", 25, 2, true, false, false, true)
+    local FONTSMALL = render.createFont("Roboto Mono", 20, 2, true, false, false, false)
+    
+    // Function initialization
+    local function drawThickLine (x1, y1, x2, y2, thickness)
+        local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
+        local perpX = perpDir[1]
+        local perpY = perpDir[2]
+    
+        render.drawPoly( {
+            { x = x1 + perpX, y = y1 + perpY },
+            { x = x2 + perpX, y = y2 + perpY },
+            { x = x2 - perpX, y = y2 - perpY },
+            { x = x1 - perpX, y = y1 - perpY },
+        } )
+    end
+    local function drawCenterRect(x, y, width, height)
+        render.drawRect(x - width / 2, y - height / 2, width, height)    
+    end
+    // These just re-route global commands
+    local function _setColor(color)
+        render.setColor(color)    
+    end
+    local function _setFont(font)
+        render.setFont(font)    
+    end
+    local function _drawSimpleText(x, y, text, xalign, yalign)
+        render.drawSimpleText(x, y, text, xalign, yalign)
+        
+    end
+    
+    // Runs if you move the mouse
+    hook.add('mousemoved', 'MouseMoved', function(x, y)
+        if ACTIVE == 0 then return end
+        
+        CAMANG.pitch = math.clamp(CAMANG.pitch + (y / 40), -89, 89)
+        CAMANG.yaw   = CAMANG.yaw - (x / 40)
+    end)
+
+    // Runs if you scroll the mouse    
+    hook.add('mouseWheeled', 'MouseWheeled', function(delta)
+        if ACTIVE == 0 then return end
+        
+        local currentFOV = FOV
+        local angDiff = 0
+        
+        // Zooming
+        if (delta > 0) then
+            if currentFOV == 90  then
+                local newAimPos = trace.line(CAMPOS + CAMANG:getForward():getNormalized() * 100, CAMPOS + CAMANG:getForward():getNormalized() * 80000)["HitPos"]
+                angDiff = (newAimPos - CAMPOS):getNormalized():getAngle().pitch - (HITPOS - CAMPOS):getNormalized():getAngle().pitch   
+                angDiff = angDiff % 90        
+            end
+            
+            FOV = math.clamp(FOV / 2, 2.8125, 90)
+        else
+            FOV = math.clamp(FOV * 2, 2.8125, 90)
+            
+            if currentFOV != 90 && FOV == 90 then
+                local upMul = 1
+                local aimVector = (CAMANG:getForward():getNormalized() * 25) + (CAMANG:getUp():getNormalized() * 5) * upMul // Where the position starts
+                local aimNormal = aimVector:getNormalized() // This is for the angle
+                local newAimPos  = trace.line(CAMPOS + aimNormal * 100, CAMPOS + aimNormal * 80000)["HitPos"] // Trace to where we want to aim
+                angDiff = (newAimPos - CAMPOS):getNormalized():getAngle().pitch - (HITPOS - CAMPOS):getNormalized():getAngle().pitch
+                angDiff = angDiff % -90
+            end    
+        end
+        
+        CAMANG.pitch = CAMANG.pitch - angDiff
+        ZOOMMUL = FOV / 90
+        CAMPUSH["fov"] = FOV
+    end)
+
+    // Does the calculations for the camera
+    hook.add('calcview', 'CameraView', function(pos, ang, fov, znear, zfar)  
+        if ACTIVE == 0 then return end
+
+        CAMPOS = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST * ((ZOOMMUL == 1) and 1 or 0) // this will give you distance around a point
+        
+        // These are the calculations for the HITPOS
+        local upMul = (ZOOMMUL == 1) and 1 or 0 // If we are in third person, use this campos, otherwise use center of screen
+        local aimVector = (CAMANG:getForward():getNormalized() * 25) + (CAMANG:getUp():getNormalized() * 5) * upMul // Where the position starts
+        local aimNormal = aimVector:getNormalized() // This is for the angle
+        
+        AIMTRACE  = trace.line(CAMPOS + aimNormal * 100, CAMPOS + aimNormal * 80000) // Trace to where we want to aim
+        HITPOS = AIMTRACE["HitPos"]
+
+        net.start("sendClientData")
+        net.writeFloat(HITPOS.x)
+        net.writeFloat(HITPOS.y)
+        net.writeFloat(HITPOS.z)
+        net.writeFloat(aimNormal.x)
+        net.writeFloat(aimNormal.y)
+        net.writeFloat(aimNormal.z)
+        net.send(nil, true)  
+        
+        CAMPUSH["origin"] = CAMPOS
+        CAMPUSH["angles"] = CAMANG
+        
+        return CAMPUSH
+    end)
+    
+    // Only update these variables every 0.1 seconds for readability
+    timer.create("", 0.1, 0, function()
+        if AIMTRACE == nil then return end
+        
+        TRACEDIST = AIMTRACE["Fraction"] * 80000 // Updating Trace Distance
+        
+        local velocity = math.round(BASE:getVelocity():getLength() * 1/17.6, 1)
+        SPEED = velocity % 1 > 0 and math.round(velocity, 1) or velocity .. ".0" // Updating Speed
+    end)
+        
+    // Draw the hud
+    hook.add('drawhud', 'TankHud', function()
+        //if ACTIVE == 0 then return end
+        
+        // Variables
+        local SCREENRESX, SCREENRESY = render.getResolution()
+        local RESX, RESY = SCREENRESX / 2, SCREENRESY / 2
+    
+        // Crosshair
+        local crosshair = HITPOS:toScreen()
+        local x,y = crosshair.x, crosshair.y
+        if crosshair.visible then    
+            // Center chevron
+            _setColor(Color(0, 0, 0))
+            drawThickLine(x - 10, y + 20, x, y, 4)
+            drawThickLine(x + 10, y + 20, x, y, 4)
+            _setColor(MAINCOL)
+            drawThickLine(x - 10, y + 20, x, y, 1)
+            drawThickLine(x + 10, y + 20, x, y, 1)
+            
+            // Color
+            local color = TERCOL
+            if READY != true then color = SECCOL end
+            _setColor(color)
+            
+            // Lines        
+            drawThickLine(x + 50, y, x + 250, y, 2)
+            drawThickLine(x - 50, y, x - 250, y, 2)
+            //drawThickLine(x - 101, y, x - 101, y + 15, 2)
+            //drawThickLine(x + 101, y, x + 101, y + 15, 2)
+            
+            drawThickLine(x, y + 50, x, y + 75, 1)
+            drawThickLine(x, y + 85, x, y + 110, 1)
+            drawThickLine(x, y + 120, x, y + 145, 1)
+            
+            // Text
+            _setFont(FONTBIG)
+            _drawSimpleText(x + 60, y + 20, STATE, 0, 1) // Gun Status
+            _drawSimpleText(x - 60, y + 20, math.round(TRACEDIST * 1/176) .. "m", 2, 1) // Distance
+            
+            _setFont(FONTMED)
+            local reloadLeft = (RELOADPROGRESS < 1) and RELOADTIME - (RELOADTIME * RELOADPROGRESS) or (RELOADTIME)
+            _drawSimpleText(x + 60, y + 45, math.round(reloadLeft, 2) .. "s", 0, 1) // Reload Progress
+        end
+        
+        // Holosight
+        if (AIMHOLOGRAM:isValid() && AIMHOLOGRAND != chip()) then
+            local circle = AIMHOLOGRAM:getPos():toScreen()
+            local x, y = circle.x, circle.y
+            if circle.visible then
+                // Circle
+                _setColor(Color(0, 0, 0))
+                render.drawCircle(x, y, 5, 5)
+                render.drawCircle(x, y, 5.5, 5.5)
+                _setColor(TERCOL)
+                render.drawCircle(x, y, 4, 4)
+            end
+        end
+        
+        // Gun reticle
+        local gunTrace = trace.line(GUN:getPos() + GUN:getForward():getNormalized() * 100, GUN:getPos() + GUN:getForward():getNormalized() * 80000) // Trace to where we want to aim
+        local gunRet = gunTrace["HitPos"]:toScreen()
+        local x,y = gunRet.x, gunRet.y
+        if gunRet.visible then    
+            // Color
+            local color = TERCOL
+            if READY != true then color = SECCOL end
+            
+            // Circle
+            _setColor(Color(0, 0, 0))
+            render.drawCircle(x, y, 11, 11)
+            render.drawCircle(x, y, 11.5, 11.5)
+            _setColor(color)
+            render.drawCircle(x, y, 10, 10)
+            
+            // Center chevron
+            _setColor(Color(0, 0, 0))
+            drawThickLine(x - 10, y + 20, x, y, 4)
+            drawThickLine(x + 10, y + 20, x, y, 4)
+            _setColor(MAINCOL)
+            drawThickLine(x - 10, y + 20, x, y, 1)
+            drawThickLine(x + 10, y + 20, x, y, 1)
+       end
+    
+        // Main Hud    
+        _setColor(TERCOL)
+        
+        // Outline Lines
+        if ZOOMMUL != 1 then
+            drawThickLine(RESX + 550, RESY + 300, RESX + 600, RESY + 300, 2)
+            drawThickLine(RESX + 600, RESY + 300, RESX + 600, RESY + 275, 2)
+            drawThickLine(RESX - 550, RESY + 300, RESX - 600, RESY + 300, 2)
+            drawThickLine(RESX - 600, RESY + 300, RESX - 600, RESY + 275, 2)
+            
+            drawThickLine(RESX - 550, RESY - 300, RESX - 600, RESY - 300, 2)
+            drawThickLine(RESX - 600, RESY - 300, RESX - 600, RESY - 275, 2)
+            drawThickLine(RESX + 550, RESY - 300, RESX + 600, RESY - 300, 2)
+            drawThickLine(RESX + 600, RESY - 300, RESX + 600, RESY - 275, 2)
+        end
+    
+        // Side Icons
+        _setColor(Color(0, 0, 0))
+        drawCenterRect(RESX - 480, RESY + 15, 12, 12)
+        drawCenterRect(RESX + 480, RESY + 15, 12, 12)
+        _setColor(TERCOL)
+        drawCenterRect(RESX - 480, RESY + 15, 9, 9)
+        drawCenterRect(RESX + 480, RESY + 15, 9, 9)
+        
+        // Side Values
+        _setFont(FONTBIG)
+        _drawSimpleText(RESX - 500, RESY, SPEED, 2, 1) // Speed
+        _drawSimpleText(RESX - 500, RESY + 200, "GUN", 0, 1) // Gun
+        
+        local zoomAmount = (90 / FOV) % 1 > 0 and math.round((90 / FOV), 1) or (90 / FOV) .. ".0"
+        _drawSimpleText(RESX + 500, RESY, "x" .. zoomAmount, 0, 1) // Zoom
+        
+        
+        // Side Labels
+        _setFont(FONTSMALL)
+        _drawSimpleText(RESX - 500, RESY + 25, "KM/H", 2, 1)
+        _drawSimpleText(RESX + 500, RESY + 25, "ZOOM", 0, 1)
+        
+        
+        // Bottom Boxes
+        local count = table.count(AMMOTYPES)
+        local smCount = 0
+        for i = 1, (count) do // Main box
+            local currentAmmoString = string.explode(" ", AMMOTYPES[i]["Name"])
+            if currentAmmoString[3] == "SM" then // ignore smoke
+                smCount = smCount + 1
+            end
+        end
+        
+        local HEIGHT, WIDTH, DISTANCE = 150, 125, 10
+        local SX, SY = RESX + (WIDTH + DISTANCE) * (count + 1 - smCount) / 2, SCREENRESY - HEIGHT / 2 - DISTANCE
+        local ignoreI = 0
+        
+        for i = 1, (count) do // Main box
+            local currentAmmoString = string.explode(" ", AMMOTYPES[i]["Name"])
+            local currentAmmoInfo = AMMOTYPES[i]["Info"]
+            if currentAmmoString[3] == "SM" then // ignore smoke
+                ignoreI = ignoreI + 1
+                 _setColor(TERCOL)
+                _setFont(FONTEXTRABIG)
+                _drawSimpleText(RESX + 500, RESY + 200, "x" .. currentAmmoInfo.z, 2, 1) // smoke ammo count
+                _setFont(FONTSMALL) // smoke test
+                _drawSimpleText(RESX + 510, RESY + 210, "SMOKES", 0, 1) 
+                local reloadLeft = (SMRELOADPROGRESS < 1) and SMRELOADTIME - (SMRELOADTIME * SMRELOADPROGRESS) or (SMRELOADTIME)
+                 _drawSimpleText(RESX + 510, RESY + 190, math.round(reloadLeft, 1) .. "s", 0, 1) 
+                continue
+            end
+            local index = (i - ignoreI)
+            local POSX = SX - index * (WIDTH + DISTANCE)
+            
+            // Backing
+            _setColor(Color(0, 0, 0, 150))
+            render.drawRect(POSX - WIDTH / 2, SY - HEIGHT / 2, WIDTH, HEIGHT, 3)
+            
+            // Shapes
+            _setColor(TERCOL)
+            render.drawRectOutline(POSX - WIDTH / 2, SY - HEIGHT / 2, WIDTH, HEIGHT, 3)
+            
+            // Texts
+            _setFont(FONTBIG) // Big font text
+            if tonumber(currentAmmoString[2][1]) == nil then
+                _drawSimpleText(POSX, SY - 50, currentAmmoString[2], 1, 1) // weapon name
+            else
+                _drawSimpleText(POSX, SY - 50, currentAmmoString[1] .. " " .. currentAmmoString[3], 1, 1) // ammo type     
+            end
+            
+            _setFont(FONTMED) // Medium font text
+            _drawSimpleText(POSX, SY - 25, math.round(currentAmmoInfo.x) .. " m/s", 1, 1) // ammo speed
+            _drawSimpleText(POSX, SY, math.round(currentAmmoInfo.y) .. " mm", 1, 1) // ammo penetration
+            
+            _setFont(FONTEXTRABIG) // Extra big font text
+            _drawSimpleText(POSX, SY + 40, currentAmmoInfo.z, 1, 1) // ammo count
+            
+            // Outline
+            _setColor(Color(0, 0, 0))
+            render.drawRectOutline(SX - WIDTH / 2 - index * (WIDTH + DISTANCE), SY - HEIGHT / 2, WIDTH, HEIGHT, 2)
+        end
+    end) 
+    
+    // Exchange between CLIENT and SERVER
+    // Request SERVER data
+    net.start("requestGlobals")
+    net.send() 
+    
+    // Recieve SERVER globals, happens once
+    net.receive("sendServerGlobals", function()
+        RELCAMPOS = net.readVector()
+        CAMDIST = net.readInt(12)
+        
+        ACTIVE = net.readInt(8)
+        BASE = net.readEntity()
+        GUN = net.readEntity()
+        FILTER = net.readTable()
+        
+        AIMHOLOGRAM = net.readEntity()
+        
+        AMMOTYPES = net.readTable()
+    end) 
+    // Recieve SERVER wire data, happens once
+    net.receive("sendActive", function() ACTIVE = net.readInt(8) end)   
+    net.receive("sendBase", function() BASE = net.readEntity() end)   
+    net.receive("sendGun", function() GUN = net.readEntity() end)   
+    net.receive("sendFilter", function() FILTER = net.readTable() end)   
+    
+    // Recieve SERVER gun data, happens every 0.1s
+    net.receive("sendGunData", function()
+        READY = net.readBool()
+        RELOADTIME = net.readFloat()
+        RELOADPROGRESS = net.readFloat()
+        SMRELOADTIME = net.readFloat()
+        SMRELOADPROGRESS = net.readFloat()
+        STATE = net.readString()  
+        AMMOTYPES = net.readTable()
+    end)
+end
