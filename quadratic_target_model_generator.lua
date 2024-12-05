@@ -1,6 +1,80 @@
 --@name Quadratic Target Model Generator
 --@shared
 
+-- https://www.wikihow.com/Find-the-Inverse-of-a-3x3-Matrix
+
+function transposeMatrix (a) -- assuming a 3x3 matrix
+    {
+        return {
+            {a[1][1], a[2][1], a[3][1]}, 
+            {a[1][2], a[2][2], a[3][2]}, 
+            {a[1][3], a[2][3], a[3][3]}
+        }
+    }
+function minorDeterminant (a) -- assuming a 2x2 matrix
+{
+    return (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+}
+function majorDeterminant (a) -- assuming a 3x3 matrix
+    local term1 = a[2][2] * a[3][3] - a[2][3] * a[3][2]
+    local term2 = a[2][1] * a[3][3] - a[2][3] * a[3][1]
+    local term3 = a[2][1] * a[3][2] - a[2][2] * a[3][1]
+    return a[1][1] * term1 - a[1][2] * term2 + a[1][3] * term3
+end
+function allMinorDeterminants (array) -- assuming a 3x3 matrix
+{
+    -- for every index of the matrix, exclude row and column
+    -- use other 4 numbers and get minor determinant and create a new 3x3 matrix of them    
+
+    return {} -- new 3x3 of all minor determinants in order
+}
+function getCofactors (a) -- assuming a 3x3 matrix filled with minor determinants
+{
+    return {
+        {a[1][1], -a[1][2], a[1][3]}, 
+        {-a[2][1], a[2][2], -a[2][3]}, 
+        {a[3][1], -a[3][2], a[3][3]}
+    }
+}
+function divideMatricesbyDeterminant (a1, det) -- assuming a 3x3 matrix by a 3x3 matrix
+{
+    local newTable = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}
+    for y = 1, 3 do
+        for x = 1, 3 do
+            newTable[x][y] = a1[x][y] / det
+        end
+    end
+    return newTable
+}
+function multiplyMatrices (a1, a2) -- assuming a 3x3 matrix by a 3x1 matrix
+{
+    local result = {}
+    for i = 1, 3 do
+        result[i] = 0
+        for j = 1, 3 do
+            result[i] = result[i] + a1[i][j] * a2[j]
+        end
+    end
+    return result
+}
+function invertMatrix (a) -- assuming a 3x3 matrix
+{
+    local determinant = majorDeterminant(a) -- Step 1: Compute the major determinant
+    if (determinant == 0) 
+    { 
+        print("No Inverse") 
+        return nil
+    }
+
+    local transposedMatrix = transposeMatrix(a) -- Step 1.1: Transpose for Step 2
+    local allMinorMatrix = allMinorDeterminants(transposed) -- Step 2: Compute the matrix of minors determinants
+
+    local cofactorMatrix = getCofactors(allMinorMatrix) -- Step 3: Get the cofactors.
+    local inverse = divideMatricesbyDeterminant(cofactorMatrix, determinant) -- Step 4: divide the cofactor by the major determinant
+
+    return inverse
+}
+
 if SERVER then
     -- Wire port configuration
     wire.adjustPorts({TargetPos = "vector", TargetVel = "vector"}, {HitPos = "vector"})
@@ -10,6 +84,7 @@ if SERVER then
     local POSITIONS = {}
     local VELOCITIES = {}
     local startTime = timer.curtime()
+    local predTime = 0.1
 
     -- Hook for processing input
     hook.add("input", "process_input", function(name, value)
@@ -48,17 +123,12 @@ if SERVER then
             POSITIONS[3] - VELOCITIES[3] * t3,
             POSITIONS[4] - VELOCITIES[4] * t4
         }
+        
+        local inverse = invertMatrix(tMatrix)
+        local coefs = multiplyMatrices(inverse, posMatrix)
 
-        -- Placeholder for solving the matrix system
-        -- local invTMatrix = invertMatrix(tMatrix) -- Invert the 3x3 matrix
-        -- local coefficients = multiplyMatrices(invTMatrix, posMatrix) -- Solve for {a3, a2, a0}
-        -- Coefficients will describe the higher-order motion
+        if inverse == nil then return end
 
-        -- Example prediction:
-        -- local predTime = 0.1
-        -- local predictedPosition = coefficients[1] * predTime^3 +
-        --                           coefficients[2] * predTime^2 +
-        --                           coefficients[3] * predTime +
-        --                           POSITIONS[1]
+        local badGuy = coefs[1] * predTime^3 + coefs[2] * predTime^2 + coefs[3] * predTime + POSITIONS[1]
     end)
 end
