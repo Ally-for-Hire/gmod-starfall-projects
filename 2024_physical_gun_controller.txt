@@ -1,0 +1,85 @@
+--@name 2024 Physical Gun Controller
+--@author Ally for Hire / Merydian9
+--@shared
+--@model models/jaanus/wiretool/wiretool_range.mdl
+--@server
+
+
+-- GLOBAL VARIABLES HERE
+-- Gun settings
+local ROTATESPEED = 120
+local MAXELEVATION = 90
+local MAXDEPRESSION = 15
+local MAXYAW = 180 -- Not currently functional
+
+-- PID constants 
+local KP = 80   -- Proportional gain
+local KI = 120    -- INTEGRAL gain
+local KD = 35    -- Derivative gain
+
+-- Global variable initialization
+local HITPOS = Vector()
+local HITNORMAL = Vector()
+local INERTIA = Angle()
+local FILTER = {}
+local AIMHOLOGRAM = hologram.create(Vector(), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl", Vector())
+local LASTERROR = Angle(0, 0, 0)
+local INTEGRAL = Angle(0, 0, 0)
+local dt = game.getTickInterval() -- Time step for the PID loop (adjust as needed)   
+local LASTHITPOS = Vector()
+local ROTATESPEED = ROTATESPEED * dt
+
+-- SERVER FUNCTIONS HERE
+function angClamp(ang1, ang2, ang3) -- angle, lowangle, highangle
+    return Angle(math.clamp(ang1.pitch, ang2.pitch, ang3.pitch), math.clamp(ang1.yaw, ang2.yaw, ang3.yaw), math.clamp(ang1.roll, ang2.roll, ang3.roll))    
+end
+    
+-- Wire port setup
+wire.adjustPorts({
+    Aimer = "entity", 
+    HitPos = "vector",
+    TargetPos = "vector", 
+    LeadPos = "vector", 
+    TargetName = "string"}, 
+{})
+
+-- SERVER HOOKS HERE
+-- Updating inputs
+hook.add ("input", "updateWire", function(INPUT, VALUE) 
+    if INPUT == "Aimer" then
+        local temp = Angle(VALUE:getInertia().x, VALUE:getInertia().y, VALUE:getInertia().z)
+        INERTIA = Angle(temp.yaw, temp.roll, temp.pitch)
+        INERTIA.roll = 0   
+    end
+end)
+
+-- Gun aiming
+hook.add("tick", "main", function()
+    if wire.ports.Aimer == nil then return end
+    
+    local gun = wire.ports.Aimer
+    local gunAng = (wire.ports.HitPos - gun:getMassCenterW()):getNormalized():getAngle()
+    
+    if (wire.ports.TargetName != "") then 
+        gunAng = (wire.ports.LeadPos - gun:getMassCenterW()):getNormalized():getAngle()
+    end
+
+    local force = gun:worldToLocalAngles(gunAng)
+    force = angClamp(force, Angle(-ROTATESPEED), Angle(ROTATESPEED))
+    
+    local error = force
+    local derivative = (error - LASTERROR) / dt
+    local output = (error * KP) + (INTEGRAL * KI) + (derivative * KD)
+    
+    LASTERROR = error   
+    LASTHITPOS = HITPOS
+    
+    if (math.abs(force.pitch) + math.abs(force.yaw)) < 1 then
+        INTEGRAL = INTEGRAL + (error * dt)
+    else
+        INTEGRAL = Angle(0)
+    end
+    --output = angClamp(output, Angle(-ROTATESPEED), Angle(ROTATESPEED))
+    
+    gun:applyAngForce(output * INERTIA)
+end)
