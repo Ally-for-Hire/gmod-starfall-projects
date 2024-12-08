@@ -1,4 +1,4 @@
---@name 2024 Cam Controller, Gun, and Hud
+--@name 2024 Cam Controller and Hud
 --@author Merydian9
 --@shared
 --@model models/jaanus/wiretool/wiretool_range.mdl
@@ -34,7 +34,7 @@ if SERVER then
     for i = 1, count do
         local type = ALLCRATES[i]:acfCaliber() .. " " .. ALLCRATES[i]:acfName()
         
-        if ALLCRATES[i]:getOwner() != owner() then continue end
+        if ALLCRATES[i]:getOwner() ~= owner() then continue end
         if string.explode(" ", type)[3] == "Refill" then continue end
         
         if UNSORTEDAMMOTYPES[type] == nil then
@@ -72,7 +72,7 @@ if SERVER then
     
     for i = 1, table.count(ALL) do
         local currentProp = ALL[i]
-        if ALL[i]:getOwner() != owner() then continue end
+        if ALL[i]:getOwner() ~= owner() then continue end
         
         table.insert(FILTER, currentProp)
     end
@@ -85,7 +85,7 @@ if SERVER then
     net.receive("requestGlobals", function(_, ply)
         -- Send SERVER data
         net.start("sendServerGlobals")
-        net.writeInt(wire.ports.Active, 8)
+        net.writeBool(wire.ports.Active == 1)
         net.writeEntity(wire.ports.Base)
         net.writeEntity(wire.ports.Gunsight)
         net.writeEntity(wire.ports.Gun)
@@ -131,7 +131,7 @@ if SERVER then
     hook.add ("input", "updateWire", function(INPUT, VALUE) 
         if INPUT == "Active" then
             net.start("sendActive")
-            net.writeInt(wire.ports.Active, 8)
+            net.writeBool(wire.ports.Active == 1)
             net.send()
         end
     end)
@@ -153,7 +153,7 @@ end
 
 if CLIENT then
     -- Only run for the owner, saves usage
-    if player() != owner() then return end
+    if player() ~= owner() then return end
     
     -- Cam Settings
     local RELCAMPOS = Vector(0, 0, 100)
@@ -215,6 +215,8 @@ if CLIENT then
     local _setColor = render.setColor
     local _setFont = render.setFont
     local _drawSimpleText = render.drawSimpleText
+    local _drawCircle = render.drawCircle
+    local _traceline = trace.line
     
     -- Runs if you move the mouse
     hook.add('mousemoved', 'MouseMoved', function(x, y)
@@ -226,7 +228,7 @@ if CLIENT then
 
     -- Runs if you scroll the mouse    
     hook.add('mouseWheeled', 'MouseWheeled', function(delta)
-        if ACTIVE == 0 then return end
+        if not ACTIVE then return end
         
         currentCamPos = CAMPOS
         newCamPos = CAMPOS
@@ -239,7 +241,7 @@ if CLIENT then
         if (delta > 0) then
             if currentFOV == 90  then
                 newCamPos = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
-                newAimPos = trace.line(newCamPos + CAMANG:getForward():getNormalized() * 1000, newCamPos + CAMANG:getForward():getNormalized() * 80000, FILTER)["HitPos"]
+                newAimPos = _traceline(newCamPos + CAMANG:getForward():getNormalized() * 1000, newCamPos + CAMANG:getForward():getNormalized() * 80000, FILTER)["HitPos"]
                 
                 angDiff = (newAimPos - newCamPos):getNormalized():getAngle() - (currentAimPos - newCamPos):getNormalized():getAngle()
                 angDiff.pitch = angDiff.pitch % 90
@@ -249,12 +251,12 @@ if CLIENT then
         else
             FOV = math.clamp(FOV * 2, 2.8125, 90)
             
-            if currentFOV != 90 && FOV == 90 then
+            if currentFOV ~= 90 and FOV == 90 then
                 local aimVector = (CAMANG:getForward():getNormalized() * 25) + (CAMANG:getUp():getNormalized() * 5) -- Where the position starts
                 local aimNormal = aimVector:getNormalized() -- This is for the angle
 
                 newCamPos = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST
-                newAimPos = trace.line(newCamPos + aimNormal * 1000, newCamPos + aimNormal * 80000, FILTER)["HitPos"]
+                newAimPos = _traceline(newCamPos + aimNormal * 1000, newCamPos + aimNormal * 80000, FILTER)["HitPos"]
                 
                 angDiff = (newAimPos - newCamPos):getNormalized():getAngle() - (currentAimPos - newCamPos):getNormalized():getAngle()
                 angDiff.pitch = angDiff.pitch % -90
@@ -268,11 +270,11 @@ if CLIENT then
 
     -- Does the calculations for the camera
     hook.add('calcview', 'CameraView', function(pos, ang, fov, znear, zfar)  
-        if ACTIVE == 0 then return end
+        if not ACTIVE then return end
    
         CAMPOS = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST -- this will give you distance around a point
-        if ZOOMMUL != 1 then
-                CAMPOS = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
+        if ZOOMMUL ~= 1 then
+            CAMPOS = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
         end
         
         -- These are the calculations for the HITPOS
@@ -286,7 +288,7 @@ if CLIENT then
             end    
         end 
 
-        AIMTRACE  = trace.line(CAMPOS + aimNormal * 100, CAMPOS + aimNormal * 80000, FILTER) -- Trace to where we want to aim
+        AIMTRACE  = _traceline(CAMPOS + aimNormal * 100, CAMPOS + aimNormal * 80000, FILTER) -- Trace to where we want to aim
         HITPOS = AIMTRACE["HitPos"]
 
         net.start("sendClientData")
@@ -310,7 +312,7 @@ if CLIENT then
         
         TRACEDIST = AIMTRACE["Fraction"] * 80000 -- Updating Trace Distance
         
-        local velocity = math.round(BASE:getVelocity():getLength() * 1/17.6, 1)
+        local velocity = math.round(BASE:getVelocity():getLength() * 1 / 17.6, 1)
         SPEED = velocity % 1 > 0 and math.round(velocity, 1) or velocity .. ".0" -- Updating Speed
     end)
         
@@ -342,7 +344,7 @@ if CLIENT then
             
             -- Color
             local color = TERCOL
-            if READY != true then color = SECCOL end
+            if READY ~= true then color = SECCOL end
             _setColor(color)
             
             -- Lines        
@@ -366,34 +368,34 @@ if CLIENT then
         end
         
         -- Holosight
-        if (AIMHOLOGRAM:isValid() && AIMHOLOGRAND != chip()) then
+        if (AIMHOLOGRAM:isValid() and AIMHOLOGRAND ~= chip()) then
             local circle = AIMHOLOGRAM:getPos():toScreen()
             local x, y = circle.x, circle.y
             if circle.visible then
                 -- Circle
                 _setColor(Color(0, 0, 0))
-                render.drawCircle(x, y, 5, 5)
-                render.drawCircle(x, y, 5.5, 5.5)
+                _drawCircle(x, y, 5, 5)
+                _drawCircle(x, y, 5.5, 5.5)
                 _setColor(TERCOL)
-                render.drawCircle(x, y, 4, 4)
+                _drawCircle(x, y, 4, 4)
             end
         end
         
         -- Gun reticle
-        local gunTrace = trace.line(GUN:getPos() + GUN:getForward():getNormalized() * 350, GUN:getPos() + GUN:getForward():getNormalized() * 80000, FILTER) -- Trace to where we want to aim
+        local gunTrace = _traceline(GUN:getPos() + GUN:getForward():getNormalized() * 350, GUN:getPos() + GUN:getForward():getNormalized() * 80000, FILTER) -- Trace to where we want to aim
         local gunRet = gunTrace["HitPos"]:toScreen()
         local x,y = gunRet.x, gunRet.y
         if gunRet.visible then    
             -- Color
             local color = TERCOL
-            if READY != true then color = SECCOL end
+            if READY ~= true then color = SECCOL end
             
             -- Circle
             _setColor(Color(0, 0, 0))
-            render.drawCircle(x, y, 11, 11)
-            render.drawCircle(x, y, 11.5, 11.5)
+            _drawCircle(x, y, 11, 11)
+            _drawCircle(x, y, 11.5, 11.5)
             _setColor(color)
-            render.drawCircle(x, y, 10, 10)
+            _drawCircle(x, y, 10, 10)
             
             -- Center chevron
             _setColor(Color(0, 0, 0))
@@ -408,7 +410,7 @@ if CLIENT then
         _setColor(TERCOL)
         
         -- Outline Lines
-        if ZOOMMUL != 1 then
+        if ZOOMMUL ~= 1 then
             drawThickLine(RESX + 550, RESY + 300, RESX + 600, RESY + 300, 2)
             drawThickLine(RESX + 600, RESY + 300, RESX + 600, RESY + 275, 2)
             drawThickLine(RESX - 550, RESY + 300, RESX - 600, RESY + 300, 2)
@@ -463,7 +465,7 @@ if CLIENT then
             local currentAmmoInfo = AMMOTYPES[i]["Info"]
             if currentAmmoString[3] == "SM" then
                 ignoreI = ignoreI + 1
-                 _setColor(TERCOL)
+                _setColor(TERCOL)
                 _setFont(FONTEXTRABIG)
                 _drawSimpleText(RESX + 500, RESY + 200, "x" .. currentAmmoInfo.z, 2, 1) -- smoke ammo count
                 _setFont(FONTSMALL) -- smoke test
@@ -511,11 +513,11 @@ if CLIENT then
     net.send() 
     
     -- Recieve wire inputs, happens when updated
-    net.receive("sendActive", function() ACTIVE = net.readInt(8) end)
+    net.receive("sendActive", function() ACTIVE = net.readBool() end)
     
     -- Recieve SERVER globals, happens once
     net.receive("sendServerGlobals", function()
-        ACTIVE = net.readInt(8)
+        ACTIVE = net.readBool()
   
         BASE = net.readEntity()
         GUNSIGHT = net.readEntity()
