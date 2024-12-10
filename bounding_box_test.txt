@@ -1,39 +1,33 @@
 --@name Bounding Box Test
 --@author Ally for Hire / Merydian9
 --@client
-
 -- CLIENT VARIABLES HERE
 
 -- General Variables
-local CENTER = Vector()
-local WIDTH, HEIGHT = 0, 0
-
--- Trace Variables
-local HITPOS = Vector()
-local TRACE_DISTANCE = 0
-local TRACE_HIT = false
+local WIDTH, HEIGHT, CENTER = 0, 0, Vector()
 local FILTER = {owner(), chip()}
-local CAM_ANG = Angle()
-
--- Holograms
-local AIM_HOLOGRAM = hologram.create(Vector(), Angle(), "models/hunter/blocks/cube025x025x025.mdl")
+local GLOBAL_CAMANG = Angle()
 
 -- CLIENT FUNCTIONS HERE
 
--- Overwrites
+-- Local overwrites
 local _line = trace.line
 local _hull = trace.hull
+local _setColor = render.setColor
+local _drawRect = render.drawRect
+local _drawRectOutline = render.drawRectOutline
 
--- Absolute value of vectors
+-- Returns the absolute value of vectors
 local function vectorAbs(Vec)
     return Vector(math.abs(Vec[1]), math.abs(Vec[2]), math.abs(Vec[3]))    
 end
 
 -- Recursively send traces in the given direction until it works
--- 
 local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILTER, STARTING_DISTANCE) -- Starting trace, Starting Position, Direction, Starting Distance  
+    -- Default value of CURRENT_TRACE simulating what a trace would return for the first run
     local CURRENT_TRACE = {Hit = true, HitPos = HITPOS}
     
+    -- Initializing fun variables
     local ATTEMPTS, TOTAL_DISTANCE = 0, 0
     local HULL_SIZE, CURRENT_STEP, MAX_SIZE = 5, 50, 250
     
@@ -56,53 +50,68 @@ local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILT
     
     return {Trace = CURRENT_TRACE, HitPos = CURRENT_TRACE["HitPos"], Distance = TOTAL_DISTANCE + CURRENT_STEP - HULL_SIZE}
 end    
---trace.hull(Vector start, Vector endpos, Vector minbox, Vector maxbox)
 
--- CLIENT HOOKS HERE
-
--- Hook for when the player's camera runs
-hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)  
-    -- Shoot a trace from the center of the camera
+-- Returns the Center, Width, Height of whatever is being aimed at
+local function getBoxSize(CAMPOS, CAMANG, FILTER) 
+    -- Send a trace at the center of the screen
     local CENTER_TRACE = _line(CAMPOS, CAMPOS + CAMANG:getForward() * 10000, FILTER, nil, nil, true)
-    CAM_ANG = CAMANG
-    
-    -- Setup initial variables
-    TRACE_DISTANCE = CENTER_TRACE["Fraction"] * 10000
-    TRACE_HIT = CENTER_TRACE["Hit"]
-    HITPOS = CENTER_TRACE["HitPos"]
     
     -- If the initial trace didnt hit anything, nothing else will
-    if not TRACE_HIT then return end
+    if not CENTER_TRACE["Hit"] then return {Width = 0, Height = 0, Center = Vector()} end
+
+    -- If it did, setup initial variables and move to logic
+    local TRACE_DISTANCE = CENTER_TRACE["Fraction"] * 10000
+    local HITPOS = CENTER_TRACE["HitPos"]
     
-    -- Recursively in 4 directions, trying to find the bounding box sie
+    -- Recursively sends traces in 4 directions around the target, trying to find the bounding box size
     local LEFT_CALL = recursiveTraceDir(CAMPOS, -CAMANG:getRight(), HITPOS, FILTER, TRACE_DISTANCE) 
     local RIGHT_CALL = recursiveTraceDir(CAMPOS, CAMANG:getRight(), HITPOS, FILTER, TRACE_DISTANCE) 
     local UP_CALL = recursiveTraceDir(CAMPOS, CAMANG:getUp(), HITPOS, FILTER, TRACE_DISTANCE)
     local DOWN_CALL = recursiveTraceDir(CAMPOS, -CAMANG:getUp(), HITPOS, FILTER, TRACE_DISTANCE) 
 
-    -- Interpret the values from the traces into usable information
-    WIDTH = LEFT_CALL["Distance"] + RIGHT_CALL["Distance"]
-    HEIGHT = UP_CALL["Distance"] + DOWN_CALL["Distance"]
-    CENTER = (LEFT_CALL["HitPos"] + RIGHT_CALL["HitPos"] + UP_CALL["HitPos"] + DOWN_CALL["HitPos"]) / 4
+    -- Interpret the values from the final traces into usable information
+    return {
+        Width = LEFT_CALL["Distance"] + RIGHT_CALL["Distance"],
+        Height = UP_CALL["Distance"] + DOWN_CALL["Distance"],
+        Center = (LEFT_CALL["HitPos"] + RIGHT_CALL["HitPos"] + UP_CALL["HitPos"] + DOWN_CALL["HitPos"]) / 4
+    }
+end
 
-    -- Make a hologram showing what we know
-    -- AIM_HOLOGRAM:setSize(Vector(5, WIDTH, HEIGHT)) -- Front/Back, Left/Right, Up/Down
-    -- AIM_HOLOGRAM:setPos(CENTER)
-    -- AIM_HOLOGRAM:setAngles(CAMANG)
+-- CLIENT HOOKS HERE
+
+
+-- Hook for when the player's camera runs
+hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)  
+    --  Update the  GLOBAL_CAMANG variable, used for the hud
+    GLOBAL_CAMANG = CAMANG
+    
+    -- Grab the approximate bounding box size of the target
+    BOX_SIZES = getBoxSize(CAMPOS, (chip():getPos() - CAMPOS):getAngle(), FILTER)
+    WIDTH = BOX_SIZES["Width"]
+    HEIGHT = BOX_SIZES["Height"]
+    CENTER = BOX_SIZES["Center"]
 end)
 
--- Hook for when the hud get's drawn
+
+-- Hook for when the hud gets drawn
 hook.add('drawhud', 'Draw Hud', function()
+    -- If CENTER isn't valid then quit early
     if CENTER == Vector() then return end
-    
+
+    -- Convert the 3d coordinates to 2d coordinates on the screen
     local CENTER_COORDS = CENTER:toScreen()
     local CX, CY = CENTER_COORDS.x, CENTER_COORDS.y
-    local SCREEN_WIDTH = math.abs((CENTER + CAM_ANG:getRight() * WIDTH):toScreen().x - CENTER_COORDS.x)
-    local SCREEN_HEIGHT = math.abs((CENTER + CAM_ANG:getUp() * HEIGHT):toScreen().y - CENTER_COORDS.y)
     
-    render.setColor(Color(0, 255, 0))
-    render.drawRect(CENTER_COORDS.x - 8 / 2, CENTER_COORDS.y - 2 / 2, 8, 2)
-    render.drawRect(CENTER_COORDS.x - 2 / 2, CENTER_COORDS.y - 8 / 2, 2, 8)
-    render.drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 4)
+    -- Then, convert the 3d widths and heights into 2d dimensions
+    local SCREEN_WIDTH = math.abs((CENTER + GLOBAL_CAMANG:getRight() * WIDTH):toScreen().x - CENTER_COORDS.x)
+    local SCREEN_HEIGHT = math.abs((CENTER + GLOBAL_CAMANG:getUp() * HEIGHT):toScreen().y - CENTER_COORDS.y)
+    
+    -- Then draw the display
+    _setColor(Color(0, 255, 0))
+    _drawRect(CENTER_COORDS.x - 8 / 2, CENTER_COORDS.y - 2 / 2, 8, 2)
+    _drawRect(CENTER_COORDS.x - 2 / 2, CENTER_COORDS.y - 8 / 2, 2, 8)
+    _drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 4)
+    
+    -- Finally, update LASTPOS
+    LASTPOS = TARGETPOS
 end)
-
