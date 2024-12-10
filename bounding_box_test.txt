@@ -79,7 +79,6 @@ end
 
 -- CLIENT HOOKS HERE
 
-
 -- Hook for when the player's camera runs
 hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)  
     --  Update the  GLOBAL_CAMANG variable, used for the hud
