@@ -1,11 +1,9 @@
 --@name 2024 Cam Controller and Hud
---@author Merydian9
---@shared
+--@author Ally for Hire / Merydian9
 --@model models/jaanus/wiretool/wiretool_range.mdl
 
-
 if CLIENT then
-    -- Only run for the owner
+    -- If not running for the owner, quit early
     if player() ~= owner() then return end
     
     -- Customizable Settings
@@ -36,7 +34,7 @@ if CLIENT then
     local CIRCMAT = render.createMaterial("egpextras/textures/tank/overlays/border_circular.png")
     local SQUAREMAT = render.createMaterial("egpextras/textures/tank/overlays/border_rectangular02.png")
     
-    -- SERVER variable initilization
+    -- Variables from SERVER initilization
     local ACTIVE = false
     local BASE = chip()
     local GUNSIGHT = chip()
@@ -64,21 +62,22 @@ if CLIENT then
     local _setFont = render.setFont
     local _traceline = trace.line
     
-    -- Function initialization
+    -- CLIENT function initialization
+    -- Draws a thick line from x1, y1 to x2, y2
     local function drawThickLine (x1, y1, x2, y2, thickness)
         local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
         local perpX = perpDir[1]
         local perpY = perpDir[2]
     
-        _drawPoly( {
+        _drawPoly({
             { x = x1 + perpX, y = y1 + perpY },
             { x = x2 + perpX, y = y2 + perpY },
             { x = x2 - perpX, y = y2 - perpY },
             { x = x1 - perpX, y = y1 - perpY },
-        } )
+        })
     end
     
-    -- Draws a rectangleusing x, y as the center
+    -- Draws a rectangle using x, y as the center
     local function drawCenterRect (x, y, width, height)
         _drawRect(x - width / 2, y - height / 2, width, height)    
     end
@@ -92,34 +91,24 @@ if CLIENT then
         end 
     end
     
-    -- Render targets
-    local fullReloadIndicator = "fullReloadIndicator"
+    -- Render target variables
     local centerChevron = "centerChevron"
     local gunsightOutline = "gunsightOutline"
     
     render.createRenderTarget(centerChevron)
-    render.createRenderTarget(fullReloadIndicator)
     render.createRenderTarget(gunsightOutline)
     
-    hook.add("renderoffscreen", "drawStatic", function()
-         -- Variables
+    hook.add("renderoffscreen", "Create Rendertargets", function()
+         -- Important screen variables
         local SCREENRESX, SCREENRESY = render.getResolution()
         local RESX, RESY = SCREENRESX / 2, SCREENRESY / 2
         
-        hook.remove("renderoffscreen", "drawStatic") -- only call once
+        -- Remove after, we only need to do this once
+        hook.remove("renderoffscreen", "Create Rendertargets") 
         
-        render.selectRenderTarget(fullReloadIndicator)
-        render.clear(Color( 0, 0, 0, 0 ))
-            local pi = 3.14159
-            for i = 1, 32 do
-                local theta = i * (pi / 16)
-                local radX = math.cos(theta - pi / 2)
-                local radY = math.sin(theta - pi / 2)
-                drawThickLine(RESX + radX * 50, RESY + radY * 50, RESX + radX * 55, RESY + radY * 55, 1.5)  
-            end
-
+        -- Center chevron
         render.selectRenderTarget(centerChevron)
-        render.clear(Color( 0, 0, 0, 0 ))
+        render.clear(Color(0, 0, 0, 0))
             _setColor(Color(0, 0, 0))
             drawThickLine(RESX + 10, RESY + 20, RESX, RESY, 6)
             drawThickLine(RESX - 10, RESY + 20, RESX, RESY, 6)
@@ -127,8 +116,9 @@ if CLIENT then
             drawThickLine(RESX + 10, RESY + 20, RESX, RESY, 2)
             drawThickLine(RESX - 10, RESY + 20, RESX, RESY, 2)
             
+        -- Outline when in the gunsight, currently unused
         render.selectRenderTarget(gunsightOutline)
-        render.clear( Color( 0, 0, 0, 0 ) )
+        render.clear(Color(0, 0, 0, 0))
             if GUNSIGHTSHAPE == 1 then
                 render.setMaterial(CIRCMAT)
                 local SIZE = 512
@@ -147,105 +137,10 @@ if CLIENT then
                 render.drawRectOutline(RESX - XSIZE / 2, RESY - YSIZE / 2, XSIZE, YSIZE, 2)  
             end
     end )
-    
-    -- Runs if you move the mouse
-    hook.add('mousemoved', 'Mouse Moved', function(x, y)
-        if ACTIVE == 0 then return end
-        
-        CAMANG.pitch = math.clamp(CAMANG.pitch + (y / 40), -89, 89)
-        CAMANG.yaw   = CAMANG.yaw - (x / 40)
-    end)
 
-    -- Runs if you scroll the mouse    
-    hook.add('mouseWheeled', 'Scroll Wheel Moved', function(delta)
-        if not ACTIVE then return end
-        cleanFilter()
-        
-        local currentCamPos = CAMPOS
-        local newCamPos = CAMPOS
-        local currentAimPos = HITPOS
-        local newAimPos = HITPOS
-        local angDiff = Angle()
-        
-        local currentFOV = FOV
-        -- Zooming and moving camera to stay on target when you do
-        if (delta > 0) then
-            if currentFOV == 90  then
-                newCamPos = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
-                newAimPos = _traceline(newCamPos + CAMANG:getForward():getNormalized() * 1000, newCamPos + CAMANG:getForward():getNormalized() * 80000, FILTER)["HitPos"]
-                
-                angDiff = (newAimPos - newCamPos):getNormalized():getAngle() - (currentAimPos - newCamPos):getNormalized():getAngle()
-                angDiff.pitch = angDiff.pitch % 90
-            end
-            
-            FOV = math.clamp(FOV / 2, 2.8125, 90)
-        else
-            FOV = math.clamp(FOV * 2, 2.8125, 90)
-            
-            if currentFOV ~= 90 and FOV == 90 then
-                local aimVector = (CAMANG:getForward():getNormalized() * 25) + (CAMANG:getUp():getNormalized() * 5) -- Where the position starts
-                local aimNormal = aimVector:getNormalized() -- This is for the angle
+    -- Drawing and updating HUD values
 
-                newCamPos = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST
-                newAimPos = _traceline(newCamPos + aimNormal * 1000, newCamPos + aimNormal * 80000, FILTER)["HitPos"]
-                
-                angDiff = (newAimPos - newCamPos):getNormalized():getAngle() - (currentAimPos - newCamPos):getNormalized():getAngle()
-                angDiff.pitch = angDiff.pitch % -90
-            end    
-        end
-        
-        CAMANG = CAMANG - angDiff
-        ZOOMMUL = FOV / 90
-        CAMPUSH["fov"] = FOV
-    end)
-
-    -- Does the calculations for the camera
-    hook.add('calcview', 'Update Camera', function(pos, ang, fov, znear, zfar)  
-        if not ACTIVE then return end
-        cleanFilter()
-        
-        CAMPOS = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST -- this will give you distance around a point
-        if ZOOMMUL ~= 1 then
-            CAMPOS = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
-        end
-        
-        -- These are the calculations for the HITPOS
-        local upMul = (ZOOMMUL == 1) and 1 or 0 -- If we are in third person, use this campos, otherwise use center of screen
-        local aimVector = (CAMANG:getForward():getNormalized() * 25) + (CAMANG:getUp():getNormalized() * 5) * upMul -- Where the position starts
-        local aimNormal = aimVector:getNormalized() -- This is for the angle
-        
-        for key, value in pairs(FILTER) do
-            if value == nil or !value:isValid() then
-                table.removeByValue(FILTER, value)
-            end    
-        end 
-
-        AIMTRACE  = _traceline(CAMPOS + aimNormal * 100, CAMPOS + aimNormal * 80000, FILTER) -- Trace to where we want to aim
-        HITPOS = AIMTRACE["HitPos"]
-
-        net.start("sendClientData")
-        net.writeFloat(HITPOS.x)
-        net.writeFloat(HITPOS.y)
-        net.writeFloat(HITPOS.z)
-        net.send(nil, true)  
-        
-        CAMPUSH["origin"] = CAMPOS
-        CAMPUSH["angles"] = CAMANG
-        
-        return CAMPUSH
-    end)
-    
-    -- Only update these variables every 0.1 seconds for readability
-    timer.create("Update Speed and Distance", 0.1, 0, function()
-        if AIMTRACE == nil then return end
-        
-        TRACEDIST = AIMTRACE["Fraction"] * 80000 -- Updating Trace Distance
-        
-        local velocity = math.round(BASE:getVelocity():getLength() * 1 / 17.6, 1)
-        SPEED = velocity % 1 > 0 and math.round(velocity, 1) or velocity .. ".0" -- Updating Speed
-    end)
-        
-    -- Draw the hud
+    -- Hook for when the player's hud gets drawn
     hook.add('drawhud', 'Draw Hud', function()
         -- If not ACTIVE then return end
         cleanFilter()
@@ -461,7 +356,115 @@ if CLIENT then
         end
     end) 
     
-    -- Exchange between CLIENT and SERVER
+    -- Timer for updating hud variables slower on purpose so that they can be read
+    timer.create("Update Speed and Distance", 0.1, 0, function()
+        -- If AIMTRACE isn't valid, quit early
+        if AIMTRACE == nil then return end
+        
+        TRACEDIST = AIMTRACE["Fraction"] * 80000 -- Updating Trace Distance
+        
+        local velocity = math.round(BASE:getVelocity():getLength() * 1 / 17.6, 1)
+        SPEED = velocity % 1 > 0 and math.round(velocity, 1) or velocity .. ".0" -- Updating Speed
+    end)
+    
+    -- Manipulating the camera
+
+    -- Hook for when the player's camera is updated
+    hook.add('calcview', 'Update Camera', function(pos, ang, fov, znear, zfar)  
+        -- If the starfall isn't in use, quit early
+        if not ACTIVE then return end
+
+        -- Clean FILTER of bad values
+        cleanFilter()
+        
+        CAMPOS = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST -- this will give you distance around a point
+        if ZOOMMUL ~= 1 then
+            CAMPOS = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
+        end
+        
+        -- These are the calculations for the HITPOS
+        local upMul = (ZOOMMUL == 1) and 1 or 0 -- If we are in third person, use this campos, otherwise use center of screen
+        local aimVector = (CAMANG:getForward():getNormalized() * 25) + (CAMANG:getUp():getNormalized() * 5) * upMul -- Where the position starts
+        local aimNormal = aimVector:getNormalized() -- This is for the angle
+        
+        for key, value in pairs(FILTER) do
+            if value == nil or !value:isValid() then
+                table.removeByValue(FILTER, value)
+            end    
+        end 
+
+        AIMTRACE  = _traceline(CAMPOS + aimNormal * 100, CAMPOS + aimNormal * 80000, FILTER) -- Trace to where we want to aim
+        HITPOS = AIMTRACE["HitPos"]
+
+        net.start("sendClientData")
+        net.writeFloat(HITPOS.x)
+        net.writeFloat(HITPOS.y)
+        net.writeFloat(HITPOS.z)
+        net.send(nil, true)  
+        
+        CAMPUSH["origin"] = CAMPOS
+        CAMPUSH["angles"] = CAMANG
+        
+        return CAMPUSH
+    end)
+    
+    hook.add('mousemoved', 'Mouse Moved', function(x, y)
+        -- If the starfall isn't in use, quit early
+        if not ACTIVE then return end
+        
+        -- Stole this from one Polymorphic Turtle, sims the camera
+        CAMANG.pitch = math.clamp(CAMANG.pitch + (y / 40), -89, 89)
+        CAMANG.yaw = CAMANG.yaw - (x / 40)
+    end)
+
+    -- Hook for when the player's hud gets drawn   
+    hook.add('mouseWheeled', 'Scroll Wheel Moved', function(delta)
+        -- If the starfall isn't in use, quit early
+        if not ACTIVE then return end
+
+        -- Clean FILTER of bad values
+        cleanFilter()
+        
+        local currentCamPos = CAMPOS
+        local newCamPos = CAMPOS
+        local currentAimPos = HITPOS
+        local newAimPos = HITPOS
+        local angDiff = Angle()
+        
+        local currentFOV = FOV
+        -- Zooming and moving camera to stay on target when you do
+        if (delta > 0) then
+            if currentFOV == 90  then
+                newCamPos = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
+                newAimPos = _traceline(newCamPos + CAMANG:getForward():getNormalized() * 1000, newCamPos + CAMANG:getForward():getNormalized() * 80000, FILTER)["HitPos"]
+                
+                angDiff = (newAimPos - newCamPos):getNormalized():getAngle() - (currentAimPos - newCamPos):getNormalized():getAngle()
+                angDiff.pitch = angDiff.pitch % 90
+            end
+            
+            FOV = math.clamp(FOV / 2, 2.8125, 90)
+        else
+            FOV = math.clamp(FOV * 2, 2.8125, 90)
+            
+            if currentFOV ~= 90 and FOV == 90 then
+                local aimVector = (CAMANG:getForward():getNormalized() * 25) + (CAMANG:getUp():getNormalized() * 5) -- Where the position starts
+                local aimNormal = aimVector:getNormalized() -- This is for the angle
+
+                newCamPos = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST
+                newAimPos = _traceline(newCamPos + aimNormal * 1000, newCamPos + aimNormal * 80000, FILTER)["HitPos"]
+                
+                angDiff = (newAimPos - newCamPos):getNormalized():getAngle() - (currentAimPos - newCamPos):getNormalized():getAngle()
+                angDiff.pitch = angDiff.pitch % -90
+            end    
+        end
+        
+        CAMANG = CAMANG - angDiff
+        ZOOMMUL = FOV / 90
+        CAMPUSH["fov"] = FOV
+    end)
+    
+    -- Net exchange between CLIENT and SERVER
+
     -- Request SERVER data when CLIENT loads
     net.start("requestGlobals")
     net.send() 

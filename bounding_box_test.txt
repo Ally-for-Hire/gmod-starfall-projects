@@ -79,7 +79,7 @@ end
 
 -- CLIENT HOOKS HERE
 
--- Hook for when the player's camera runs
+-- Hook for when the player's camera is updated
 hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)  
     --  Update the  GLOBAL_CAMANG variable, used for the hud
     GLOBAL_CAMANG = CAMANG
@@ -92,7 +92,7 @@ hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)
 end)
 
 
--- Hook for when the hud gets drawn
+-- Hook for when the player's hud gets drawn
 hook.add('drawhud', 'Draw Hud', function()
     -- If CENTER isn't valid then quit early
     if CENTER == Vector() then return end
