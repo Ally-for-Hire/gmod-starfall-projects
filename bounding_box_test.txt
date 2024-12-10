@@ -1,0 +1,90 @@
+--@name Bounding Box Test
+--@author Ally for Hire / Merydian9
+--@client
+
+-- CLIENT VARIABLES HERE
+
+-- General Variables
+local CENTER = Vector()
+local WIDTH, HEIGHT = 0
+
+-- Trace Variables
+local HITPOS = Vector()
+local TRACE_DISTANCE = 0
+local TRACE_HIT = false
+local FILTER = {owner(), chip()}
+
+-- Holograms
+local AIM_HOLOGRAM = hologram.create(Vector(), Angle(), "models/hunter/blocks/cube025x025x025.mdl")
+
+-- CLIENT FUNCTIONS HERE
+
+-- Overwrites
+local _line = trace.line
+local _hull = trace.hull
+
+-- Absolute value of vectors
+local function vectorAbs(Vec)
+    return Vector(math.abs(Vec[1]), math.abs(Vec[2]), math.abs(Vec[3]))    
+end
+
+-- Recursively send traces in the given direction until it works
+-- 
+local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILTER, STARTING_DISTANCE) -- Starting trace, Starting Position, Direction, Starting Distance  
+    local CURRENT_TRACE = {Hit = true, HitPos = Vector()}
+    
+    local ATTEMPTS, TOTAL_DISTANCE, MAX_SIZE = 0, 0, 250
+    local CURRENT_STEP = 50
+    
+    while CURRENT_TRACE["Hit"] and TOTAL_DISTANCE < MAX_SIZE and CURRENT_STEP > 5 do
+        TOTAL_DISTANCE = TOTAL_DISTANCE + CURRENT_STEP
+
+        local TRACEEND = HITPOS + (MOVE_DIRECTION * TOTAL_DISTANCE)
+        local TRACENORMAL = (TRACEEND - STARTING_POSITION):getNormalized()
+        local TRACE_ATTEMPT = _line(STARTING_POSITION, STARTING_POSITION + TRACENORMAL * (STARTING_DISTANCE + 200), FILTER, nil, nil, true)
+    
+        if TRACE_ATTEMPT["Hit"] then
+            CURRENT_TRACE = TRACE_ATTEMPT
+        else
+            TOTAL_DISTANCE = TOTAL_DISTANCE - CURRENT_STEP
+            CURRENT_STEP = CURRENT_STEP / 2
+        end
+        
+        ATTEMPTS = ATTEMPTS + 1
+    end
+    
+    return {Trace = CURRENT_TRACE, HitPos = CURRENT_TRACE["HitPos"], Distance = TOTAL_DISTANCE + CURRENT_STEP}
+end    
+--trace.hull(Vector start, Vector endpos, Vector minbox, Vector maxbox)
+
+-- CLIENT HOOKS HERE
+-- Hook for when the player's camera runs
+hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)  
+    -- Shoot a trace from the center of the camera
+    local CENTER_TRACE = _line(CAMPOS, CAMPOS + CAMANG:getForward() * 10000, FILTER, nil, nil, true)
+    
+    -- Setup initial variables
+    TRACE_DISTANCE = CENTER_TRACE["Fraction"] * 10000
+    TRACE_HIT = CENTER_TRACE["Hit"]
+    HITPOS = CENTER_TRACE["HitPos"]
+    
+    -- If the initial trace didnt hit anything, nothing else will
+    if not TRACE_HIT then return end
+    
+    -- Recursively in 4 directions, trying to find the bounding box sie
+    local LEFT_CALL = recursiveTraceDir(CAMPOS, -CAMANG:getRight(), HITPOS, FILTER, TRACE_DISTANCE) 
+    local RIGHT_CALL = recursiveTraceDir(CAMPOS, CAMANG:getRight(), HITPOS, FILTER, TRACE_DISTANCE) 
+    local UP_CALL = recursiveTraceDir(CAMPOS, CAMANG:getUp(), HITPOS, FILTER, TRACE_DISTANCE)
+    local DOWN_CALL = recursiveTraceDir(CAMPOS, -CAMANG:getUp(), HITPOS, FILTER, TRACE_DISTANCE) 
+
+    -- Interpret the values from the traces into usable information
+    WIDTH = LEFT_CALL["Distance"] + RIGHT_CALL["Distance"]
+    HEIGHT = UP_CALL["Distance"] + DOWN_CALL["Distance"]
+    CENTER = (LEFT_CALL["HitPos"] + RIGHT_CALL["HitPos"] + UP_CALL["HitPos"] + DOWN_CALL["HitPos"]) / 4
+
+    -- Make a hologram showing what we know
+    AIM_HOLOGRAM:setSize(Vector(5, WIDTH, HEIGHT)) -- Front/Back, Left/Right, Up/Down
+    AIM_HOLOGRAM:setPos(CENTER)
+    AIM_HOLOGRAM:setAngles(CAMANG)
+end)
+
