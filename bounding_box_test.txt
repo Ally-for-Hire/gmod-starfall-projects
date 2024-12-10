@@ -34,15 +34,15 @@ end
 local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILTER, STARTING_DISTANCE) -- Starting trace, Starting Position, Direction, Starting Distance  
     local CURRENT_TRACE = {Hit = true, HitPos = HITPOS}
     
-    local ATTEMPTS, TOTAL_DISTANCE, MAX_SIZE = 0, 0, 250
-    local CURRENT_STEP = 50
+    local ATTEMPTS, TOTAL_DISTANCE = 0, 0
+    local HULL_SIZE, CURRENT_STEP, MAX_SIZE = 5, 50, 250
     
     while CURRENT_TRACE["Hit"] and TOTAL_DISTANCE < MAX_SIZE and CURRENT_STEP > 5 do
         TOTAL_DISTANCE = TOTAL_DISTANCE + CURRENT_STEP
 
         local TRACEEND = HITPOS + (MOVE_DIRECTION * TOTAL_DISTANCE)
         local TRACENORMAL = (TRACEEND - STARTING_POSITION):getNormalized()
-        local TRACE_ATTEMPT = _hull(STARTING_POSITION, STARTING_POSITION + TRACENORMAL * (STARTING_DISTANCE + 200), -Vector(3), Vector(3), FILTER, nil, nil, true)
+        local TRACE_ATTEMPT = _hull(STARTING_POSITION, STARTING_POSITION + TRACENORMAL * (STARTING_DISTANCE + 200), -Vector(HULL_SIZE), Vector(HULL_SIZE), FILTER, nil, nil, true)
     
         if TRACE_ATTEMPT["Hit"] then
             CURRENT_TRACE = TRACE_ATTEMPT
@@ -54,7 +54,7 @@ local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILT
         ATTEMPTS = ATTEMPTS + 1
     end
     
-    return {Trace = CURRENT_TRACE, HitPos = CURRENT_TRACE["HitPos"], Distance = TOTAL_DISTANCE + CURRENT_STEP}
+    return {Trace = CURRENT_TRACE, HitPos = CURRENT_TRACE["HitPos"], Distance = TOTAL_DISTANCE + CURRENT_STEP - HULL_SIZE}
 end    
 --trace.hull(Vector start, Vector endpos, Vector minbox, Vector maxbox)
 
@@ -96,9 +96,13 @@ hook.add('drawhud', 'Draw Hud', function()
     if CENTER == Vector() then return end
     
     local CENTER_COORDS = CENTER:toScreen()
+    local CX, CY = CENTER_COORDS.x, CENTER_COORDS.y
     local SCREEN_WIDTH = math.abs((CENTER + CAM_ANG:getRight() * WIDTH):toScreen().x - CENTER_COORDS.x)
     local SCREEN_HEIGHT = math.abs((CENTER + CAM_ANG:getUp() * HEIGHT):toScreen().y - CENTER_COORDS.y)
     
-    render.drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 2)
+    render.setColor(Color(0, 255, 0))
+    render.drawRect(CENTER_COORDS.x - 8 / 2, CENTER_COORDS.y - 2 / 2, 8, 2)
+    render.drawRect(CENTER_COORDS.x - 2 / 2, CENTER_COORDS.y - 8 / 2, 2, 8)
+    render.drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 4)
 end)
 
