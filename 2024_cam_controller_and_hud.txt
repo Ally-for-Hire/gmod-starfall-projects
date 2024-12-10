@@ -146,8 +146,6 @@ if CLIENT then
 
     -- Hook for when the player's hud gets drawn
     hook.add('drawhud', 'Draw Hud', function()
-        -- If not ACTIVE then return end
-        cleanFilter()
         
         -- Important screen variables
         local SCREENRESX, SCREENRESY = render.getResolution()
@@ -377,9 +375,6 @@ if CLIENT then
     hook.add('calcview', 'Update Camera', function(pos, ang, fov, znear, zfar)  
         -- If the starfall isn't in use, quit early
         if not ACTIVE then return end
-
-        -- Clean FILTER of bad values
-        cleanFilter()
         
         CAMPOS = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST -- this will give you distance around a point
         if ZOOMMUL ~= 1 then
@@ -425,9 +420,6 @@ if CLIENT then
     hook.add('mouseWheeled', 'Scroll Wheel Moved', function(delta)
         -- If the starfall isn't in use, quit early
         if not ACTIVE then return end
-
-        -- Clean FILTER of bad values
-        cleanFilter()
         
         local currentCamPos = CAMPOS
         local newCamPos = CAMPOS
@@ -509,6 +501,13 @@ if CLIENT then
         if READY then
             RELOADTIME = POSSIBLERELOADTIME    
         end
+    end)
+
+    -- Clean filter when props are removed
+    hook.add("EntityRemoved", "Filter Cleanup", function(entity)
+        if entity:getOwner() ~= owner() or entity:getClass() == "class CLuaEffect" or entity:getClass() == "starfall_hologram" then return end   
+        
+        cleanFilter()
     end)
 elseif SERVER then
     -- SERVER global variable initialization
@@ -631,7 +630,6 @@ elseif SERVER then
 
         net.writeTable(AMMOTYPES)
         net.send(owner(), false)
-        
     end)
     
     -- Send ACTIVE when it updates
