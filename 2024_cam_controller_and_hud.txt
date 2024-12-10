@@ -4,8 +4,6 @@
 --@model models/jaanus/wiretool/wiretool_range.mdl
 
 if SERVER then
-    print("Started Successfuly")
-    
     -- Global variable initialization
     local HITPOS = Vector()
     local HITNORMAL = Vector()
@@ -44,7 +42,7 @@ if SERVER then
         UNSORTEDAMMOTYPES[type][table.count(UNSORTEDAMMOTYPES[type])] = ALLCRATES[i]
     end
     
-    SORTEDAMMOTYPES = {}
+    SORTEDAMMOTYPES = {} // Sorts by caliber
     while table.count(UNSORTEDAMMOTYPES) > 0 do
         local keys = table.getKeys(UNSORTEDAMMOTYPES) 
         local maxValue = 99999 -- actually minValue
@@ -92,11 +90,12 @@ if SERVER then
         net.writeTable(FILTER)
         net.writeEntity(AIMHOLOGRAM)
         net.writeTable(AMMOTYPES)
+        net.writeString(tostring(wire.ports.Gun:acfCaliber()))
         net.send(ply, false)
     end)
     
     -- Send SERVER gun data
-    timer.create("sendGunData",0.1,0,function()
+    timer.create("sendGunData",0.05,0,function()
         local Gun = wire.ports.Gun
         if Gun == nil then return end
         
@@ -112,6 +111,7 @@ if SERVER then
             net.writeFloat(0)
         end
         net.writeString(Gun:acfState())
+        net.writeString(Gun:acfAmmoType())
         
         for key, value in pairs(AMMOTYPES) do
             local totalAmmo = 0
@@ -159,6 +159,7 @@ if CLIENT then
     local RELCAMPOS = Vector(0, 0, 100)
     local CAMDIST = 300
     local GUNSIGHTRELCAMPOS = Vector(0, 0, -2)
+    local GUNSIGHTSHAPE = 2 -- 1 = Circle, 2 = Square
     
     -- CLIENT global variable initialization
     local FOV = 90
@@ -171,7 +172,7 @@ if CLIENT then
     local ZOOMMUL = 1
     local CAMPUSH = { fov = FOV, znear = 1, zfar = 80000 }
     
-    -- Font initialization
+    -- Font and material initialization
     local MAINCOL = Color(255, 255, 255) -- Color of reticle
     local SECCOL = Color(255, 0, 0) -- Color of reticle details and text when not loaded
     local TERCOL = Color(255,191,0) -- Color of rest of the hud
@@ -179,21 +180,36 @@ if CLIENT then
     local FONTBIG = render.createFont("Roboto Mono", 30, 2, true, false, false, true)
     local FONTMED = render.createFont("Roboto Mono", 25, 2, true, false, false, true)
     local FONTSMALL = render.createFont("Roboto Mono", 20, 2, true, false, false, false)
-
+    local CIRCMAT = render.createMaterial("egpextras/textures/tank/overlays/border_circular.png")
+    local SQUAREMAT = render.createMaterial("egpextras/textures/tank/overlays/border_rectangular02.png")
+    
     -- SERVER variable initilization
-    local ACTIVE = 0
+    local ACTIVE = false
     local BASE = chip()
     local GUNSIGHT = chip()
     local GUN = chip()
     local FILTER = {}
     local READY = false
+    local CALIBER = ""
     local RELOADTIME = 0
     local RELOADPROGRESS = 0
     local SMRELOADTIME = 0
     local SMRELOADPROGRESS = 0
     local STATE = ""
     local AMMOTYPES = {}
+    local CURRENTAMMOTYPE = ""
     local AIMHOLOGRAM = chip()
+    
+    -- These just re-route global commands
+    local _drawSimpleText = render.drawSimpleText
+    local _drawLine = render.drawLine
+    local _drawCircle = render.drawCircle
+    local _drawRect = render.drawRect
+    local _drawRectOutline = render.drawRectOutline
+    local _setColor = render.setColor
+    local _drawPoly = render.drawPoly
+    local _setFont = render.setFont
+    local _traceline = trace.line
     
     -- Function initialization
     local function drawThickLine (x1, y1, x2, y2, thickness)
@@ -201,7 +217,7 @@ if CLIENT then
         local perpX = perpDir[1]
         local perpY = perpDir[2]
     
-        render.drawPoly( {
+        _drawPoly( {
             { x = x1 + perpX, y = y1 + perpY },
             { x = x2 + perpX, y = y2 + perpY },
             { x = x2 - perpX, y = y2 - perpY },
@@ -209,14 +225,71 @@ if CLIENT then
         } )
     end
     local function drawCenterRect(x, y, width, height)
-        render.drawRect(x - width / 2, y - height / 2, width, height)    
+        _drawRect(x - width / 2, y - height / 2, width, height)    
     end
-    -- These just re-route global commands
-    local _setColor = render.setColor
-    local _setFont = render.setFont
-    local _drawSimpleText = render.drawSimpleText
-    local _drawCircle = render.drawCircle
-    local _traceline = trace.line
+    local function cleanFilter()
+        for key, value in pairs(FILTER) do
+            if value == nil or !value:isValid() then
+                table.removeByValue(FILTER, value)
+            end    
+        end 
+    end
+    
+    -- Render targets
+    local fullReloadIndicator = "fullReloadIndicator"
+    local centerChevron = "centerChevron"
+    local gunsightOutline = "gunsightOutline"
+    
+    render.createRenderTarget(centerChevron)
+    render.createRenderTarget(fullReloadIndicator)
+    render.createRenderTarget(gunsightOutline)
+    
+    hook.add("renderoffscreen", "drawStatic", function()
+         -- Variables
+        local SCREENRESX, SCREENRESY = render.getResolution()
+        local RESX, RESY = SCREENRESX / 2, SCREENRESY / 2
+        
+        hook.remove("renderoffscreen", "drawStatic") -- only call once
+        
+        render.selectRenderTarget( fullReloadIndicator )
+        render.clear( Color( 0, 0, 0, 0 ) )
+            local pi = 3.14159
+            for i = 1, 32 do
+                local theta = i * (pi / 16)
+                local radX = math.cos(theta - pi / 2)
+                local radY = math.sin(theta - pi / 2)
+                drawThickLine(RESX + radX * 50, RESY + radY * 50, RESX + radX * 55, RESY + radY * 55, 1.5)  
+            end
+
+        render.selectRenderTarget(centerChevron)
+        render.clear( Color( 0, 0, 0, 0 ) )
+            _setColor(Color(0, 0, 0))
+            drawThickLine(RESX + 10, RESY + 20, RESX, RESY, 6)
+            drawThickLine(RESX - 10, RESY + 20, RESX, RESY, 6)
+            _setColor(MAINCOL)
+            drawThickLine(RESX + 10, RESY + 20, RESX, RESY, 2)
+            drawThickLine(RESX - 10, RESY + 20, RESX, RESY, 2)
+            
+        render.selectRenderTarget(gunsightOutline)
+        render.clear( Color( 0, 0, 0, 0 ) )
+            if GUNSIGHTSHAPE == 1 then
+                render.setMaterial(CIRCMAT)
+                local SIZE = 512
+                render.drawTexturedRect(RESX - SIZE / 2, RESY - SIZE / 2, SIZE, SIZE)
+                _setColor(Color(255, 100, 0, 10))
+                render.drawCircle(RESX, RESY, 67)
+                render.drawCircle(RESX, RESY, 68)
+                render.drawCircle(RESX, RESY, 69)
+            else
+                render.setMaterial(SQUAREMAT)
+                local SIZE = 256
+                render.drawTexturedRect(RESX - SIZE / 2, RESY - SIZE / 2, SIZE, SIZE)
+                _setColor(Color(255, 100, 0, 10))
+                local XSIZE = 140 * (SIZE / 256)
+                local YSIZE = 107.5 * (SIZE / 256)
+                render.drawRectOutline(RESX - XSIZE / 2, RESY - YSIZE / 2, XSIZE, YSIZE, 2)  
+            end
+    end )
     
     -- Runs if you move the mouse
     hook.add('mousemoved', 'MouseMoved', function(x, y)
@@ -229,11 +302,12 @@ if CLIENT then
     -- Runs if you scroll the mouse    
     hook.add('mouseWheeled', 'MouseWheeled', function(delta)
         if not ACTIVE then return end
+        cleanFilter()
         
-        currentCamPos = CAMPOS
-        newCamPos = CAMPOS
-        currentAimPos = HITPOS
-        newAimPos = HITPOS
+        local currentCamPos = CAMPOS
+        local newCamPos = CAMPOS
+        local currentAimPos = HITPOS
+        local newAimPos = HITPOS
         local angDiff = Angle()
         
         local currentFOV = FOV
@@ -271,7 +345,8 @@ if CLIENT then
     -- Does the calculations for the camera
     hook.add('calcview', 'CameraView', function(pos, ang, fov, znear, zfar)  
         if not ACTIVE then return end
-   
+        cleanFilter()
+        
         CAMPOS = BASE:getPos() + RELCAMPOS - CAMANG:getForward() * CAMDIST -- this will give you distance around a point
         if ZOOMMUL ~= 1 then
             CAMPOS = GUNSIGHT:getPos() + GUNSIGHT:getForward() * GUNSIGHTRELCAMPOS.x + GUNSIGHT:getRight() * GUNSIGHTRELCAMPOS.y + GUNSIGHT:getUp() * GUNSIGHTRELCAMPOS.z
@@ -318,13 +393,8 @@ if CLIENT then
         
     -- Draw the hud
     hook.add('drawhud', 'TankHud', function()
-        --if ACTIVE == 0 then return end
-        
-         for key, value in pairs(FILTER) do
-            if value == nil or !value:isValid() then
-                table.removeByValue(FILTER, value)
-            end    
-        end 
+        -- if not ACTIVE then return end
+        cleanFilter()
         
         -- Variables
         local SCREENRESX, SCREENRESY = render.getResolution()
@@ -335,12 +405,11 @@ if CLIENT then
         local x,y = crosshair.x, crosshair.y
         if crosshair.visible then    
             -- Center chevron
-            _setColor(Color(0, 0, 0))
-            drawThickLine(x - 10, y + 20, x, y, 4)
-            drawThickLine(x + 10, y + 20, x, y, 4)
-            _setColor(MAINCOL)
-            drawThickLine(x - 10, y + 20, x, y, 1)
-            drawThickLine(x + 10, y + 20, x, y, 1)
+            _setColor(Color(255, 255, 255))
+            render.setRenderTargetTexture(centerChevron)
+            local size = 1024
+            render.drawTexturedRect(x - size / 2, y - size / 2, size, size)
+            render.setRenderTargetTexture()
             
             -- Color
             local color = TERCOL
@@ -348,14 +417,25 @@ if CLIENT then
             _setColor(color)
             
             -- Lines        
-            drawThickLine(x + 50, y, x + 250, y, 2)
-            drawThickLine(x - 50, y, x - 250, y, 2)
+            -- drawThickLine(x + 75, y, x + 250, y, 2)
+            -- drawThickLine(x - 75, y, x - 250, y, 2)
             --drawThickLine(x - 101, y, x - 101, y + 15, 2)
             --drawThickLine(x + 101, y, x + 101, y + 15, 2)
             
-            drawThickLine(x, y + 50, x, y + 75, 1)
-            drawThickLine(x, y + 85, x, y + 110, 1)
-            drawThickLine(x, y + 120, x, y + 145, 1)
+            drawThickLine(x, y + 65, x, y + 85, 1)
+            drawThickLine(x, y + 95, x, y + 120, 1)
+            drawThickLine(x, y + 130, x, y + 155, 1)
+            
+            -- Reload Indicator
+            if RELOADPROGRESS ~= 1 then
+                local pi = 3.14159
+                for i = 1, math.round(32 * RELOADPROGRESS) do
+                    local theta = i * (pi / 16)
+                    local radX = math.cos(theta - pi / 2)
+                    local radY = math.sin(theta - pi / 2)
+                    _drawLine(x + radX * 50, y + radY * 50, x + radX * 55, y + radY * 55)  
+                end
+            end
             
             -- Text
             _setFont(FONTBIG)
@@ -365,6 +445,7 @@ if CLIENT then
             _setFont(FONTMED)
             local reloadLeft = (RELOADPROGRESS < 1) and RELOADTIME - (RELOADTIME * RELOADPROGRESS) or (RELOADTIME)
             _drawSimpleText(x + 60, y + 45, math.round(reloadLeft, 2) .. "s", 0, 1) -- Reload Progress
+            
         end
         
         -- Holosight
@@ -398,13 +479,25 @@ if CLIENT then
             _drawCircle(x, y, 10, 10)
             
             -- Center chevron
-            _setColor(Color(0, 0, 0))
-            drawThickLine(x - 10, y + 20, x, y, 4)
-            drawThickLine(x + 10, y + 20, x, y, 4)
-            _setColor(MAINCOL)
-            drawThickLine(x - 10, y + 20, x, y, 1)
-            drawThickLine(x + 10, y + 20, x, y, 1)
+            _setColor(Color(255, 255, 255))
+            render.setRenderTargetTexture(centerChevron)
+            local size = 1024
+            render.drawTexturedRectFast(x - size / 2, y - size / 2, size, size)
+            render.setRenderTargetTexture()
        end
+    
+        -- Gunsight Outline (unused)
+        /*
+        if true then
+            local POSCOORDS = (GUNSIGHT:getPos() + -GUNSIGHT:getUp() * 200):toScreen()
+            local RX, RY = POSCOORDS.x, POSCOORDS.y
+            
+            render.setRenderTargetTexture(gunsightOutline)
+            local SIZE = SCREENRESX * (2 / ZOOMMUL) * 2
+            render.drawTexturedRectFast(RX - SIZE / 2, RY - SIZE / 2, SIZE, SIZE)
+            _setColor(Color(0, 0, 0))
+        end 
+        */
     
         -- Main Hud    
         _setColor(TERCOL)
@@ -433,11 +526,8 @@ if CLIENT then
         -- Side Values
         _setFont(FONTBIG)
         _drawSimpleText(RESX - 500, RESY, SPEED, 2, 1) -- Speed
-        _drawSimpleText(RESX - 500, RESY + 200, "GUN", 0, 1) -- Gun
-        
         local zoomAmount = (90 / FOV) % 1 > 0 and math.round((90 / FOV), 1) or (90 / FOV) .. ".0"
         _drawSimpleText(RESX + 500, RESY, "x" .. zoomAmount, 0, 1) -- Zoom
-        
         
         -- Side Labels
         _setFont(FONTSMALL)
@@ -465,45 +555,57 @@ if CLIENT then
             local currentAmmoInfo = AMMOTYPES[i]["Info"]
             if currentAmmoString[3] == "SM" then
                 ignoreI = ignoreI + 1
-                _setColor(TERCOL)
+                local color = TERCOL
+                if SMRELOADPROGRESS ~= 1 then color = SECCOL end
+                _setColor(color)
                 _setFont(FONTEXTRABIG)
                 _drawSimpleText(RESX + 500, RESY + 200, "x" .. currentAmmoInfo.z, 2, 1) -- smoke ammo count
                 _setFont(FONTSMALL) -- smoke test
                 _drawSimpleText(RESX + 510, RESY + 210, "SMOKES", 0, 1) -- smoke label text
                 local reloadLeft = (SMRELOADPROGRESS < 1) and SMRELOADTIME - (SMRELOADTIME * SMRELOADPROGRESS) or (SMRELOADTIME)
-                 _drawSimpleText(RESX + 510, RESY + 190, math.round(reloadLeft, 1) .. "s", 0, 1)  -- smoke reload time
+                 _drawSimpleText(RESX + 510, RESY + 190, math.round(reloadLeft, 2) .. "s", 0, 1)  -- smoke reload time
                 continue
-
+            elseif currentAmmoString[3] == CURRENTAMMOTYPE and currentAmmoString[1] == CALIBER then
+                local color = TERCOL
+                if RELOADPROGRESS ~= 1 then color = SECCOL end
+                _setColor(color)
+                _setFont(FONTEXTRABIG)
+                _drawSimpleText(RESX - 500, RESY + 200, "x" .. currentAmmoInfo.z, 0, 1) -- smoke ammo count
+                _setFont(FONTSMALL) -- smoke test
+                _drawSimpleText(RESX - 510, RESY + 210, CALIBER .. "MM " .. CURRENTAMMOTYPE, 2, 1) -- smoke label text
+                local reloadLeft = (RELOADPROGRESS < 1) and RELOADTIME - (RELOADTIME * RELOADPROGRESS) or (RELOADTIME)
+                 _drawSimpleText(RESX - 510, RESY + 190, math.round(reloadLeft, 2) .. "s", 2, 1)  -- smoke reload time
             end
+            
             local index = (i - ignoreI)
             local POSX = SX - index * (WIDTH + DISTANCE)
             
-            -- BacKIng
+            -- Backing
             _setColor(Color(0, 0, 0, 150))
-            render.drawRect(POSX - WIDTH / 2, SY - HEIGHT / 2, WIDTH, HEIGHT, 3)
+            _drawRect(POSX - WIDTH / 2, SY - HEIGHT / 2, WIDTH, HEIGHT, 3)
             
             -- Shapes
             _setColor(TERCOL)
-            render.drawRectOutline(POSX - WIDTH / 2, SY - HEIGHT / 2, WIDTH, HEIGHT, 3)
+            if CALIBER == currentAmmoString[1] and CURRENTAMMOTYPE ~= currentAmmoString[3] then _setColor(Color(0, 0, 0)) end
+            _drawRectOutline(POSX - WIDTH / 2, SY - HEIGHT / 2, WIDTH, HEIGHT, 3)
             
             -- Texts
             _setFont(FONTMED) -- Big font text
-            if tonumber(currentAmmoString[2][1]) == nil then
+            _setColor(TERCOL)
+            if tonumber(currentAmmoString[2][1]) == nil then -- if its not a normal weapon then use
                 _drawSimpleText(POSX, SY - 50, currentAmmoString[2], 1, 1) -- weapon name
-            else
+            else -- otherwise use
                 _drawSimpleText(POSX, SY - 50, currentAmmoString[1] .. " " .. currentAmmoString[3], 1, 1) -- ammo type     
             end
-            
             _setFont(FONTMED) -- Medium font text
             _drawSimpleText(POSX, SY - 25, math.round(currentAmmoInfo.x) .. " m/s", 1, 1) -- ammo speed
             _drawSimpleText(POSX, SY, math.round(currentAmmoInfo.y) .. " mm", 1, 1) -- ammo penetration
-            
             _setFont(FONTEXTRABIG) -- Extra big font text
             _drawSimpleText(POSX, SY + 40, currentAmmoInfo.z, 1, 1) -- ammo count
             
             -- Outline
             _setColor(Color(0, 0, 0))
-            render.drawRectOutline(SX - WIDTH / 2 - index * (WIDTH + DISTANCE), SY - HEIGHT / 2, WIDTH, HEIGHT, 2)
+            _drawRectOutline(SX - WIDTH / 2 - index * (WIDTH + DISTANCE), SY - HEIGHT / 2, WIDTH, HEIGHT, 2)
         end
     end) 
     
@@ -527,19 +629,27 @@ if CLIENT then
         AIMHOLOGRAM = net.readEntity()
         
         AMMOTYPES = net.readTable()
+        
+        CALIBER = net.readString()
     end) 
 
-    -- Recieve SERVER gun data, happens every 0.1s
+    -- Recieve SERVER gun data, happens every 0.05s
     net.receive("sendGunData", function()
         READY = net.readBool() -- Gun Ready
-        RELOADTIME = net.readFloat()
+        POSSIBLERELOADTIME = net.readFloat()
         RELOADPROGRESS = net.readFloat()
 
         SMRELOADTIME = net.readFloat()
         SMRELOADPROGRESS = net.readFloat()
 
         STATE = net.readString()  
+        CURRENTAMMOTYPE = net.readString()
+        
         AMMOTYPES = net.readTable()
-
+        
+        
+        if READY then
+            RELOADTIME = POSSIBLERELOADTIME    
+        end
     end)
 end
