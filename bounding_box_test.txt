@@ -6,13 +6,14 @@
 
 -- General Variables
 local CENTER = Vector()
-local WIDTH, HEIGHT = 0
+local WIDTH, HEIGHT = 0, 0
 
 -- Trace Variables
 local HITPOS = Vector()
 local TRACE_DISTANCE = 0
 local TRACE_HIT = false
 local FILTER = {owner(), chip()}
+local CAM_ANG = Angle()
 
 -- Holograms
 local AIM_HOLOGRAM = hologram.create(Vector(), Angle(), "models/hunter/blocks/cube025x025x025.mdl")
@@ -31,7 +32,7 @@ end
 -- Recursively send traces in the given direction until it works
 -- 
 local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILTER, STARTING_DISTANCE) -- Starting trace, Starting Position, Direction, Starting Distance  
-    local CURRENT_TRACE = {Hit = true, HitPos = Vector()}
+    local CURRENT_TRACE = {Hit = true, HitPos = HITPOS}
     
     local ATTEMPTS, TOTAL_DISTANCE, MAX_SIZE = 0, 0, 250
     local CURRENT_STEP = 50
@@ -41,7 +42,7 @@ local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILT
 
         local TRACEEND = HITPOS + (MOVE_DIRECTION * TOTAL_DISTANCE)
         local TRACENORMAL = (TRACEEND - STARTING_POSITION):getNormalized()
-        local TRACE_ATTEMPT = _line(STARTING_POSITION, STARTING_POSITION + TRACENORMAL * (STARTING_DISTANCE + 200), FILTER, nil, nil, true)
+        local TRACE_ATTEMPT = _hull(STARTING_POSITION, STARTING_POSITION + TRACENORMAL * (STARTING_DISTANCE + 200), -Vector(3), Vector(3), FILTER, nil, nil, true)
     
         if TRACE_ATTEMPT["Hit"] then
             CURRENT_TRACE = TRACE_ATTEMPT
@@ -58,10 +59,12 @@ end
 --trace.hull(Vector start, Vector endpos, Vector minbox, Vector maxbox)
 
 -- CLIENT HOOKS HERE
+
 -- Hook for when the player's camera runs
 hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)  
     -- Shoot a trace from the center of the camera
     local CENTER_TRACE = _line(CAMPOS, CAMPOS + CAMANG:getForward() * 10000, FILTER, nil, nil, true)
+    CAM_ANG = CAMANG
     
     -- Setup initial variables
     TRACE_DISTANCE = CENTER_TRACE["Fraction"] * 10000
@@ -83,8 +86,19 @@ hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)
     CENTER = (LEFT_CALL["HitPos"] + RIGHT_CALL["HitPos"] + UP_CALL["HitPos"] + DOWN_CALL["HitPos"]) / 4
 
     -- Make a hologram showing what we know
-    AIM_HOLOGRAM:setSize(Vector(5, WIDTH, HEIGHT)) -- Front/Back, Left/Right, Up/Down
-    AIM_HOLOGRAM:setPos(CENTER)
-    AIM_HOLOGRAM:setAngles(CAMANG)
+    -- AIM_HOLOGRAM:setSize(Vector(5, WIDTH, HEIGHT)) -- Front/Back, Left/Right, Up/Down
+    -- AIM_HOLOGRAM:setPos(CENTER)
+    -- AIM_HOLOGRAM:setAngles(CAMANG)
+end)
+
+-- Hook for when the hud get's drawn
+hook.add('drawhud', 'Draw Hud', function()
+    if CENTER == Vector() then return end
+    
+    local CENTER_COORDS = CENTER:toScreen()
+    local SCREEN_WIDTH = math.abs((CENTER + CAM_ANG:getRight() * WIDTH):toScreen().x - CENTER_COORDS.x)
+    local SCREEN_HEIGHT = math.abs((CENTER + CAM_ANG:getUp() * HEIGHT):toScreen().y - CENTER_COORDS.y)
+    
+    render.drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 2)
 end)
 
