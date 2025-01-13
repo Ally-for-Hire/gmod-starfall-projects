@@ -29,7 +29,7 @@ local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILT
     
     -- Initializing fun variables
     local ATTEMPTS, TOTAL_DISTANCE = 0, 0
-    local HULL_SIZE, CURRENT_STEP, MAX_SIZE = 5, 50, 250
+    local HULL_SIZE, CURRENT_STEP, MAX_SIZE = 3, 50, 250
     
     while CURRENT_TRACE["Hit"] and TOTAL_DISTANCE < MAX_SIZE and CURRENT_STEP > 5 do
         TOTAL_DISTANCE = TOTAL_DISTANCE + CURRENT_STEP
@@ -54,13 +54,18 @@ end
 -- Returns the Center, Width, Height of whatever is being aimed at
 local function getBoxSize(CAMPOS, CAMANG, FILTER) 
     -- Send a trace at the center of the screen
-    local CENTER_TRACE = _line(CAMPOS, CAMPOS + CAMANG:getForward() * 10000, FILTER, nil, nil, true)
+    local CENTER_TRACE = _line(CAMPOS, CAMPOS + CAMANG:getForward():getNormalized() * 40000, FILTER, nil, nil, true)
     
-    -- If the initial trace didnt hit anything, nothing else will
-    if not CENTER_TRACE["Hit"] then return {Width = 0, Height = 0, Center = Vector()} end
+    -- If the initial trace didnt hit anything, try a longer trace
+    if not CENTER_TRACE["Hit"] then 
+        CENTER_TRACE = _line(CAMPOS + CAMANG:getForward():getNormalized() * 40000, CAMPOS + CAMANG:getForward():getNormalized() * 80000, FILTER, nil, nil, true)
+    end
+    
+    -- If neither trace hit, nothing will
+    if not CENTER_TRACE["Hit"] then  return {Width = 0, Height = 0, Center = Vector()} end
 
-    -- If it did, setup initial variables and move to logic
-    local TRACE_DISTANCE = CENTER_TRACE["Fraction"] * 10000
+    -- If the traces did hit, setup initial variables and move to logic
+    local TRACE_DISTANCE = CENTER_TRACE["Fraction"] * 64000
     local HITPOS = CENTER_TRACE["HitPos"]
     
     -- Recursively sends traces in 4 directions around the target, trying to find the bounding box size
@@ -79,20 +84,19 @@ end
 
 -- CLIENT HOOKS HERE
 
--- Hook for when the player's camera is updated
-hook.add('calcview', 'Update Camera', function(CAMPOS, CAMANG, FOV, ZNEAR, ZFAR)  
-    --  Update the  GLOBAL_CAMANG variable, used for the hud
-    GLOBAL_CAMANG = CAMANG
+--  Update the  GLOBAL_CAMANG variable, used for the hud
+hook.add("tick", "Update Camera", function() 
+    local EYEVEC = render.getEyeVector()
+    GLOBAL_CAMANG =  EYEVEC:getAngle() 
     
     -- Grab the approximate bounding box size of the target
-    BOX_SIZES = getBoxSize(CAMPOS, (chip():getPos() - CAMPOS):getAngle(), FILTER)
+    BOX_SIZES = getBoxSize(render.getEyePos() + EYEVEC * 1000, GLOBAL_CAMANG, FILTER)
     WIDTH = BOX_SIZES["Width"]
     HEIGHT = BOX_SIZES["Height"]
     CENTER = BOX_SIZES["Center"]
 end)
 
-
--- Hook for when the player's hud gets drawn
+-- Hook for when the hud gets drawn
 hook.add('drawhud', 'Draw Hud', function()
     -- If CENTER isn't valid then quit early
     if CENTER == Vector() then return end
@@ -107,9 +111,9 @@ hook.add('drawhud', 'Draw Hud', function()
     
     -- Then draw the display
     _setColor(Color(0, 255, 0))
-    _drawRect(CENTER_COORDS.x - 8 / 2, CENTER_COORDS.y - 2 / 2, 8, 2)
-    _drawRect(CENTER_COORDS.x - 2 / 2, CENTER_COORDS.y - 8 / 2, 2, 8)
-    _drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 4)
+    _drawRect(CENTER_COORDS.x - 8 / 2, CENTER_COORDS.y - 1 / 2, 8, 1)
+    _drawRect(CENTER_COORDS.x - 1 / 2, CENTER_COORDS.y - 8 / 2, 1, 8)
+    _drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 1)
     
     -- Finally, update LASTPOS
     LASTPOS = TARGETPOS
