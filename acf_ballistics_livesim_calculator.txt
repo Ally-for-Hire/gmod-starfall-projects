@@ -97,25 +97,37 @@ local function generate_ballistics_capped (gun, angle, cap, simplicity) -- Entit
 end
 
 -- Logic goes here
+-- Setting up wiremod compatibility
 wire.adjustPorts({Gun = "entity", Position = "vector", Run = "number"},{Pitch = "number"})
 
-local function logic (input_name, input_value) -- String, Any
-    if input_name != "Run" or input_value != 1 then return end
-    if not isValid(wire.ports.Gun) then return end
-    
-    local gun = wire.ports.Gun
-    local position = wire.ports.Position
-    
-    local distance = gun:getPos():getDistance(position)
+-- Variables we are going to reuse
+local maximum_distance = 0
+
+-- Function to initialize maximum_distance
+local function init (gun) -- Entity
+    if not isValid(gun) then return end
+        
     local max_shot = generate_ballistics(gun, 45, 1)
-    local maximum_distance
     
     for i = 1, #max_shot do
         if max_shot[i][1][2] < 0 then
             maximum_distance = max_shot[i][1][1]
             break
         end        
-    end
+    end    
+    
+    print("Maximum Distance: " .. maximum_distance)
+end
+
+-- Function to run logic whenever input is given
+local function logic (input_name, input_value) -- String, Any
+    if input_name == "Gun" then init(input_value) end
+    if input_name != "Run" or input_value != 1 then return end
+    if not isValid(wire.ports.Gun) then return end
+
+    local gun = wire.ports.Gun
+    local position = wire.ports.Position
+    local distance = gun:getPos():getDistance(position)
 
     if distance > maximum_distance then 
         print("No Solution") 
@@ -127,26 +139,24 @@ local function logic (input_name, input_value) -- String, Any
     local mid = (low + high) / 2
     local comparison = position[3] - gun:getPos()[3]
     
-    while (high - low) > 1 do
-        mid = (low + high) / 2
-        local test = generate_ballistics_capped(gun, mid, distance, 8)    
-
-        if test[2] > comparison then
-            high = mid    
-        else
-            low = mid
+    local simplicity = 8
+    local accuracy = 1
+        
+    while accuracy > 0.01 do    
+        while (high - low) > accuracy do
+            mid = (low + high) / 2
+            local test = generate_ballistics_capped(gun, mid, distance, simplicity)    
+    
+            if test[2] > comparison then
+                high = mid    
+            else
+                low = mid
+            end
         end
-    end
-    while (high - low) > 0.01 do
-        mid = (low + high) / 2
-        local test = generate_ballistics_capped(gun, mid, distance, 1)    
-
-        if test[2] > comparison then
-            high = mid    
-        else
-            low = mid
-        end
-    end
+        
+        accuracy = accuracy / 10
+        simplicity = 1
+    end 
     
     wire.ports.Pitch = mid
     print("Ballistics Angle: " .. mid)
