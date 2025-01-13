@@ -1,4 +1,4 @@
---@name Bounding Box Test
+--@name Bounding Box Relative to Camera Render
 --@author Ally for Hire / Merydian9
 --@client
 -- CLIENT VARIABLES HERE
