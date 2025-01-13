@@ -1,47 +1,49 @@
 --@name 2024 Physical Gun Controller
 --@author Ally for Hire / Merydian9
 --@shared
---@model models/jaanus/wiretool/wiretool_range.mdl
 --@server
 
 
 -- GLOBAL VARIABLES HERE
--- Gun settings
-local ROTATESPEED = 120
-local MAXELEVATION = 90
-local MAXDEPRESSION = 15
-local MAXYAW = 180 -- Not currently functional
+-- Wire port setup
+wire.adjustPorts({
+    Aimer = "entity", 
+    HitPos = "vector",
+    LockTurret = "number",
+    TargetPos = "vector", 
+    LeadPos = "vector", 
+    TargetName = "string"}, 
+    {GunTarget = "vector"})
 
--- PID constants 
-local KP = 80   -- Proportional gain
-local KI = 120    -- INTEGRAL gain
-local KD = 35    -- Derivative gain
+-- Gun settings
+local ROTATESPEED = Angle(240)
+local MAXELEVATION = 75
+local MAXDEPRESSION = 10
+local MAXYAW = Angle(0, 180, 0) -- Not currently functional
+
+-- PID constants
+local KP = 450
+local KI = 15 -- Basically only here to help with autolead, feel free to turn off
+local KD = 40
 
 -- Global variable initialization
 local HITPOS = Vector()
-local HITNORMAL = Vector()
 local INERTIA = Angle()
-local FILTER = {}
 local AIMHOLOGRAM = hologram.create(Vector(), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl", Vector())
-local LASTERROR = Angle(0, 0, 0)
 local INTEGRAL = Angle(0, 0, 0)
 local dt = game.getTickInterval() -- Time step for the PID loop (adjust as needed)   
 local LASTHITPOS = Vector()
-local ROTATESPEED = ROTATESPEED * dt
+local ROTATESPEED = ROTATESPEED * dt * 5
+local TURRETLOCKED = true
+local GUNANG = chip():getAngles()
+local GUN = wire.ports.Aimer
+local LOCKEDPOS = chip():worldToLocal(GUN:getPos() + chip():getForward() * 10000000)
 
 -- SERVER FUNCTIONS HERE
 function angClamp(ang1, ang2, ang3) -- angle, lowangle, highangle
     return Angle(math.clamp(ang1.pitch, ang2.pitch, ang3.pitch), math.clamp(ang1.yaw, ang2.yaw, ang3.yaw), math.clamp(ang1.roll, ang2.roll, ang3.roll))    
 end
-    
--- Wire port setup
-wire.adjustPorts({
-    Aimer = "entity", 
-    HitPos = "vector",
-    TargetPos = "vector", 
-    LeadPos = "vector", 
-    TargetName = "string"}, 
-{})
+local ABS = math.abs
 
 -- SERVER HOOKS HERE
 -- Updating inputs
@@ -50,36 +52,54 @@ hook.add ("input", "updateWire", function(INPUT, VALUE)
         local temp = Angle(VALUE:getInertia().x, VALUE:getInertia().y, VALUE:getInertia().z)
         INERTIA = Angle(temp.yaw, temp.roll, temp.pitch)
         INERTIA.roll = 0   
+    elseif INPUT == "LockTurret" then
+        if VALUE == 1 then
+            TURRETLOCKED = !TURRETLOCKED
+            
+            if TURRETLOCKED then
+                LOCKEDPOS = chip():worldToLocal(wire.ports.HitPos)
+            end
+        end
     end
 end)
 
 -- Gun aiming
 hook.add("tick", "main", function()
-    if wire.ports.Aimer == nil then return end
+    if wire.ports.Aimer == nil or wire.ports.Aimer:isFrozen() then return end
     
-    local gun = wire.ports.Aimer
-    local gunAng = (wire.ports.HitPos - gun:getMassCenterW()):getNormalized():getAngle()
-    
-    if (wire.ports.TargetName != "") then 
-        gunAng = (wire.ports.LeadPos - gun:getMassCenterW()):getNormalized():getAngle()
+    if TURRETLOCKED then
+        GUNANG = (chip():localToWorld(LOCKEDPOS) - GUN:getMassCenterW()):getNormalized():getAngle()
+        wire.ports.GunTarget = wire.ports.HitPos  
+    elseif (wire.ports.TargetName != "") then 
+        GUNANG = (wire.ports.LeadPos - GUN:getMassCenterW()):getNormalized():getAngle()
+        wire.ports.GunTarget = wire.ports.TargetPos
+    elseif (wire.ports.TargetName == "") then
+        GUNANG = (wire.ports.HitPos - GUN:getMassCenterW()):getNormalized():getAngle()
+        wire.ports.GunTarget = wire.ports.HitPos 
     end
 
-    local force = gun:worldToLocalAngles(gunAng)
-    force = angClamp(force, Angle(-ROTATESPEED), Angle(ROTATESPEED))
+    local chipAngs = chip():localToWorldAngles(Angle(0, 0, 0))
+    local chipPitch = chipAngs.pitch
+    local relPitch = math.clamp((GUNANG.pitch > 90 and -(360 - GUNANG.pitch) or GUNANG.pitch), -(MAXELEVATION) + chipPitch, MAXDEPRESSION + chipPitch)
+    GUNANG.pitch = GUNANG.pitch > 90 and relPitch + 360 or relPitch
     
-    local error = force
-    local derivative = (error - LASTERROR) / dt
-    local output = (error * KP) + (INTEGRAL * KI) + (derivative * KD)
+    local force = GUN:worldToLocalAngles(GUNANG)
+    
+    if ABS(force.yaw) > 45 then
+        force.pitch = 0
+    elseif (ABS(force.pitch) + ABS(force.yaw)) < 5 then
+        INTEGRAL = INTEGRAL + force:setR(0)  
+        INTEGRAL = angClamp(INTEGRAL, -ROTATESPEED, ROTATESPEED)
+    else
+        INTEGRAL = Angle()
+    end
+    
+    force = angClamp(force, -ROTATESPEED, ROTATESPEED)
+    
+    local output = force * KP + INTEGRAL * KI - GUN:getAngleVelocityAngle() * KD
     
     LASTERROR = error   
     LASTHITPOS = HITPOS
     
-    if (math.abs(force.pitch) + math.abs(force.yaw)) < 1 then
-        INTEGRAL = INTEGRAL + (error * dt)
-    else
-        INTEGRAL = Angle(0)
-    end
-    --output = angClamp(output, Angle(-ROTATESPEED), Angle(ROTATESPEED))
-    
-    gun:applyAngForce(output * INERTIA)
+    GUN:applyAngForce(output * INERTIA)
 end)

@@ -394,12 +394,6 @@ if CLIENT then
 
         AIMTRACE  = _traceline(CAMPOS + aimNormal * 100, CAMPOS + aimNormal * 80000, FILTER) -- Trace to where we want to aim
         HITPOS = AIMTRACE["HitPos"]
-
-        net.start("sendClientData")
-        net.writeFloat(HITPOS.x)
-        net.writeFloat(HITPOS.y)
-        net.writeFloat(HITPOS.z)
-        net.send(nil, true)  
         
         CAMPUSH["origin"] = CAMPOS
         CAMPUSH["angles"] = CAMANG
@@ -407,6 +401,16 @@ if CLIENT then
         return CAMPUSH
     end)
     
+    -- Hook to send the hitpos every server tick
+    hook.add('tick', 'Send HitPos', function()
+        net.start("sendClientData")
+            net.writeFloat(HITPOS.x)
+            net.writeFloat(HITPOS.y)
+            net.writeFloat(HITPOS.z)
+        net.send(nil, true)  
+    end)
+    
+    -- Hook for when the player's mouse moves
     hook.add('mousemoved', 'Mouse Moved', function(x, y)
         -- If the starfall isn't in use, quit early
         if not ACTIVE then return end
@@ -416,7 +420,7 @@ if CLIENT then
         CAMANG.yaw = CAMANG.yaw - (x / 40)
     end)
 
-    -- Hook for when the player's hud gets drawn   
+    -- Hook for when the player scrolls
     hook.add('mouseWheeled', 'Scroll Wheel Moved', function(delta)
         -- If the starfall isn't in use, quit early
         if not ACTIVE then return end
@@ -468,16 +472,12 @@ if CLIENT then
     -- Recieve SERVER globals, happens once
     net.receive("sendServerGlobals", function()
         ACTIVE = net.readBool()
-  
         BASE = net.readEntity()
         GUNSIGHT = net.readEntity()
         GUN = net.readEntity()
         FILTER = net.readTable()
-        
         AIMHOLOGRAM = net.readEntity()
-        
         AMMOTYPES = net.readTable()
-        
         CALIBER = net.readString()
     end) 
 
@@ -505,7 +505,7 @@ if CLIENT then
 
     -- Clean filter when props are removed
     hook.add("EntityRemoved", "Filter Cleanup", function(entity)
-        if entity:getOwner() ~= owner() or entity:getClass() == "class CLuaEffect" or entity:getClass() == "starfall_hologram" then return end   
+        if entity == nil or entity:getOwner() ~= owner() or entity:getClass() == "class CLuaEffect" or entity:getClass() == "starfall_hologram" then return end   
         
         cleanFilter()
     end)
@@ -601,7 +601,7 @@ elseif SERVER then
     end)
     
     -- Send SERVER gun data
-    timer.create("sendGunData",0.05,0,function()
+    timer.create("sendGunData", 0.05, 0, function()
         local Gun = wire.ports.Gun
         if Gun == nil then return end
         
