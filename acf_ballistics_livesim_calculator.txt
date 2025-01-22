@@ -2,58 +2,14 @@
 --@author Ally for Hire / Merydian9
 --@server
 
--- Constants go here
+-- Version 1.2
+
+-- Constants go here, we get most of these from ACF itself
 local GRAVITY = physenv.getGravity()
 local TIMESTEP = game.getTickInterval()
-local UNITS = 39.37
+local UNITS = 39.37 -- This is what we multiply game units by to get to meters
 local MAXTIME = 999999
 local DRAGDIV = 40
-
--- Functions go here
-
--- This will return a table of the shell's positions starting at the guns base
--- taking angle as the pitch, the following function will visualize any given
--- position accurately: gun:localToWorld(Vector(bullet_pos[1], 0, bullet_pos[2]))
-local function generate_ballistics (gun, angle, simplicity) -- Entity, Number, Number
-    -- gun is the gun
-    -- angle is the starting pitch
-    -- simplicity is how much less complex it is, 1 is default simplicity
-    
-    -- Initializing the bullet variables
-    local bullet_accel = Vector2(0, GRAVITY[3])
-    local bullet_timestep = TIMESTEP * simplicity
-    local bullet_flighttime = 0
-    local bullet_muzzlevel = gun:acfMuzzleVel() * UNITS
-    local bullet_dragcoef = gun:acfDragCoef() * UNITS
-    local bullet_table = {}
-    
-    -- Doing proper conversion of the angle into vector
-    local angle_muls = Vector2(math.cos(math.rad(angle)), math.sin(math.rad(angle)))
-    
-    -- Calculating the starting position and velocity
-    local muzzle_attachment = gun:getAttachment(gun:lookupAttachment("muzzle"))
-    local muzzle_pos = Vector(muzzle_attachment[1], muzzle_attachment[2], muzzle_attachment[3])
-    local muzzle_dist = gun:getMassCenterW():getDistance(muzzle_pos)
-    
-    local bullet_pos = angle_muls * muzzle_dist
-    local bullet_vel = angle_muls * bullet_muzzlevel
-    
-    -- The actual bullet generation logic
-    while bullet_flighttime < MAXTIME and bullet_pos[1] < 40000 and bullet_vel[1] > 600 do -- You never really need to go farther than 40000 units
-        local drag = (bullet_dragcoef * bullet_vel:getLength()^2) / DRAGDIV
-        local clampedflight = bullet_vel:getLength() * 0.9
-        drag = bullet_vel:getNormalized() * math.min(drag * bullet_timestep, clampedflight)
-        
-        bullet_pos = bullet_pos + (bullet_vel * bullet_timestep)
-        bullet_vel = bullet_vel + (bullet_accel * bullet_timestep - drag)
-        table.insert(bullet_table, {bullet_pos, bullet_vel, bullet_flighttime})
-
-        bullet_flighttime = bullet_flighttime + bullet_timestep 
-    end
-    
-    -- Returning the given values
-    return bullet_table
-end
 
 -- This will return the final data before the bullet passes a threshold on the x axis
 local function generate_ballistics_capped (gun, angle, cap, simplicity) -- Entity, Number, Number, Number
@@ -96,15 +52,19 @@ local function generate_ballistics_capped (gun, angle, cap, simplicity) -- Entit
     return bullet_pos
 end
 
--- Logic goes here
+-- This is a simple overwrite of generate_ballistics_capped for readability
+local function generate_ballistics (gun, angle, simplicity) -- Entity, Number, Number
+    return generate_ballistics_capped(gun, angle, 9999999, simplicity)
+end
+
 -- Setting up wiremod compatibility
 wire.adjustPorts({Gun = "entity", Position = "vector", Run = "number"},{Pitch = "number"})
 
--- Variables we are going to reuse
+-- Variables we are going to reuse in the global space
 local maximum_distance = 0
 
--- Function to initialize maximum_distance
-local function init (gun) -- Entity
+-- Function to calculate maximum_distance a gun can make
+local function calculate_maximum_distance (gun) -- Entity
     if not isValid(gun) then return end
         
     local max_shot = generate_ballistics(gun, 45, 1)
@@ -121,27 +81,31 @@ end
 
 -- Function to run logic whenever input is given
 local function logic (input_name, input_value) -- String, Any
-    if input_name == "Gun" then init(input_value) end
-    if input_name != "Run" or input_value != 1 then return end
-    if not isValid(wire.ports.Gun) then return end
+    if input_name == "Gun" then calculate_maximum_distance(input_value) end -- If the gun is updated, run appropriate function and calculate the maximum distance
+    if input_name != "Run" or input_value != 1 then return end -- Otherwise, check if the button input is pressed
+    if not isValid(wire.ports.Gun) then return end -- Finally, check the validity of the gun
 
+    -- Initialize variables 
     local gun = wire.ports.Gun
     local position = wire.ports.Position
     local distance = gun:getPos():getDistance(position)
 
+    -- Check if the shot is even possible
     if distance > maximum_distance then 
         print("No Solution") 
         return 
     end
 
+    -- Run a simple binary search to find an acceptable solution
     local low = -90
     local high = 90
     local mid = (low + high) / 2
     local comparison = position[3] - gun:getPos()[3]
     
+    -- Initially we do this less accurately to save CPU 
     local simplicity = 8
     local accuracy = 1
-        
+    
     while accuracy > 0.01 do    
         while (high - low) > accuracy do
             mid = (low + high) / 2
@@ -154,10 +118,12 @@ local function logic (input_name, input_value) -- String, Any
             end
         end
         
+        -- After we get within our initial frame of error, we try again with a more in-depth search
         accuracy = accuracy / 10
         simplicity = 1
     end 
     
+    -- Finally, we have a pitch solution, which is relative to the world
     wire.ports.Pitch = mid
     print("Ballistics Angle: " .. mid)
 end
