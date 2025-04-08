@@ -1,8 +1,8 @@
---@name ACF Ballistics Livesim Calculator Git
+--@name ACF Ballistics Livesim Calculator
 --@author Ally for Hire / Merydian9
 --@server
 
--- Version 1.3
+-- Version 1.2
 
 -- Constants go here, we get most of these from ACF itself
 local GRAVITY = physenv.getGravity()
@@ -54,9 +54,8 @@ local function generate_ballistics_table (gun, angle, simplicity) -- Entity, Num
     return bullet_table
 end
 
--- This will return the final data before the bullet passes a threshold on the x axis 
--- You could technically condense this and the table generator into one function but 
--- I felt that would be less clear to reader
+
+-- This will return the final data before the bullet passes a threshold on the x axis
 local function generate_ballistics_capped (gun, angle, cap, simplicity) -- Entity, Number, Number, Number
     -- gun is the gun
     -- angle is the starting pitch
@@ -142,31 +141,41 @@ local function logic (input_name, input_value) -- String, Any
     local high = 90
     local mid = (low + high) / 2
     local comparison = position[3] - gun:getPos()[3]
-    
-    -- Initially we do this less accurately to save CPU 
-    local simplicity = 8
-    local accuracy = 1
-    
-    while accuracy >= 0.01 do    
-        while (high - low) > accuracy do
-            mid = (low + high) / 2
-            local test = generate_ballistics_capped(gun, mid, distance, simplicity)    
-    
-            if test[2] > comparison then
-                high = mid    
-            else
-                low = mid
-            end
+     
+    while (high - low) > 0.1 do
+        mid = (low + high) / 2
+        local test = generate_ballistics_capped(gun, mid, distance, 1)    
+
+        if test[2] > comparison then
+            high = mid    
+        else
+            low = mid
         end
-        
-        -- After we get within our initial frame of error, we try again with a more in-depth search
-        accuracy = accuracy / 10
-        simplicity = simplicity / 2
-    end 
-    
+    end
+
     -- Finally, we have a pitch solution, which is relative to the world
     wire.ports.Pitch = mid
-    print("Ballistics Angle: " .. mid)
+    print("Low Ballistics Angle: " .. mid)
+
+    -- All my homies love getting the second solution aswell, since the function intersects the x-axis 2 times for every given value
+
+    -- We only want the high angle solution this time, none of that low-angle bs
+    -- All of this is the same, with the exception of reversing the criteria. 
+    -- As you cross the threshold into high angle, the higher angle you get the closer
+    -- the bullet will land.
+    low, high = mid, 90
+    mid = (low + high) / 2
+    comparison = position[3] - gun:getPos()[3]
+       
+    while (high - low) > 0.01 do
+        mid = (low + high) / 2
+        local test = generate_ballistics_capped(gun, mid, distance, 1)    
+        
+        if test[2] < comparison or test[1] < distance then high = mid    
+        else low = mid end
+    end
+
+    print("High Ballistics Angle: " .. mid)
 end
 
 -- Hooks go here
