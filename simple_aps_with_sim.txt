@@ -1,0 +1,133 @@
+--@name Simple APS with Sim
+--@author Ally for Hire / Merydian9
+--@shared
+--@server
+
+-- I basically already made a starfall that does most of this, so i'm taking alot of it from there
+-- This is assuming target on a level plane, but at close-range it honestly shouldn't matter excessively
+-- Hypothetically should still be close on targets far away but that's tbd
+
+wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Time = "number"})
+
+-- Constants and Dev Stuff, no touchy
+local MAX_TIME = 4
+local TIME_STEP = game.getTickInterval()
+local GRAVITY = Vector2(0, -600)
+local RAD_CONV = 0.0174533
+local VISUALIZE_BALLISTICS_TABLE = false 
+local VISUALIZE_FINAL_TABLE = false
+
+-- Wire Stand-in Variables 
+local gun = nil
+local targetPos = nil
+local targetVel = nil
+local outputTime = nil
+
+-- Actual Variables
+local initialized = false
+local storedMuzzleVel = 0
+local maxCalculatedRange = 0
+local pitchStep = 0
+local dataTable = {}
+
+--- Generates the ballistics of the shell at the given pitch
+-- Pretty simple function, just generates until the elevation is 0
+local function generateAngleBallistics(gun, pitch, dt)
+    -- Initialization of variables
+    local curtime = 0
+    local indices = 0
+    local dragCoef = gun:acfDragCoef()
+    
+    -- Calculating the starting position of the shell
+    local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
+    local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
+    local muzzleDist = gun:getMassCenterW():getDistance(muzzlePos)
+    
+    -- Calculating the starting velocity of the shell
+    local muzzleVel = gun:acfMuzzleVel() * 39.37
+    
+    local shellPos = Vector2(math.cos(pitch), math.sin(pitch)) * muzzleDist 
+    local shellVel = Vector2(math.cos(pitch), math.sin(pitch)) * muzzleVel
+    
+    -- Generic bullet sim from ACE code
+    while curtime < MAX_TIME and shellVel[1] > 0 do
+        local drag = (dragCoef * shellVel:getLength()^2) / 40
+        drag = shellVel:getNormalized() * (drag * dt)
+        drag = Vector2(drag[1], drag[2]) * 39.37
+        
+        shellPos = shellPos + shellVel * dt
+        shellVel = shellVel + (GRAVITY * dt) - drag
+                
+        curtime = curtime + dt
+        indices = indices + 1
+        
+        --outputTable[indices] = {shellPos, shellVel, curtime, math.sqrt(shellPos[1]^2 + shellPos[2]^2)} -- 2D Position, 2D Velocity, Current Time, Distance from Start
+        if VISUALIZE_BALLISTICS_TABLE and indices < 200 then 
+            local holo = hologram.create(gun:localToWorld(Vector(shellPos[1], 0, shellPos[2])), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl")
+            --holo:setParent(gun)
+        end
+        
+        -- We can stop once we hit the threshold we are looking for
+        if shellPos[2] < 0 then
+            break
+        end
+    end
+    
+    return {shellPos[1], shellPos[2], curtime}
+end
+
+--- Attempts to generate values so we can get this show on the road
+local function generateValues()
+    -- Extensive list of early-outs
+    initialized = false
+    if gun == nil or not gun:isValid() or gun:getClass() != "acf_gun" or gun:acfMuzzleVel() == storedMuzzleVel then return end
+    
+    -- Variable decleration and cleanup
+    storedMuzzleVel = gun:acfMuzzleVel()
+    pitchStep = 100 / storedMuzzleVel 
+    hologram.removeAll()
+    
+    -- Make a table of every point at which the bullet intersects y=0 of the gun
+    local pitch = 0
+    local data = {0, 0, 0}
+    local indices = 1
+    while data[3] < 3.9 and pitch < 45 do
+        data = generateAngleBallistics(gun, pitch * RAD_CONV, TIME_STEP)
+        dataTable[indices] = data
+        
+        if VISUALIZE_FINAL_TABLE and indices < 200 then
+            local holo = hologram.create(gun:localToWorld(Vector(data[1] * math.cos(pitch * RAD_CONV), 0, data[1] * -math.sin(pitch * RAD_CONV))), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl")
+            holo:setParent(gun)
+        end
+        
+        pitch = pitch + pitchStep
+        indices = indices + 1
+    end
+    
+    -- Store the maximum data so we can early-out later
+    maxCalculatedRange = dataTable[indices - 1][1]
+    initialized = true
+end
+
+--- Updates variables with their respective values when needed
+-- Also attempts logic when possible
+local function handleWire(name, value)
+    if name == "Gun" then
+        gun = value
+        generateValues()
+    elseif name == "TargetPos" then
+        targetPos = value    
+    elseif name == "TargetVel" then
+        targetVel = value    
+    end
+end
+
+--- Need to retry in-case the ballistics change, just in case
+-- Try to update the logic every 1s
+timer.create("retry", 1, 0, function(NAME, VALUE)
+    generateValues()
+end)
+
+--- Hook for when the wire inputs are updated
+-- This is basically the only hook we need since we only care when we are actually recieving data
+hook.add("input", "Wire Inputs Updated", handleWire)
