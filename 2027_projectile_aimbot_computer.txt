@@ -13,20 +13,32 @@
 -- Slight code cleanup
 -- Option to fire added
 -- Fixed an issue with data table logic
+--    > Stopped modifying first data point, added additional data point at start
 -- Fixed an issue with firing logic
+--    > Added check for invalid TargetPos
 -- Fixed an issue with acceleration logic
+--    > Ignored overlapping data and updated stored LastVel variable
 
-wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Time = "number", AimPos = "vector"})
+--- Version 1.2
+-- Cleaned up variables and code further
+-- Added further comments
+-- Fixed acceleration handling issue introduced by 1.1
+--    > A misstype made acceleration ignored
 
--- Constants and Dev Stuff, no touchy
+--- User Variables
+local offset = 0 -- Time offset in seconds, to adjust for gg5 being behind
+local firingRange = 750 -- Range the projectile will be at when it gets intercepted
+local handleFiring = true -- Whether or not the starfall will fire the gun automatically
+
+--- Do not touch below this
+
+--- Constants
 local MAX_TIME = 4
 local TIME_STEP = game.getTickInterval()
 local GRAVITY = Vector2(0, -600)
 local RAD_CONV = 0.0174533
-local VISUALIZE_BALLISTICS_TABLE = false 
-local VISUALIZE_FINAL_TABLE = false
 
--- Wire Stand-in Variables 
+--- Wire Stand-in Variables 
 local gun = nil
 local targetPos = nil
 local targetVel = nil
@@ -34,16 +46,15 @@ local targetAccel = nil
 local lastVel = Vector()
 local lastFrame = 0
 
--- Actual Variables
+--- Internal Variables
 local initialized = false
 local storedMuzzleVel = 0
 local maxCalculatedRange = 0
 local pitchStep = 0
 local outputTime = 0
 local dataTable = {}
-local offset = 0 -- time offset in seconds, to adjust for gg5 being behind
-local firingRange = 1000 -- range at which the gun fires, adjusted for target velocity, for kinetic rounds go far for chemical rounds go close
-local handleFiring = true -- whether or not the starfall itsself will handle gun firing 
+local visualizeBallisticsTable = false 
+local visualizeFinalTable = false
 
 --- Generates the ballistics of the shell at the given pitch
 -- Pretty simple function, just generates until the elevation is 0
@@ -77,7 +88,7 @@ local function generateAngleBallistics(gun, pitch, dt)
         indices = indices + 1
         
         --outputTable[indices] = {shellPos, shellVel, curtime, math.sqrt(shellPos[1]^2 + shellPos[2]^2)} -- 2D Position, 2D Velocity, Current Time, Distance from Start
-        if VISUALIZE_BALLISTICS_TABLE and indices < 200 then 
+        if visualizeBallisticsTable and indices < 200 then 
             local holo = hologram.create(gun:localToWorld(Vector(shellPos[1], 0, shellPos[2])), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl")
             --holo:setParent(gun)
         end
@@ -96,14 +107,13 @@ local function generateValues()
     -- Extensive list of early-outs
     if gun == nil or not gun:isValid() or gun:getClass() != "acf_gun" or gun:acfMuzzleVel() == storedMuzzleVel then return end
     
-    gun:acfFire(0)
-    
     -- Variable decleration and cleanup
     storedMuzzleVel = gun:acfMuzzleVel()
     pitchStep = 4 / storedMuzzleVel -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
     hologram.removeAll()
+    gun:acfFire(0)
     
-    -- Make a table of every point at which the bullet intersects y=0 of the gun
+    -- Make a table of every point at which the bullet intersects z=0 of the gun
     local pitch = 0
     local data = {0, 0, 0}
     dataTable[1] = {0, 0, 0}
@@ -112,7 +122,7 @@ local function generateValues()
         data = generateAngleBallistics(gun, pitch * RAD_CONV, TIME_STEP)
         dataTable[indices] = data
         
-        if VISUALIZE_FINAL_TABLE and indices < 200 then
+        if visualizeFinalTable and indices < 200 then
             local holo = hologram.create(gun:localToWorld(Vector(data[1] * math.cos(pitch * RAD_CONV), 0, data[1] * -math.sin(pitch * RAD_CONV))), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl")
             holo:setParent(gun)
         end
@@ -141,7 +151,8 @@ local function handleWire(name, value)
     end
 end
 
---- Interpolates our friend the dataTable
+--- Simple interpolation
+-- Table in and ideal time in, interpolated time out
 local function interpolateTable(tbl, targetTime)
     for i = 1, #tbl - 1 do
         local t0, t1 = tbl[i][3], tbl[i + 1][3]
@@ -163,26 +174,29 @@ local function main()
     
     if handleFiring then gun:acfFire(0) end
     
-    -- Calculate time delta to avoid division by zero in acceleration calculation
+    -- Simple acceleration handling via calculating change in velocity over dt
     local dt = timer.curtime() - lastFrame
     local acceleration = -Vector(0, 0, GRAVITY[2])
-    if dt > 0 and lastVel != targetVel and lastVel != Vector() then
+    if lastVel != targetVel then
         acceleration = (targetVel - lastVel) / dt - Vector(0, 0, GRAVITY[2])
+        
         lastVel = targetVel
         lastFrame = timer.curtime()
     end
     
+    -- Preparing variables for use with our equations
     local relativePos = targetPos - gun:getPos()
     local relativeVel = targetVel - gun:getVelocity()
     local time = 0
     local low = 0
     local high = MAX_TIME
 
-    -- Use kinematic equation for predicted target position
+    -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
     local predictedTargetPos = relativePos + relativeVel * time + 0.5 * acceleration * time^2
     local targetValue = predictedTargetPos:getLength()
-    local selfValue = interpolateTable(dataTable, time)
+    local selfValue = interpolateTable(dataTable, time) -- this fucker is why any of this is so hard
     
+    -- Simple binary search to find the solution to those equations
     while (high - low) > 0.0001 do
         time = (low + high) / 2
         
@@ -191,27 +205,29 @@ local function main()
         targetValue = predictedTargetPos:getLength()
         selfValue = interpolateTable(dataTable, time)
         
+        -- This is technically redundant 
         if targetValue > maxCalculatedRange then
             return 0    
         end
         
+        -- Make sure we stop if we go past the target or if the target goes past us
         if targetValue > selfValue and (predictedTargetPos:getLength() - relativePos:getLength()) < relativeVel:getLength() then 
             low = time
         else
             high = time
         end            
     end
+    
+    -- Gun fire handling
+    if(handleFiring and targetValue < firingRange and time != 0 and targetPos != Vector(0)) then gun:acfFire(1) end
 
-    outputTime = time
+    -- Wire outputs
+    wire.ports.Time = time + offset
+    wire.ports.AimPos = targetPos + targetVel * time + 0.5 * acceleration * time^2
     
-    wire.ports.Time = outputTime + offset
-    wire.ports.AimPos = targetPos + targetVel * outputTime + 0.5 * acceleration * outputTime^2
-    
-    if(targetValue < firingRange and time != 0 and targetPos != Vector(0) and handleFiring) then gun:acfFire(1) end
-    
+    -- Acceleration resetting
     timer.create("Reset Acceleration", 0.1, 1, function() lastVel = Vector(0) end)
 end
-
 
 --- Need to retry in-case the ballistics change, just in case
 -- Try to update the logic every 1s
@@ -227,6 +243,7 @@ end)
 
 --- Hook for when the wire inputs are updated
 -- This is basically the only hook we need since we only care when we are actually recieving data
+wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Time = "number", AimPos = "vector"})
 hook.add("input", "Wire Inputs Updated", handleWire)
 
 --- Main think hook, pretty self explanatory
