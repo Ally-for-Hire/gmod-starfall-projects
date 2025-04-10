@@ -9,8 +9,12 @@
 -- Stick between the range of 150-800 m/s muzzle velocity, above and below that you will begin to see issues
 
 --- Version 1.1
--- Comments added, slight code cleanups, logic changed with fire parameters
+-- Comments added
+-- Slight code cleanup
 -- Option to fire added
+-- Fixed an issue with data table logic
+-- Fixed an issue with firing logic
+-- Fixed an issue with acceleration logic
 
 wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Time = "number", AimPos = "vector"})
 
@@ -162,8 +166,10 @@ local function main()
     -- Calculate time delta to avoid division by zero in acceleration calculation
     local dt = timer.curtime() - lastFrame
     local acceleration = -Vector(0, 0, GRAVITY[2])
-    if dt > 0 and lastVel != Vector() then
+    if dt > 0 and lastVel != targetVel and lastVel != Vector() then
         acceleration = (targetVel - lastVel) / dt - Vector(0, 0, GRAVITY[2])
+        lastVel = targetVel
+        lastFrame = timer.curtime()
     end
     
     local relativePos = targetPos - gun:getPos()
@@ -196,11 +202,6 @@ local function main()
         end            
     end
 
-    
-    -- Update the last velocity and frame time
-    lastVel = targetVel
-    lastFrame = timer.curtime()
-    
     outputTime = time
     
     wire.ports.Time = outputTime + offset
