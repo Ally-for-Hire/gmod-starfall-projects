@@ -25,16 +25,26 @@
 -- Fixed acceleration handling issue introduced by 1.1
 --    > A misstype made acceleration ignored
 
+--- Version 1.3
+-- Cleaned up code even more
+-- Fixed fuze default case
+--    > Made it -1 instead of 0
+-- Accounted for muzzle distance in calculations
+-- Improved accuracy sligtly
+--    > returned a more accurate time
+--    > made TIME_STEP more refined
+-- Added a default 0.01 offset on AimPos
+
 --- User Variables
-local offset = 0 -- Time offset in seconds, to adjust for gg5 being behind
-local firingRange = 750 -- Range the projectile will be at when it gets intercepted
+local offset = 0.00 -- Time offset in seconds, to adjust for gg5 being behind
+local firingRange = 60000 -- Range the projectile will be at when it gets intercepted
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
 
 --- Do not touch below this
 
 --- Constants
 local MAX_TIME = 4
-local TIME_STEP = game.getTickInterval()
+local TIME_STEP = game.getTickInterval() / 2
 local GRAVITY = Vector2(0, -600)
 local RAD_CONV = 0.0174533
 
@@ -51,10 +61,10 @@ local initialized = false
 local storedMuzzleVel = 0
 local maxCalculatedRange = 0
 local pitchStep = 0
-local outputTime = 0
 local dataTable = {}
 local visualizeBallisticsTable = false 
 local visualizeFinalTable = false
+local muzzleDist = 0
 
 --- Generates the ballistics of the shell at the given pitch
 -- Pretty simple function, just generates until the elevation is 0
@@ -67,7 +77,7 @@ local function generateAngleBallistics(gun, pitch, dt)
     -- Calculating the starting position of the shell
     local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
     local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
-    local muzzleDist = gun:getMassCenterW():getDistance(muzzlePos)
+    muzzleDist = gun:getMassCenterW():getDistance(muzzlePos)
     
     -- Calculating the starting velocity of the shell
     local muzzleVel = gun:acfMuzzleVel() * 39.37
@@ -95,6 +105,7 @@ local function generateAngleBallistics(gun, pitch, dt)
         
         -- We can stop once we hit the threshold we are looking for
         if shellPos[2] < 0 then
+            curtime = curtime - dt / 2
             break
         end
     end
@@ -109,7 +120,7 @@ local function generateValues()
     
     -- Variable decleration and cleanup
     storedMuzzleVel = gun:acfMuzzleVel()
-    pitchStep = 4 / storedMuzzleVel -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
+    pitchStep = math.min(4 / storedMuzzleVel, 0.1) -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
     hologram.removeAll()
     gun:acfFire(0)
     
@@ -193,7 +204,7 @@ local function main()
 
     -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
     local predictedTargetPos = relativePos + relativeVel * time + 0.5 * acceleration * time^2
-    local targetValue = predictedTargetPos:getLength()
+    local targetValue = predictedTargetPos:getLength() - muzzleDist
     local selfValue = interpolateTable(dataTable, time) -- this fucker is why any of this is so hard
     
     -- Simple binary search to find the solution to those equations
@@ -202,12 +213,11 @@ local function main()
         
         -- Predict target position with acceleration applied
         predictedTargetPos = relativePos + relativeVel * time + 0.5 * acceleration * time^2
-        targetValue = predictedTargetPos:getLength()
+        targetValue = predictedTargetPos:getLength() - muzzleDist
         selfValue = interpolateTable(dataTable, time)
         
-        -- This is technically redundant 
         if targetValue > maxCalculatedRange then
-            return 0    
+            return -1    
         end
         
         -- Make sure we stop if we go past the target or if the target goes past us
@@ -219,11 +229,11 @@ local function main()
     end
     
     -- Gun fire handling
-    if(handleFiring and targetValue < firingRange and time != 0 and targetPos != Vector(0)) then gun:acfFire(1) end
+    if(handleFiring and targetValue < firingRange and time != -1 and targetPos != Vector(0) and dt < 0.2) then gun:acfFire(1) end
 
     -- Wire outputs
     wire.ports.Time = time + offset
-    wire.ports.AimPos = targetPos + targetVel * time + 0.5 * acceleration * time^2
+    wire.ports.AimPos = targetPos + targetVel * (time + 0.01) + 0.5 * acceleration * (time + 0.01)^2
     
     -- Acceleration resetting
     timer.create("Reset Acceleration", 0.1, 1, function() lastVel = Vector(0) end)
@@ -231,7 +241,7 @@ end
 
 --- Need to retry in-case the ballistics change, just in case
 -- Try to update the logic every 1s
-timer.create("retry", 0.1, 0, function(NAME, VALUE)
+timer.create("retry", 0.1, 0, function()
     generateValues()
     
     if gun:isValid() and gun:acfMuzzleVel() == 0 then
