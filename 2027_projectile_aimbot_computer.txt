@@ -118,7 +118,7 @@ local function generateValues()
     local data = {0, 0, 0}
     dataTable[1] = {0, 0, 0}
     local indices = 2
-    while data[3] < 3.9 and pitch < 45 do
+    while data[3] < 3.9 and pitch < 40 do
         data = generateAngleBallistics(gun, pitch * RAD_CONV, TIME_STEP)
         dataTable[indices] = data
         
