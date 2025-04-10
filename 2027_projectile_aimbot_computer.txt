@@ -35,16 +35,20 @@
 --    > made TIME_STEP more refined
 -- Added a default 0.01 offset on AimPos
 
+--- Version 1.4
+-- Removed the refinement of TIME_STEP
+-- Fixed handling of fuze time with offset
+
 --- User Variables
 local offset = 0.00 -- Time offset in seconds, to adjust for gg5 being behind
-local firingRange = 60000 -- Range the projectile will be at when it gets intercepted
+local firingRange = 1250 -- Range the projectile will be at when it gets intercepted
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
 
 --- Do not touch below this
 
 --- Constants
 local MAX_TIME = 4
-local TIME_STEP = game.getTickInterval() / 2
+local TIME_STEP = game.getTickInterval()
 local GRAVITY = Vector2(0, -600)
 local RAD_CONV = 0.0174533
 
@@ -232,8 +236,8 @@ local function main()
     if(handleFiring and targetValue < firingRange and time != -1 and targetPos != Vector(0) and dt < 0.2) then gun:acfFire(1) end
 
     -- Wire outputs
-    wire.ports.Time = time + offset
-    wire.ports.AimPos = targetPos + targetVel * (time + 0.01) + 0.5 * acceleration * (time + 0.01)^2
+    wire.ports.Time = time
+    wire.ports.AimPos = targetPos + targetVel * (time + 0.01 + offset) + 0.5 * acceleration * (time + 0.01 + offset)^2
     
     -- Acceleration resetting
     timer.create("Reset Acceleration", 0.1, 1, function() lastVel = Vector(0) end)
