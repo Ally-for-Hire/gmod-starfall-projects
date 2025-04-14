@@ -31,26 +31,44 @@
 --    > Made it -1 instead of 0
 -- Accounted for muzzle distance in calculations
 -- Improved accuracy sligtly
---    > returned a more accurate time
---    > made TIME_STEP more refined
+--    > Returned a more accurate time
+--    > Made TIME_STEP more refined
 -- Added a default 0.01 offset on AimPos
 
 --- Version 1.4
 -- Removed the refinement of TIME_STEP
 -- Fixed handling of fuze time with offset
 
+--- Version 1.5
+-- Stored acceleration and updated its handling
+-- Added a variable for the pitch numerator
+-- Fixed radian conversion
+-- Improved debug printout
+-- Added clamp on pitch step
+-- Removed default 0.01 offset
+-- Renamed acceleration variable to be more accurate
+-- Properly factored velocity in AimPos output
+--    > Now correctly uses relVel instead of targetVel
+-- Improved optimization significantly
+--    > Lowered MAX_TIME
+--    > Improved endpoint for data table generation
+--    > Removed extraneous simulation
+-- Improved accuracy
+--    > Refined TIME_STEP
+--    > Refined pitchNumerator
+
 --- User Variables
-local offset = 0.00 -- Time offset in seconds, to adjust for gg5 being behind
-local firingRange = 1250 -- Range the projectile will be at when it gets intercepted
+local offset = 0.015 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
+local firingRange = 100000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
 
 --- Do not touch below this
 
 --- Constants
-local MAX_TIME = 4
-local TIME_STEP = game.getTickInterval()
-local GRAVITY = Vector2(0, -600)
-local RAD_CONV = 0.0174533
+local MAX_TIME = 1.5
+local TIME_STEP = game.getTickInterval() / 10
+local GRAVITY = Vector2(0, physenv.getGravity()[3])
+local RAD_CONV = math.pi / 180
 
 --- Wire Stand-in Variables 
 local gun = nil
@@ -69,6 +87,23 @@ local dataTable = {}
 local visualizeBallisticsTable = false 
 local visualizeFinalTable = false
 local muzzleDist = 0
+local relativeAccel = Vector(0)
+local pitchNumerator = 6
+
+--- Simple interpolation
+-- Table in and ideal time in, interpolated time out
+local function interpolateTable(tbl, targetTime)
+    for i = 1, #tbl - 1 do
+        local t0, t1 = tbl[i][3], tbl[i + 1][3]
+        if targetTime >= t0 and targetTime <= t1 then
+            local d0, d1 = tbl[i][1], tbl[i + 1][1]
+            local alpha = (targetTime - t0) / (t1 - t0)
+            return d0 + (d1 - d0) * alpha
+        end
+    end
+    
+    return 0
+end
 
 --- Generates the ballistics of the shell at the given pitch
 -- Pretty simple function, just generates until the elevation is 0
@@ -124,7 +159,7 @@ local function generateValues()
     
     -- Variable decleration and cleanup
     storedMuzzleVel = gun:acfMuzzleVel()
-    pitchStep = math.min(4 / storedMuzzleVel, 0.1) -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
+    pitchStep = math.clamp(pitchNumerator / storedMuzzleVel, 0.002, 0.1) -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
     hologram.removeAll()
     gun:acfFire(0)
     
@@ -133,7 +168,7 @@ local function generateValues()
     local data = {0, 0, 0}
     dataTable[1] = {0, 0, 0}
     local indices = 2
-    while data[3] < 3.9 and pitch < 40 do
+    while data[3] < MAX_TIME and pitch < 5 do
         data = generateAngleBallistics(gun, pitch * RAD_CONV, TIME_STEP)
         dataTable[indices] = data
         
@@ -143,6 +178,7 @@ local function generateValues()
         end
         
         pitch = pitch + pitchStep
+        
         indices = indices + 1
     end
     
@@ -150,35 +186,10 @@ local function generateValues()
     maxCalculatedRange = dataTable[indices - 1][1]
     initialized = true
     
-    print("Range .. " .. maxCalculatedRange)
-end
-
---- Updates variables with their respective values when needed
--- Also attempts logic when possible
-local function handleWire(name, value)
-    if name == "Gun" then
-        gun = value
-        generateValues()
-    elseif name == "TargetPos" then
-        targetPos = value    
-    elseif name == "TargetVel" then
-        targetVel = value    
-    end
-end
-
---- Simple interpolation
--- Table in and ideal time in, interpolated time out
-local function interpolateTable(tbl, targetTime)
-    for i = 1, #tbl - 1 do
-        local t0, t1 = tbl[i][3], tbl[i + 1][3]
-        if targetTime >= t0 and targetTime <= t1 then
-            local d0, d1 = tbl[i][1], tbl[i + 1][1]
-            local alpha = (targetTime - t0) / (t1 - t0)
-            return d0 + (d1 - d0) * alpha
-        end
-    end
-    
-    return 0
+    --print("Data Points Generated  .. " .. #dataTable)
+    --print("Min Effective Range .. " .. math.round(dataTable[2][1], 1))
+    print("Max Effective Range .. " .. math.round(maxCalculatedRange, 2))
+    --printTable(dataTable)
 end
 
 --- Time to actually do the math and logic
@@ -190,13 +201,15 @@ local function main()
     if handleFiring then gun:acfFire(0) end
     
     -- Simple acceleration handling via calculating change in velocity over dt
-    local dt = timer.curtime() - lastFrame
-    local acceleration = -Vector(0, 0, GRAVITY[2])
     if lastVel != targetVel then
-        acceleration = (targetVel - lastVel) / dt - Vector(0, 0, GRAVITY[2])
+        local dt = timer.curtime() - lastFrame
+        
+        relativeAccel = (targetVel - lastVel) / dt - Vector(0, 0, GRAVITY[2])
         
         lastVel = targetVel
         lastFrame = timer.curtime()
+    elseif lastVel == Vector() then
+        relativeAccel = -Vector(0, 0, GRAVITY[2])
     end
     
     -- Preparing variables for use with our equations
@@ -207,16 +220,16 @@ local function main()
     local high = MAX_TIME
 
     -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
-    local predictedTargetPos = relativePos + relativeVel * time + 0.5 * acceleration * time^2
-    local targetValue = predictedTargetPos:getLength() - muzzleDist
-    local selfValue = interpolateTable(dataTable, time) -- this fucker is why any of this is so hard
+    local predictedTargetPos = Vector()
+    local targetValue = 0
+    local selfValue = 0 -- this fucker is why any of this is so hard
     
     -- Simple binary search to find the solution to those equations
-    while (high - low) > 0.0001 do
+    while (high - low) > 0.00001 do
         time = (low + high) / 2
         
         -- Predict target position with acceleration applied
-        predictedTargetPos = relativePos + relativeVel * time + 0.5 * acceleration * time^2
+        predictedTargetPos = relativePos + relativeVel * time + 1/2 * relativeAccel * time^2
         targetValue = predictedTargetPos:getLength() - muzzleDist
         selfValue = interpolateTable(dataTable, time)
         
@@ -233,14 +246,29 @@ local function main()
     end
     
     -- Gun fire handling
-    if(handleFiring and targetValue < firingRange and time != -1 and targetPos != Vector(0) and dt < 0.2) then gun:acfFire(1) end
+    if handleFiring and targetValue < firingRange and time != -1 and (predictedTargetPos:getLength() - relativePos:getLength()) < relativeVel:getLength() then 
+        gun:acfFire(1) 
+    end
 
     -- Wire outputs
     wire.ports.Time = time
-    wire.ports.AimPos = targetPos + targetVel * (time + 0.01 + offset) + 0.5 * acceleration * (time + 0.01 + offset)^2
+    wire.ports.AimPos = targetPos + relativeVel * (time + offset) + 0.5 * relativeAccel * (time + offset)^2
     
     -- Acceleration resetting
-    timer.create("Reset Acceleration", 0.1, 1, function() lastVel = Vector(0) end)
+    timer.create("Reset Acceleration", 0.3, 1, function() lastVel = Vector() end)
+end
+
+--- Updates variables with their respective values when needed
+-- Also attempts logic when possible
+local function handleWire(name, value)
+    if name == "Gun" then
+        gun = value
+        generateValues()
+    elseif name == "TargetPos" then
+        targetPos = value    
+    elseif name == "TargetVel" then
+        targetVel = value    
+    end
 end
 
 --- Need to retry in-case the ballistics change, just in case
