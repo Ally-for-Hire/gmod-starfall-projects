@@ -57,14 +57,18 @@
 --    > Refined TIME_STEP
 --    > Refined pitchNumerator
 
---- Version 1.6
+--- Version 1.5.1
 -- Fixed the acfFire function for use with ACF3
 -- *Considering having it output the max range of a no-drag solution, and then using that for optimization purposes
 -- Hotfix: offset removal
 
+--- Version 1.5.2
+-- Fixed acfFire function for use with ACE
+-- Considering having a way to detect later
+
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
-local handleFiring = false -- Whether or not the starfall will fire the gun automatically
+local handleFiring = true -- Whether or not the starfall will fire the gun automatically
 local firingRange = 1500 -- Range the projectile will be at when it gets intercepted if handleFiring is true
 
 --- Do not touch below this
@@ -166,7 +170,7 @@ local function generateValues()
     storedMuzzleVel = gun:acfMuzzleVel()
     pitchStep = math.clamp(pitchNumerator / storedMuzzleVel, 0.002, 0.1) -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
     hologram.removeAll()
-    gun:acfFire(false)
+    gun:acfFire(0)
     
     -- Make a table of every point at which the bullet intersects z=0 of the gun
     local pitch = 0
@@ -203,7 +207,7 @@ local function main()
     if not initialized then return end
     if targetPos == nil or targetVel == nil or targetPos == Vector(0, 0, 0) then return end
     
-    if handleFiring then gun:acfFire(false) end
+    if handleFiring then gun:acfFire(0) end
     
     -- Simple acceleration handling via calculating change in velocity over dt
     if lastVel != targetVel then
@@ -252,7 +256,7 @@ local function main()
     
     -- Gun fire handling
     if handleFiring and targetValue < firingRange and time != -1 and (predictedTargetPos:getLength() - relativePos:getLength()) < relativeVel:getLength() then 
-        gun:acfFire(true) 
+        gun:acfFire(1) 
     end
 
     -- Wire outputs
@@ -282,9 +286,9 @@ timer.create("retry", 0.1, 0, function()
     generateValues()
     
     if gun:isValid() and gun:acfMuzzleVel() == 0 then
-        gun:acfFire(true)
+        gun:acfFire(1)
     elseif gun:isValid() then
-        gun:acfFire(false)
+        gun:acfFire(0)
     end
 end)
 
