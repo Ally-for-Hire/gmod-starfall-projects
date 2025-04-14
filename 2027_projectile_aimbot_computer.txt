@@ -63,7 +63,7 @@
 -- Hotfix: offset removal
 
 --- Version 1.5.2
--- Fixed acfFire function for use with ACE
+-- Hotfix: Fixed acfFire function for use with ACE
 -- Considering having a way to detect later
 
 --- Version 1.6
