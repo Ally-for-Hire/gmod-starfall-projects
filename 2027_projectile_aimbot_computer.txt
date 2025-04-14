@@ -3,10 +3,13 @@
 --@shared
 --@server
 
--- I basically already made a starfall that does most of this, so i'm taking alot of it from there
--- This is assuming target on a level plane, but at close-range it honestly shouldn't matter excessively
--- Hypothetically should still be close on targets far away but that's tbd
--- Stick between the range of 150-800 m/s muzzle velocity, above and below that you will begin to see issues
+--- Opening Blurb
+-- *This is assuming target on a level plane, but at close-range it honestly shouldn't matter excessively
+-- *This ends up working remarkebly well on targets even far away with elevation distances, however it struggles
+-- *with fast moving targets for some reason. The math doesn't support that happening so it's kinda shrug from me.
+-- *With 1.6 being the final version this solution should be about as optimized and accurate as it's ever going to
+-- *get. If you're reading this and understand where i fucked up, reach out at AllyFH and if it works i'm willing to
+-- *pay real dinero.
 
 --- Version 1.1
 -- Comments added
@@ -64,7 +67,7 @@
 
 --- Version 1.5.2
 -- Hotfix: Fixed acfFire function for use with ACE
--- Considering having a way to detect later
+-- *Considering having a way to detect later
 
 --- Version 1.6
 -- Slight optimization increases
@@ -73,7 +76,8 @@
 --    > Made binary search start more refined
 -- Added a delay to firing for accuracy with single-shot fuzed weapons
 -- Fixed bug involving the handling of targetValue before calculations are ran
--- This is probably as good as this is going to get as is honestly
+-- *This is probably as good as this is going to get as is honestly
+-- Updated wording for comments
 
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
