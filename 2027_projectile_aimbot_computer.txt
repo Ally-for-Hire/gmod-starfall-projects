@@ -66,15 +66,24 @@
 -- Fixed acfFire function for use with ACE
 -- Considering having a way to detect later
 
+--- Version 1.6
+-- Slight optimization increases
+--    > Only does math when target is within range
+--    > Only attempts to fire when gun is ready
+--    > Made binary search start more refined
+-- Added a delay to firing for accuracy with single-shot fuzed weapons
+-- Fixed bug involving the handling of targetValue before calculations are ran
+-- This is probably as good as this is going to get as is honestly
+
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 1500 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingRange = 6000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
 
 --- Do not touch below this
 
 --- Constants
-local MAX_TIME = 1.5
+local MAX_TIME = 2
 local TIME_STEP = game.getTickInterval() / 10
 local GRAVITY = Vector2(0, physenv.getGravity()[3])
 local RAD_CONV = math.pi / 180
@@ -98,6 +107,7 @@ local visualizeFinalTable = false
 local muzzleDist = 0
 local relativeAccel = Vector(0)
 local pitchNumerator = 6
+local attemptingFire = false
 
 --- Simple interpolation
 -- Table in and ideal time in, interpolated time out
@@ -210,15 +220,14 @@ local function main()
     if handleFiring then gun:acfFire(0) end
     
     -- Simple acceleration handling via calculating change in velocity over dt
+    local relativeAccel = -Vector(0, 0, GRAVITY[2])
     if lastVel != targetVel then
         local dt = timer.curtime() - lastFrame
         
-        relativeAccel = (targetVel - lastVel) / dt - Vector(0, 0, GRAVITY[2])
+        relativeAccel = relativeAccel + (targetVel - lastVel) / dt
         
         lastVel = targetVel
         lastFrame = timer.curtime()
-    elseif lastVel == Vector() then
-        relativeAccel = -Vector(0, 0, GRAVITY[2])
     end
     
     -- Preparing variables for use with our equations
@@ -226,15 +235,15 @@ local function main()
     local relativeVel = targetVel - gun:getVelocity()
     local time = 0
     local low = 0
-    local high = MAX_TIME
+    local high = (relativePos):getLength() / (storedMuzzleVel * 39.37)
 
     -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
-    local predictedTargetPos = Vector()
-    local targetValue = 0
+    local predictedTargetPos = relativePos
+    local targetValue = predictedTargetPos:getLength() - muzzleDist
     local selfValue = 0 -- this fucker is why any of this is so hard
     
     -- Simple binary search to find the solution to those equations
-    while (high - low) > 0.00001 do
+    while (high - low) > 0.00001 and targetValue < firingRange * 1.5 do
         time = (low + high) / 2
         
         -- Predict target position with acceleration applied
@@ -251,12 +260,15 @@ local function main()
             low = time
         else
             high = time
-        end            
+        end           
     end
     
     -- Gun fire handling
-    if handleFiring and targetValue < firingRange and time != -1 and (predictedTargetPos:getLength() - relativePos:getLength()) < relativeVel:getLength() then 
-        gun:acfFire(1) 
+    if handleFiring and targetValue < firingRange and time != -1 and not attemptingFire and gun:acfReady() then 
+        attemptingFire = true
+        --print("Fired at value .. " .. targetValue - selfValue)
+        timer.create("Fire Gun", 0.01, 1, function() attemptingFire = false, gun:acfFire(1) end)
+            
     end
 
     -- Wire outputs
