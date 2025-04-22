@@ -1,0 +1,63 @@
+--- Local Overwrites
+-- Setters
+_setMaterial = render.setMaterial
+_setColor = render.setColor
+_setFont = render.setFont
+
+-- Shapes
+_drawRect = render.drawRect
+_drawRectOutline = render.drawRectOutline
+_drawTexturedRect = render.drawTexturedRect
+_drawCircle = render.drawCircle
+_drawFilledCircle = render.drawFilledCircle
+_drawPoly = render.drawPoly
+
+-- Text
+_drawText = render.drawText
+_drawSimpleText = render.drawSimpleText
+
+-- RenderTargets
+_createRT = render.createRenderTarget
+_setRTTexture = render.setRenderTargetTexture
+_selectRT = render.selectRenderTarget
+
+--- Main Color Constants
+-- General Colors
+COL_BLACK = Color(0, 0, 0)
+COL_RED = Color(255, 0, 0)
+COL_GREEN = Color(0, 255, 0)
+COL_BLUE = Color(0, 0, 255)
+
+-- Color for clearing RenderTargets with
+COL_RENDERTARGET = Color(0, 0, 0, 0)
+
+--- Function to draw a thick line
+-- x1, y1: the starting position coordinates
+-- x2, y2: the end position coordinates
+-- thickness: thickness of line
+function drawThickLine (x1, y1, x2, y2, thickness)
+    local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
+    local perpX = perpDir[1]
+    local perpY = perpDir[2]
+
+    _drawPoly({
+        { x = x1 + perpX, y = y1 + perpY },
+        { x = x2 + perpX, y = y2 + perpY },
+        { x = x2 - perpX, y = y2 - perpY },
+        { x = x1 - perpX, y = y1 - perpY },
+    })
+end
+
+--- Function to draw a rectangle centered on x, y
+-- x, y: the middle of the rectangle
+-- width, height: the width and height of the rectangle
+function drawCenterRect (x, y, width, height) 
+    _drawRect(x - width / 2, y - height / 2, width, height)
+end
+
+--- Function to draw a rectangle outline centered on x, y
+-- x, y: the middle of the rectangle
+-- width, height: the width and height of the rectangle
+function drawCenterRectOutline (x, y, width, height) 
+    _drawRectOutline(x - width / 2, y - height / 2, width, height) 
+end
