@@ -79,10 +79,24 @@
 -- *This is probably as good as this is going to get as is honestly
 -- Updated wording for comments
 
+--- Version 1.6.1
+-- Super tiny update to account for correct muzzle distance
+
+--- Version 1.7
+-- Used dot products instead of the bs i was doing before
+-- Changed first data point from 0 to muzzledist
+-- Added interpolation clamping
+-- Added minimum time to binary search of 0.01
+-- Skips math when we area too close and uses the minimum time
+-- Added variables for output
+-- Introduced TICK constant and added it to the time output by default
+-- Improved firing logic to only fire when the gun is aiming at target
+
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 6000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingRange = 60000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingAccuracy = 0.5 -- Distance between the target and where the gun is aiming in meters
 
 --- Do not touch below this
 
@@ -91,6 +105,7 @@ local MAX_TIME = 2
 local TIME_STEP = game.getTickInterval() / 10
 local GRAVITY = Vector2(0, physenv.getGravity()[3])
 local RAD_CONV = math.pi / 180
+local TICK = game.getTickInterval()
 
 --- Wire Stand-in Variables 
 local gun = nil
@@ -116,6 +131,10 @@ local attemptingFire = false
 --- Simple interpolation
 -- Table in and ideal time in, interpolated time out
 local function interpolateTable(tbl, targetTime)
+    -- Clamp if targetTime is outside the bounds
+    if targetTime <= tbl[1][3] then return tbl[1][1] end
+    if targetTime >= tbl[#tbl][3] then return tbl[#tbl][1] end
+
     for i = 1, #tbl - 1 do
         local t0, t1 = tbl[i][3], tbl[i + 1][3]
         if targetTime >= t0 and targetTime <= t1 then
@@ -124,8 +143,9 @@ local function interpolateTable(tbl, targetTime)
             return d0 + (d1 - d0) * alpha
         end
     end
-    
-    return 0
+
+    -- Should never reach here due to clamping, but just in case:
+    return tbl[#tbl][1]
 end
 
 --- Generates the ballistics of the shell at the given pitch
@@ -139,7 +159,7 @@ local function generateAngleBallistics(gun, pitch, dt)
     -- Calculating the starting position of the shell
     local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
     local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
-    muzzleDist = gun:getMassCenterW():getDistance(muzzlePos)
+    muzzleDist = gun:localToWorld(Vector()):getDistance(muzzlePos)
     
     -- Calculating the starting velocity of the shell
     local muzzleVel = gun:acfMuzzleVel() * 39.37
@@ -188,7 +208,9 @@ local function generateValues()
     
     -- Make a table of every point at which the bullet intersects z=0 of the gun
     local pitch = 0
-    local data = {0, 0, 0}
+    local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
+    local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
+    local data = {gun:localToWorld(Vector()):getDistance(muzzlePos), 0, 0}
     dataTable[1] = {0, 0, 0}
     local indices = 2
     while data[3] < MAX_TIME and pitch < 5 do
@@ -237,8 +259,8 @@ local function main()
     -- Preparing variables for use with our equations
     local relativePos = targetPos - gun:getPos()
     local relativeVel = targetVel - gun:getVelocity()
-    local time = 0
-    local low = 0
+    local low = 0.01
+    local time = low
     local high = (relativePos):getLength() / (storedMuzzleVel * 39.37)
 
     -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
@@ -247,7 +269,7 @@ local function main()
     local selfValue = 0 -- this fucker is why any of this is so hard
     
     -- Simple binary search to find the solution to those equations
-    while (high - low) > 0.00001 and targetValue < firingRange * 1.5 do
+    while (high - low) > 0.001 and targetValue < firingRange * 1.5 and targetValue > storedMuzzleVel do
         time = (low + high) / 2
         
         -- Predict target position with acceleration applied
@@ -260,24 +282,34 @@ local function main()
         end
         
         -- Make sure we stop if we go past the target or if the target goes past us
-        if targetValue > selfValue and (predictedTargetPos:getLength() - relativePos:getLength()) < relativeVel:getLength() then 
+        if targetValue > selfValue and predictedTargetPos:dot(relativePos) > 0 then
             low = time
         else
             high = time
         end           
     end
-    
-    -- Gun fire handling
-    if handleFiring and targetValue < firingRange and time != -1 and not attemptingFire and gun:acfReady() then 
-        attemptingFire = true
-        --print("Fired at value .. " .. targetValue - selfValue)
-        timer.create("Fire Gun", 0.01, 1, function() attemptingFire = false, gun:acfFire(1) end)
-            
-    end
 
     -- Wire outputs
-    wire.ports.Time = time
-    wire.ports.AimPos = targetPos + relativeVel * (time + offset) + 0.5 * relativeAccel * (time + offset)^2
+    local timeOutput = time + TICK
+    local aimposOutput = targetPos + relativeVel * (timeOutput + offset) + 0.5 * relativeAccel * (timeOutput + offset)^2
+    wire.ports.Time = timeOutput
+    wire.ports.AimPos = aimposOutput
+    
+    -- Gun fire handling
+    if handleFiring and targetValue < firingRange and gun:acfReady() then
+        -- Barrel alignment check
+        local muzzle = gun:getAttachment(gun:lookupAttachment("muzzle"))
+        local muzzleVec = Vector(muzzle[1], muzzle[2], muzzle[3])
+        local gunFwd = gun:getForward()
+        local toAim = aimposOutput - muzzleVec
+        local proj = gunFwd * toAim:dot(gunFwd)
+        local closest = muzzleVec + proj
+        local error = (aimposOutput - closest):getLength()
+        
+        if error < firingAccuracy then
+            gun:acfFire(1)
+        end
+    end
     
     -- Acceleration resetting
     timer.create("Reset Acceleration", 0.3, 1, function() lastVel = Vector() end)
