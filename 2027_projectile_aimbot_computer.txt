@@ -11,7 +11,7 @@
 -- *get. If you're reading this and understand where i fucked up if i did, 
 -- *reach out at AllyFH.
 
---- Version 1.1
+--- Version 1.1.0
 -- Comments added
 -- Slight code cleanup
 -- Option to fire added
@@ -22,13 +22,13 @@
 -- Fixed an issue with acceleration logic
 --    > Ignored overlapping data and updated stored LastVel variable
 
---- Version 1.2
+--- Version 1.2.0
 -- Cleaned up variables and code further
 -- Added further comments
 -- Fixed acceleration handling issue introduced by 1.1
 --    > A misstype made acceleration ignored
 
---- Version 1.3
+--- Version 1.3.0
 -- Cleaned up code even more
 -- Fixed fuze default case
 --    > Made it -1 instead of 0
@@ -38,11 +38,11 @@
 --    > Made TIME_STEP more refined
 -- Added a default 0.01 offset on AimPos
 
---- Version 1.4
+--- Version 1.4.0
 -- Removed the refinement of TIME_STEP
 -- Fixed handling of fuze time with offset
 
---- Version 1.5
+--- Version 1.5.0
 -- Stored acceleration and updated its handling
 -- Added a variable for the pitch numerator
 -- Fixed radian conversion
@@ -69,7 +69,7 @@
 -- Hotfix: Fixed acfFire function for use with ACE
 -- *Considering having a way to detect later
 
---- Version 1.6
+--- Version 1.6.0
 -- Slight optimization increases
 --    > Only does math when target is within range
 --    > Only attempts to fire when gun is ready
@@ -82,7 +82,7 @@
 --- Version 1.6.1
 -- Super tiny update to account for correct muzzle distance
 
---- Version 1.7
+--- Version 1.7.0
 -- Used dot products instead of the bs i was doing before
 -- Changed first data point from 0 to muzzledist
 -- Added interpolation clamping
@@ -102,12 +102,13 @@
 --    > Fixed both incorrect parameters for the binary search
 
 --- Version 1.7.3
+-- Naming convention change
 
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 3000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
-local firingAccuracy = 0.1 -- Distance between the target and where the gun is aiming in meters
+local firingRange = 6000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingAccuracy = 0.3 -- Distance between the target and where the gun is aiming in meters
 
 --- Do not touch below this
 
