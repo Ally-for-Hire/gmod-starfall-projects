@@ -92,6 +92,11 @@
 -- Introduced TICK constant and added it to the time output by default
 -- Improved firing logic to only fire when the gun is aiming at target
 
+--- Version 1.7.1
+-- Cleaned up unused code
+-- Fixed our friend that I actually forgot to do
+--    > Fixed first data point to actually be muzzledist
+
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
@@ -121,8 +126,6 @@ local storedMuzzleVel = 0
 local maxCalculatedRange = 0
 local pitchStep = 0
 local dataTable = {}
-local visualizeBallisticsTable = false 
-local visualizeFinalTable = false
 local muzzleDist = 0
 local relativeAccel = Vector(0)
 local pitchNumerator = 6
@@ -180,11 +183,6 @@ local function generateAngleBallistics(gun, pitch, dt)
         indices = indices + 1
         
         --outputTable[indices] = {shellPos, shellVel, curtime, math.sqrt(shellPos[1]^2 + shellPos[2]^2)} -- 2D Position, 2D Velocity, Current Time, Distance from Start
-        if visualizeBallisticsTable and indices < 200 then 
-            local holo = hologram.create(gun:localToWorld(Vector(shellPos[1], 0, shellPos[2])), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl")
-            --holo:setParent(gun)
-        end
-        
         -- We can stop once we hit the threshold we are looking for
         if shellPos[2] < 0 then
             curtime = curtime - dt / 2
@@ -203,7 +201,6 @@ local function generateValues()
     -- Variable decleration and cleanup
     storedMuzzleVel = gun:acfMuzzleVel()
     pitchStep = math.clamp(pitchNumerator / storedMuzzleVel, 0.002, 0.1) -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
-    hologram.removeAll()
     gun:acfFire(0)
     
     -- Make a table of every point at which the bullet intersects z=0 of the gun
@@ -211,17 +208,11 @@ local function generateValues()
     local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
     local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
     local data = {gun:localToWorld(Vector()):getDistance(muzzlePos), 0, 0}
-    dataTable[1] = {0, 0, 0}
+    dataTable[1] = data
     local indices = 2
     while data[3] < MAX_TIME and pitch < 5 do
         data = generateAngleBallistics(gun, pitch * RAD_CONV, TIME_STEP)
         dataTable[indices] = data
-        
-        if visualizeFinalTable and indices < 200 then
-            local holo = hologram.create(gun:localToWorld(Vector(data[1] * math.cos(pitch * RAD_CONV), 0, data[1] * -math.sin(pitch * RAD_CONV))), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl")
-            holo:setParent(gun)
-        end
-        
         pitch = pitch + pitchStep
         
         indices = indices + 1
@@ -231,8 +222,6 @@ local function generateValues()
     maxCalculatedRange = dataTable[indices - 1][1]
     initialized = true
     
-    --print("Data Points Generated  .. " .. #dataTable)
-    --print("Min Effective Range .. " .. math.round(dataTable[2][1], 1))
     print("Max Effective Range .. " .. math.round(maxCalculatedRange, 2))
     --printTable(dataTable)
 end
