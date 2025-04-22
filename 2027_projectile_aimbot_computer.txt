@@ -101,11 +101,13 @@
 -- Fixed several bugs implemented when attempting to reduce lag
 --    > Fixed both incorrect parameters for the binary search
 
+--- Version 1.7.3
+
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 1500 -- Range the projectile will be at when it gets intercepted if handleFiring is true
-local firingAccuracy = 0.5 -- Distance between the target and where the gun is aiming in meters
+local firingRange = 3000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingAccuracy = 0.1 -- Distance between the target and where the gun is aiming in meters
 
 --- Do not touch below this
 
@@ -262,7 +264,7 @@ local function main()
     local selfValue = 0 -- this fucker is why any of this is so hard
     
     -- Simple binary search to find the solution to those equations
-    while (high - low) > 0.001 do
+    while (high - low) > 0.0001 and targetValue < firingRange and gun:acfReady() do
         time = (low + high) / 2
         
         -- Predict target position with acceleration applied
@@ -271,7 +273,8 @@ local function main()
         selfValue = interpolateTable(dataTable, time)
         
         if targetValue > maxCalculatedRange then
-            return -1    
+            print("Out of Range")
+            return     
         end
         
         -- Make sure we stop if we go past the target or if the target goes past us
@@ -283,7 +286,7 @@ local function main()
     end
 
     -- Wire outputs
-    local timeOutput = time + TICK
+    local timeOutput = time
     local aimposOutput = targetPos + relativeVel * (timeOutput + offset) + 0.5 * relativeAccel * (timeOutput + offset)^2
     wire.ports.Time = timeOutput
     wire.ports.AimPos = aimposOutput
