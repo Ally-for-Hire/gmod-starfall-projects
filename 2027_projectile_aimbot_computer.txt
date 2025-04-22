@@ -97,10 +97,14 @@
 -- Fixed our friend that I actually forgot to do
 --    > Fixed first data point to actually be muzzledist
 
+--- Version 1.7.2
+-- Fixed several bugs implemented when attempting to reduce lag
+--    > Fixed both incorrect parameters for the binary search
+
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 60000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingRange = 1500 -- Range the projectile will be at when it gets intercepted if handleFiring is true
 local firingAccuracy = 0.5 -- Distance between the target and where the gun is aiming in meters
 
 --- Do not touch below this
@@ -258,7 +262,7 @@ local function main()
     local selfValue = 0 -- this fucker is why any of this is so hard
     
     -- Simple binary search to find the solution to those equations
-    while (high - low) > 0.001 and targetValue < firingRange * 1.5 and targetValue > storedMuzzleVel do
+    while (high - low) > 0.001 do
         time = (low + high) / 2
         
         -- Predict target position with acceleration applied
