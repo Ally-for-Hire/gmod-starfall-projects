@@ -4,15 +4,18 @@
 --@shared
 --@server
 
---- Version 1.0
+--- Version 1.0.0
 -- Total implementation
+
+--- Version 1.0.1
+-- Minor changes
 
 ballisticslib = require("public_lib/acf_ballistics_lib.txt")
 
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 16000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingRange = 6000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
 local firingAccuracy = 0.3 -- Distance between the target and where the gun is aiming in meters
 
 --- Do not touch below this
@@ -109,9 +112,8 @@ local function main()
         local closest = muzzleVec + proj
         local error = (aimposOutput - closest):getLength()
 
-        if error < firingAccuracy and not attemptedFire then
-            attemptedFire = true
-            timer.create("Fire Gun", 0.01, 1, function() attemptedFire = false, gun:acfFire(1) end)
+        if error < firingAccuracy then
+            gun:acfFire(1)
         end
     end
     
