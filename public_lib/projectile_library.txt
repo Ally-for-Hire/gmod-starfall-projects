@@ -1,0 +1,127 @@
+--- Private Variables
+local allProjectiles = {}
+local explosiveQueue = {}
+local dt = game.getTickInterval()
+local maxExplosiveDamage = 500
+Projectile = class("Projectile")
+
+--- Projectile Constructor
+-- Initializes a projectile at position 'pos' and velocity 'vel'
+-- Then tells it what whether or not it has gravity, and what to do when it detonates
+-- Vector, Vector, String, Vector, Number, Number, Boolean, Boolean
+function Projectile:initialize(pos, vel, model, hitBox, scale, damage, radius, armTime, projectileType, hasGravity, adjustAngle)
+    if CLIENT then error("this function cannot be used client-side") end
+        
+    self.pos = pos or Vector()
+    self.vel = vel or Vector()
+    self.model = model != "" and model or "models/hunter/blocks/cube025x025x025.mdl"
+    self.hitBox = hitBox or Vector()
+    self.damage = damage or 200
+    self.radius = radius or 300
+    self.armTime = armTime or 0
+    self.projectileType = projectileType or 1
+    
+    self.hasGravity = (hasGravity == nil) and 1 or (hasGravity and 1 or 0)
+    self.adjustAngle = (adjustAngle == nil) and true or adjustAngle
+    
+    self.startTime = timer.systime()
+    self.hitTarget = false    
+    self.holoEntity = hologram.create(self.pos, self.vel:getAngle(), self.model, scale or Vector(1))
+    self.lightHolo = hologram.create(self.pos, self.vel:getAngle(), "models/sprops/rectangles/size_1/rect_3x3x3.mdl")
+    self.explosiveEntities = {}
+
+    if self.projectileType == 1 then
+        explosiveQueue[#explosiveQueue + 1] = {self, math.ceil(damage / 500)}
+    end
+    
+    self.lightHolo:setParent(self.holoEntity)
+    
+    local lightHolo2 = hologram.create(self.pos + self.holoEntity:getForward() * -25, self.vel:getAngle() + Angle(90, 0, 0), "models/effects/vol_light64x256.mdl", Vector(0.1, 0.1, 0.3))
+    lightHolo2:setParent(self.lightHolo)
+    lightHolo2:setColor(Color(255, 100, 0))
+    
+    local lightHolo3 = hologram.create(self.pos + self.holoEntity:getForward() * -25, self.vel:getAngle() + Angle(90, 0, 0), "models/effects/vol_light64x256.mdl", Vector(0.05, 0.05, 0.2))
+    lightHolo3:setParent(self.lightHolo)
+    lightHolo3:setColor(Color(255, 255, 255))
+    
+    return self.hitTarget
+end
+
+function Projectile:fire(pos, vel)
+    self.pos = pos or self.pos
+    self.vel = vel or self.vel
+    self.startTime = timer.systime()
+    allProjectiles[#allProjectiles + 1] = self  
+    
+    --timer.simple(0.05, function() self.holoEntity:setTrails(1, 15, 0.1, "trails/smoke", Color(255, 255, 255)) end)
+end
+
+function Projectile:explode()
+    for _, v in pairs(self.explosiveEntities) do
+        v:setPos(self.pos)
+        wire.triggerInput(v, "Detonate", 1)
+    end
+end
+
+--- Class Logic
+function projectile_tick()
+    -- Creating the required entities
+    while prop.canSpawn() and #explosiveQueue > 0 do
+        local object = explosiveQueue[1][1]
+        local count = explosiveQueue[1][2]
+        
+        if object.hitTarget then
+            table.remove(explosiveQueue, 1)
+            print("Explosives Unfinished, " .. count .. " left.")
+            continue    
+        end
+        
+        object.explosiveEntities[#object.explosiveEntities + 1] = prop.createSent(chip():getPos() + Vector(0, 0, 15), Angle(), "gmod_wire_simple_explosive", true, {Model = "models/hunter/blocks/cube025x025x025.mdl", damage = math.min(object.damage, maxExplosiveDamage), radius = object.radius, removeafter = true})
+        object.explosiveEntities[#object.explosiveEntities]:setColor4Part(0, 0, 0, 0)
+        object.damage = math.max(object.damage - maxExplosiveDamage, 0)
+        
+        explosiveQueue[1][2] = explosiveQueue[1][2] - 1
+        
+        if count == 1 then table.remove(explosiveQueue, 1) end 
+    end
+    
+    -- Doing projectile physics
+    for key, value in pairs(allProjectiles) do
+        if value.hitTarget == true then continue end -- Ignore the projectile when it hits something
+        
+        value.lightHolo:setAngles(value.holoEntity:localToWorldAngles(Angle(0, 0, timer.curtime() * 1000)))
+        
+        local newPos = value.pos + value.vel * dt -- Calculate the new position
+        value.vel = value.vel + Vector(0, 0, -600) * dt * value.hasGravity -- Calculate new velocity
+        
+        local moveTrace = nil
+        if value.hitBox != Vector() then
+            moveTrace = trace.hull(value.pos, newPos, -value.hitBox, value.hitBox)
+        else
+            moveTrace = trace.line(value.pos, newPos)
+        end
+        
+        -- Hit logic
+        if moveTrace["Hit"] == true then
+            if (timer.systime() - value.startTime) < value.armTime then
+                moveTrace = {HitPos = newPos}
+            else
+                value.pos = moveTrace["HitPos"] + value.vel:getNormalized() * value.hitBox 
+                value:explode()
+                value.holoEntity:remove()
+                value.hitTarget = true
+                continue
+            end
+        end
+        
+        value.pos = moveTrace["HitPos"]
+        
+        value.holoEntity:setPos(value.pos)
+        if value.adjustAngle then
+            value.holoEntity:setAngles(value.vel:getAngle())
+        end
+    end    
+end
+
+--- Hooks
+hook.add("tick", "projectile_library_think", projectile_tick)

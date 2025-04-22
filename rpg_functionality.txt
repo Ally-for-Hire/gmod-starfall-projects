@@ -1,0 +1,359 @@
+--@name RPG Functionality
+--@author Ally for Hire / Merydian9
+--@include public_lib/helpful_hud_functions.txt
+--@include public_lib/projectile_library.txt
+
+if CLIENT then
+    --- Variable Initialization
+    -- Constants
+    local CHIP = chip()
+    local PLY = player()
+    local OWNER = owner()
+    local ISOWNER = PLY == OWNER
+    if PLY == OWNER then enableHud(nil, true) end
+    require("public_lib/helpful_hud_functions.txt")
+    
+    -- User Variables
+    local handPos = Vector(3, -7.5, -18)
+    local backPos = Vector(-9, -7,5, 0)
+    local rtFPS = 15
+    local reloadTime = 3
+    local fullbright = 0
+    local brightness = 1 -- Default 0, Good -0.6
+    local contrast = 0.3 -- Default 1, Good -1.4
+    local baseFOV = 70
+    local font_main = render.createFont("Roboto Mono", 40, 2, true)
+    local col_main = Color(0, 255, 0)
+    local col_seco = Color(255, 255, 255)
+    local colMod = {
+        [ "addr" ] = 0,
+        [ "addg" ] = 0.1,
+        [ "addb" ] = 0,
+        [ "brightness" ] = brightness,
+        [ "color" ] = 0.2,
+        [ "contrast" ] = contrast,
+        [ "mulr" ] = 1,
+        [ "mulg" ] = 1,
+        [ "mulb" ] = 1
+    }
+    
+    -- Internal Variables
+    local camPos = Vector()
+    local camAng = Angle()
+    local currentHolo = nil
+    local parentHolo = hologram.create(CHIP:getPos(), CHIP:getAngles(), "models/sprops/rectangles/size_1/rect_3x3x3.mdl", Vector())
+    local screenHolo = hologram.create(CHIP:localToWorld(Vector(18, -8.5, 8)), CHIP:getAngles() + Angle(90, 0, 0), "models/cheeze/pcb/pcb1.mdl", Vector(0.5)) screenHolo:setParent(parentHolo)
+    local parent = parentHolo
+    local relPos = backPos
+    local nextFrame = 0
+    local pitch = 30
+    local ready = false
+    local canFire = false
+    local fireAnimation = 0
+    local fireStage = 0
+    local zoomFOV = baseFOV
+    local minFov = baseFOV / (4^3)
+    timer.simple(reloadTime / 2, function() ready = true end)
+    
+    --- Setting up Rendertargets and Camera
+    -- Create the Rendertargets
+    _createRT("screenRT")
+    _createRT("staticElements")
+    _createRT("zoomDisplay")
+    _createRT("rtCam")
+
+    -- Set up the camera flags and material
+    local screenMat = material.create("UnlitGeneric") -- Create the material corresponding to it
+    screenMat:setTextureRenderTarget("$basetexture", "screenRT")  -- Update the texture
+    screenMat:setInt("$flags", 0) -- Reset the flags
+    screenHolo:setMaterial("!" .. screenMat:getName()) -- Make the hologram the right texture
+    
+    --- Function for reformatting this bad boy
+    -- Standard Function : Very Low Impact
+    local function reformat (num)
+        if num > 0 then output = "+" .. num else output = num end
+        if math.floor(num) < num then
+            return output    
+        end    
+        
+        return output .. ".0"
+    end
+    
+    --- Main Function
+    -- Runs on "Think" hook : Medium Impact
+    local function main()
+        if not ISOWNER or not OWNER:isAlive() then return end
+        
+        local weapon = OWNER:getActiveWeapon():getPrintName()
+        
+        -- Functionality for holding the handheld
+        if string.lower(weapon) == "hands" then
+            if relPos != handPos then
+                relPos = handPos
+            end
+        else
+            relPos = backPos
+            pitch = 100
+        
+            return -- Don't continue past here if the RPG is on the back   
+        end
+        
+        -- Bit of a mess, this is the animation functionality
+        -- I want to make this an actual library later
+        if fireAnimation > 0 then
+            if pitch > -5 and fireStage == 1 then
+                pitch = pitch - fireAnimation 
+                fireAnimation = fireAnimation + 0.2
+            elseif pitch < -0.001 then
+                fireStage = 2
+                fireAnimation = fireAnimation * 0.95
+                pitch = pitch * 0.9
+            else
+                fireStage = 1
+                fireAnimation = 0
+            end
+            
+            relPos = relPos - Vector(fireAnimation * 2, 0, fireAnimation * 2)
+            
+            return -- Don't continue past here if we are mid-animation         
+        end
+        
+        -- Sprinting functionality, currently seperate from animation functionality
+        -- Want to combine these later
+        if OWNER:getVelocity():getLength() > OWNER:getRunSpeed() * 0.8 then
+            pitch = math.clamp(pitch * (1 + 1.3 / pitch), -45, 45) 
+        else
+            pitch = pitch * 0.95
+        end  
+    end
+    
+    --- Screen Drawing Function
+    -- Runs on "RenderOffscreen" hook : High Impact
+    local function updateHUD()
+        if not ISOWNER then return end
+        
+        local x, y = 512, 512
+        _selectRT("screenRT")
+        render.clear(COL_RENDERTARGET)
+        
+        _setRTTexture("rtCam")
+        render.setMaterialEffectColorModify("rtCam", colMod)
+        _drawTexturedRect(0, 0, 1024, 1024)
+        _setRTTexture("staticElements")
+        _drawTexturedRect(0, 0, 1024, 1024)
+        
+        _setFont(font_main)
+        _setColor(col_main)
+        _drawSimpleText(x, 25, "E-ZOOM", 1, 1)
+        _drawSimpleText(x, 65, baseFOV / zoomFOV .. "x", 1, 1)
+        _drawSimpleText(x - 342, 25, "FLIR", 1, 1)
+        _drawSimpleText(x - 342, 65, "OFF", 1, 1)
+        _drawSimpleText(x + 342, 25, "GUIDANCE", 1, 1)
+        _drawSimpleText(x + 342, 65, "DUMB", 1, 1)
+        
+        _drawSimpleText(x - 342, 1024 - 65, "CONTRAST", 1, 1)
+        _drawSimpleText(x - 342, 1024 - 25, reformat(contrast - 1), 1, 1)
+        _drawSimpleText(x, 1024 - 65, "BRIGHTNESS", 1, 1)
+        _drawSimpleText(x, 1024 - 25, reformat(brightness), 1, 1)
+        _drawSimpleText(x + 342, 1024 - 65, "FULLBRIGHT", 1, 1)
+        _drawSimpleText(x + 342, 1024 - 25, fullbright .. ".0", 1, 1)
+        
+        if (baseFOV / zoomFOV) < 64 then
+            _setRTTexture("zoomDisplay")
+            _drawTexturedRect(0, 0, 1024, 1024)     
+        end
+        
+        _setColor(col_seco)
+        _drawSimpleText(x, 1024 - 150, "[MOUSE1] TO FIRE", 1, 1)
+        _drawSimpleText(x, 1024 - 110, "[SCROLL] TO ZOOM", 1, 1)
+        
+        if ready then _setColor(COL_GREEN) else _setColor(COL_RED) end
+        _drawFilledCircle(x + 300, 1024 - 130, 30, 30)
+    end
+    
+    --- Function for drawing the static elements
+    -- Runs on a one-time "RenderOffscreen" hook : No Impact
+    local function drawStaticElements()
+        if not ISOWNER then return end
+        
+        hook.remove("renderoffscreen", "render_static_elements") 
+        local x, y = 512, 512
+        _selectRT("staticElements")
+        render.clear(COL_RENDERTARGET)
+            _setColor(COL_BLACK)
+            drawCenterRect(x, 40, 1024, 100)
+            drawCenterRect(x, 1024 - 40, 1024, 100)
+            drawCenterRect(40, y, 100, 1024)
+            drawCenterRect(1024 - 40, y, 100, 1024)
+            drawCenterRect(x, 1024 - 130, 350, 100)
+            drawCenterRect(x + 300, 1024 - 130, 100, 100)
+            
+            _setColor(col_main)
+            drawCenterRect(x, y, 50, 4)   
+            drawCenterRect(x, y, 4, 50)  
+        _selectRT()
+        
+        _selectRT("zoomDisplay")
+        render.clear(COL_RENDERTARGET)
+            _setColor(col_main)
+            local length = 30
+            local width = 4
+            local distance = 128
+            drawCenterRect(x + distance - length / 2, y + distance - width / 2, length, width)
+            drawCenterRect(x + distance - width / 2, y + distance - length / 2, width, length)
+            drawCenterRect(x + distance - length / 2, y - distance + width / 2, length, width)
+            drawCenterRect(x + distance - width / 2, y - distance + length / 2, width, length)
+            
+            drawCenterRect(x - distance + length / 2, y + distance - width / 2, length, width)
+            drawCenterRect(x - distance + width / 2, y + distance - length / 2, width, length)
+            drawCenterRect(x - distance + length / 2, y - distance + width / 2, length, width)
+            drawCenterRect(x - distance + width / 2, y - distance + length / 2, width, length) 
+        _selectRT()
+    end
+    
+    --- RenderTarget Camera Function
+    -- Runs on "RenderScene" hook : High Impact
+    local function updateCamera()
+        if not ISOWNER or not OWNER:isAlive() then return end
+    
+        local curtime = timer.systime()
+        if nextFrame > curtime then return end
+        nextFrame = curtime + 1 / rtFPS
+        
+        cameraPos = screenHolo:getPos() + camAng:getForward() * 27
+        
+        render.setLightingMode(fullbright)
+        _selectRT("rtCam")
+        render.renderView({
+            origin = cameraPos,
+            angles = camAng,
+            fov = zoomFOV
+        })
+    end
+    
+    --- Client-Side Hologram Handling Function
+    -- Runs on "CalcView" hook : Medium Impact
+    local function handleHolograms(pos, ang)
+        local entPos = pos
+        local entAng = ang
+        if not ISOWNER then entAng = OWNER:getEyeAngles() entPos = OWNER:getEyePos() end
+        
+        local right = entAng:getRight()
+        local forward = entAng:getForward()
+        local up = entAng:getUp()
+    
+        parentHolo:setPos(entPos + relPos[1] * forward + relPos[2] * right + relPos[3] * up)
+        parentHolo:setAngles(entAng + Angle(pitch, 0, 0))
+        
+        if not ISOWNER then return end
+        
+        camPos = pos
+        camAng = ang + Angle(pitch, 0, 0)
+    end
+    
+    --- Zooming and Shooting Function
+    -- Runs on "InputPressed" Hook : No Impact
+    local function handleInput(key)
+        if not ISOWNER or not OWNER:isAlive() then return end
+        
+        -- w = 33, a = 11, s = 29, d = 14
+        -- mouse = 107, mouse2 = 108
+        if key == 107 then
+            local weapon = OWNER:getActiveWeapon():getPrintName()
+            
+            -- Add a 0.1
+            if string.lower(weapon) == "hands" then
+                timer.simple(0.1, function() canFire = true end)  
+            else
+                canFire = false  
+            end
+            
+            if canFire and ready then
+                ready = false    
+                fireAnimation = 1
+                fireStage = 1
+                
+                local fireVec = camAng:getForward():getNormalized()
+                
+                local right = camAng:getRight()
+                local forward = camAng:getForward()
+                local up = camAng:getUp()
+        
+                local relPosAdd = relPos[1] * forward + relPos[2] * right + relPos[3] * up
+                local projOffset = 45 * forward + 17 * right + 10 * up  
+
+                net.start("attempt_fire")
+                    net.writeVector(camPos + relPosAdd + projOffset)
+                    net.writeVector(fireVec)
+                net.send()
+                
+                timer.simple(reloadTime, function() ready = true end)
+            end
+        end
+        
+        if key == 112 then -- Down Scroll
+            zoomFOV = zoomFOV / 4   
+            zoomFOV = math.max(math.min(zoomFOV, baseFOV), minFov) 
+        elseif key == 113 then -- Up Scroll
+            zoomFOV = zoomFOV * 4  
+            zoomFOV = math.max(math.min(zoomFOV, baseFOV), minFov) 
+        end
+        -- Zoom Modes: 1x (100), 4x (25), 16x (6.25), 64x (1.5625)
+    end
+    
+    -- Hologram Wall
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(13.013089179993, -17.68143081665, 8.7426481246948)), CHIP:localToWorldAngles(Angle(0.0048995395191014, -89.907646179199, 0.0086731091141701)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.80000001192093, 0.050000000745058, 0.80000001192093)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(-0.49238947033882, -17.696744918823, 0.74744081497192)), CHIP:localToWorldAngles(Angle(-89.982536315918, 90.040710449219, 0)), 'models/sprops/rectangles/size_1/rect_3x6x3.mdl', Vector(1, 1, 1)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(4.0069870948792, -17.691625595093, 3.2481215000153)), CHIP:localToWorldAngles(Angle(-0.011361248791218, 0.063554927706718, 0.00017348989786115)), 'models/sprops/rectangles/size_1/rect_3x12x3.mdl', Vector(1, 1, 1)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(18.806187438965, -15.584051513672, 5.246844291687)), CHIP:localToWorldAngles(Angle(-0.0048742014914751, 90.056610107422, -0.0086700702086091)), 'models/sprops/rectangles/size_1/rect_3x6x3.mdl', Vector(1, 1, 1)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(22.007368087769, -17.678901672363, 1.7488919496536)), CHIP:localToWorldAngles(Angle(-0.0086779650300741, 0.028994156047702, 90.027061462402)), 'models/sprops/rectangles/size_1_5/rect_6x24x3.mdl', Vector(1, 1, 1)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(22.010957717896, -17.680358886719, 13.373891830444)), CHIP:localToWorldAngles(Angle(0.011255517601967, -179.93594360352, -0.00096687208861113)), 'models/maxofs2d/button_06.mdl', Vector(0.30000001192093, 0.30000001192093, 0.30000001192093)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(-1.9657708406448, -17.722324371338, 12.985496520996)), CHIP:localToWorldAngles(Angle(-0.0048789395950735, 90.070747375488, 89.991348266602)), 'models/sprops/cylinders/size_1/cylinder_1_5x24.mdl', Vector(1.2000000476837, 1.2000000476837, 1.2000000476837)) currentHolo:setParent(parent) currentHolo:setColor(Color(90, 114, 65, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(43.788860321045, -17.658838272095, 8.7551164627075)), CHIP:localToWorldAngles(Angle(0.0048760417848825, -89.950904846191, 0.0086694303900003)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.80000001192093, 0.10000000149012, 0.80000001192093)) currentHolo:setParent(parent) currentHolo:setColor(Color(255, 0, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(50.388828277588, -17.653192520142, 8.7561159133911)), CHIP:localToWorldAngles(Angle(0.0048760417848825, -89.950904846191, 0.0086694303900003)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.77999997138977, 0.20000000298023, 0.77999997138977)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(20.439645767212, -18.623670578003, -7.7035737037659)), CHIP:localToWorldAngles(Angle(-0.0086830165237188, 0.011288596317172, 0.0048811044543982)), 'models/weapons/w_mach_m249para.mdl', Vector(1, 1, 1)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(20.388977050781, -17.657005310059, 8.7476720809937)), CHIP:localToWorldAngles(Angle(0.0048760417848825, -89.950904846191, 0.0086694303900003)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.77999997138977, 2.3499999046326, 0.77999997138977)) currentHolo:setParent(parent) currentHolo:setColor(Color(90, 114, 65, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(6.1991701126099, -17.670358657837, 8.7455244064331)), CHIP:localToWorldAngles(Angle(0.0049037295393646, -90.034461975098, 0.00866231136024)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.80000001192093, 0.050000000745058, 0.80000001192093)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(-7.5091586112976, -17.644378662109, 8.8166961669922)), CHIP:localToWorldAngles(Angle(-89.985397338867, -179.96560668945, 0)), 'models/props_c17/lampshade001a.mdl', Vector(0.69999998807907, 0.69999998807907, 2)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(-9.6109704971313, -17.66089630127, 8.7431344985962)), CHIP:localToWorldAngles(Angle(0.0049037295393646, -90.034461975098, 0.00866231136024)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.77999997138977, 0.30000001192093, 0.77999997138977)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('Models/effects/comball_tape')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(22.008993148804, -17.679849624634, 8.7479152679443)), CHIP:localToWorldAngles(Angle(-89.984733581543, -179.9517364502, 0)), 'models/sprops/cylinders/size_5/cylinder_12x18.mdl', Vector(0.81000000238419, 0.81000000238419, 0.81000000238419)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(-1.0609709024429, -17.697282791138, 8.7483310699463)), CHIP:localToWorldAngles(Angle(0.0048760478384793, -89.950904846191, 0.0086694303900003)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.80000001192093, 0.10000000149012, 0.80000001192093)) currentHolo:setParent(parent) currentHolo:setColor(Color(255, 191, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(13.644083023071, -17.703010559082, 12.987858772278)), CHIP:localToWorldAngles(Angle(-0.0048789395950735, 90.070747375488, 89.991348266602)), 'models/sprops/cylinders/size_1/cylinder_1_5x24.mdl', Vector(1, 1, 1)) currentHolo:setParent(parent) currentHolo:setColor(Color(90, 114, 65, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(49.528884887695, -17.653894424438, 8.7559852600098)), CHIP:localToWorldAngles(Angle(0.0048760417848825, -89.950904846191, 0.0086694303900003)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.85000002384186, 0.10000000149012, 0.85000002384186)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(22.008993148804, -17.679849624634, 8.7479152679443)), CHIP:localToWorldAngles(Angle(0.0049037295393646, -90.034461975098, 0.00866231136024)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.75, 2.2999999523163, 0.75)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('Models/effects/comball_tape')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(29.007802963257, -17.676971435547, -1.250048995018)), CHIP:localToWorldAngles(Angle(-89.98380279541, 0.0039905379526317, 0)), 'models/sprops/cylinders/size_2/cylinder_3x18.mdl', Vector(1.2999999523163, 1.2999999523163, 1.2999999523163)) currentHolo:setParent(parent) currentHolo:setColor(Color(155, 155, 155, 255)) currentHolo:setMaterial('sprops/trans/misc/beam_side')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(31.008850097656, -17.672294616699, 8.7453708648682)), CHIP:localToWorldAngles(Angle(0.0049037295393646, -90.034461975098, 0.00866231136024)), 'models/sprops/misc/tubes_superthin/size_1/tube_24.mdl', Vector(0.80000001192093, 0.050000000745058, 0.80000001192093)) currentHolo:setParent(parent) currentHolo:setColor(Color(0, 0, 0, 255)) currentHolo:setMaterial('sprops/textures/sprops_metal1')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(144.74826049805, -41.470409393311, -209.09002685547)), CHIP:localToWorldAngles(Angle(0.0095889428630471, -134.97856140137, 0.0026781724300236)), 'models/bull/gates/processor.mdl', Vector(1, 1, 1)) currentHolo:setParent(parent) currentHolo:setColor(Color(255, 255, 255, 255)) currentHolo:setMaterial('')
+    currentHolo = hologram.create(CHIP:localToWorld(Vector(18.767913818359, -8.5357246398926, 7.8710932731628)), CHIP:localToWorldAngles(Angle(90, 179.99534606934, 0)), 'models/props_junk/plasticcrate01a.mdl', Vector(0.47999998927116, 0.31999999284744, 0.20000000298023)) currentHolo:setParent(parent) currentHolo:setColor(Color(255, 255, 255, 255)) currentHolo:setMaterial('sprops/trans/misc/ls_m2')
+    
+    -- Hooks
+    hook.add("calcview", "hologram_update", handleHolograms) -- 20% US
+    hook.add("renderscene","update_camera", updateCamera) -- 40% US
+    hook.add("renderoffscreen", "update_hud", updateHUD) -- 40% US
+    hook.add("tick", "do_logic", main) -- 2% US
+    
+    hook.add("inputPressed", "handle_inputs", handleInput) -- No Notable US
+    hook.add("renderoffscreen", "render_static_elements", drawStaticElements) -- No Notable US
+end
+
+if SERVER then
+    require("lib/projectile_library.txt")
+
+    -- Initialize the projectile
+    local missile = Projectile:new(nil, nil, "models/weapons/w_missile_closed.mdl", Vector(20), Vector(2, 2, 2), 500, 300, 0.05, 1, false)
+    
+    timer.create("proectile_check", 0.1, 0, function()
+        if missile.hitTarget == true then
+            missile = Projectile:new(nil, nil, "models/weapons/w_missile_closed.mdl", Vector(20), Vector(2, 2, 2), 500, 300, 0.05, 1, false)        
+        end
+    end)
+    
+    -- Launch the projectile when the user asks
+    net.receive("attempt_fire", function()
+        local startPos = net.readVector()
+        local startVec = net.readVector()
+        
+        -- Wire explosive max is generally 500 damage and 1500 radius
+        missile:fire(startPos, startVec * 10000)
+    end)
+end
