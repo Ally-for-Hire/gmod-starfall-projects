@@ -2,8 +2,9 @@
 --@author Ally for Hire / Merydian9
 --@server
 
---- Version 1.0
+--- Version 1.0.0
 -- Total implementation
+-- *This is basically just a re-write of the livesim project
 
 -- Constants go here, we get most of these from ACF itself
 local GRAVITY = physenv.getGravity()
