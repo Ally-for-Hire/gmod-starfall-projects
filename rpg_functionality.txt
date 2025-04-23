@@ -337,7 +337,7 @@ if CLIENT then
 end
 
 if SERVER then
-    require("lib/projectile_library.txt")
+    require("public_lib/projectile_library.txt")
 
     -- Initialize the projectile
     local missile = Projectile:new(nil, nil, "models/weapons/w_missile_closed.mdl", Vector(20), Vector(2, 2, 2), 500, 300, 0.05, 1, false)
