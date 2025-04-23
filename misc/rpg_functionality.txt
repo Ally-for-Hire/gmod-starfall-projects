@@ -1,7 +1,7 @@
 --@name RPG Functionality
 --@author Ally for Hire / Merydian9
---@include public_lib/helpful_hud_functions.txt
---@include public_lib/projectile_library.txt
+--@include ../public_lib/helpful_hud_functions.txt
+--@include ../public_lib/projectile_library.txt
 
 if CLIENT then
     --- Variable Initialization
@@ -11,7 +11,7 @@ if CLIENT then
     local OWNER = owner()
     local ISOWNER = PLY == OWNER
     if PLY == OWNER then enableHud(nil, true) end
-    require("public_lib/helpful_hud_functions.txt")
+    require("../public_lib/helpful_hud_functions.txt")
     
     -- User Variables
     local handPos = Vector(3, -7.5, -18)
@@ -337,7 +337,7 @@ if CLIENT then
 end
 
 if SERVER then
-    require("public_lib/projectile_library.txt")
+    require("../public_lib/projectile_library.txt")
 
     -- Initialize the projectile
     local missile = Projectile:new(nil, nil, "models/weapons/w_missile_closed.mdl", Vector(20), Vector(2, 2, 2), 500, 300, 0.05, 1, false)

@@ -1,6 +1,6 @@
 --@name 2028 Projectile Aimbot Computer
 --@author Ally for Hire / Merydian9
---@include public_lib/acf_ballistics_lib.txt
+--@include ../public_lib/acf_ballistics_lib.txt
 --@shared
 --@server
 
@@ -13,7 +13,7 @@
 --- Version 1.0.2
 -- Fixed issue where gun fires without solution
 
-ballisticslib = require("public_lib/acf_ballistics_lib.txt")
+ballisticslib = require("../public_lib/acf_ballistics_lib.txt")
 
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
