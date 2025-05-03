@@ -13,12 +13,27 @@
 --- Version 1.0.2
 -- Fixed issue where gun fires without solution
 
+--- Version 1.03
+-- Added ACF3 compatability
+-- Fixed firing issue where accidental rounding would cause gun not to fire
+
+--- Version 1.0.4
+-- Added 'Fire' output
+
+--- Version 1.0.5
+-- Fixed series of bugs with that lol
+-- Reimplemented firing delay 
+-- Removed accel check for bisection
+-- Added dt as default offset
+-- Various optimization changes
+-- Removal of gun firing
+
 ballisticslib = require("../public_lib/acf_ballistics_lib.txt")
 
 --- User Variables
-local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
+local offset = 0.00 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 6500 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingRange = 4000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
 local firingAccuracy = 0.3 -- Distance between the target and where the gun is aiming in meters
 
 --- Do not touch below this
@@ -42,18 +57,20 @@ local maxCalculatedRange = 0
 local muzzleDist = 0
 local relativeAccel = Vector(0)
 local attemptingFire = false
+local fireOutput = 0
 
 --- Time to actually do the math and logic
 local function main()
     -- Short list of early-outs this time
-    if targetPos == nil or targetVel == nil or targetPos == Vector(0, 0, 0) or storedMuzzleVel == 0 then return end
+    if storedMuzzleVel == 0 then return end
     
-    if handleFiring then gun:acfFire(0) end
+    if handleFiring then fireOutput = 0 end
     
     -- Simple acceleration handling via calculating change in velocity over dt
     local relativeAccel = -Vector(0, 0, GRAVITY[2])
+    local dt = game.getTickInterval()
     if lastVel != targetVel then
-        local dt = timer.curtime() - lastFrame
+        dt = timer.curtime() - lastFrame
         
         relativeAccel = relativeAccel + (targetVel - lastVel) / dt
         
@@ -64,7 +81,7 @@ local function main()
     -- Preparing variables for use with our equations
     local relativePos = targetPos - gun:getPos()
     local relativeVel = targetVel - gun:getVelocity()
-    local low = 0.01
+    local low = game.getTickInterval()
     local time = low
     local high = (relativePos):getLength() / (storedMuzzleVel * 39.37)
 
@@ -75,7 +92,7 @@ local function main()
     local data = {Vector2(0), 0}
     
     -- Simple binary search to find the solution to those equations
-    while (high - low) > 0.0001 and targetValue < firingRange and gun:acfReady() and (relativeAccel != -Vector(0, 0, GRAVITY[2]) or targetValue < 1000)  do
+    while (high - low) > 0.001 and targetValue < firingRange and not attemptingFire and gun:acfReady() do
         time = (low + high) / 2
         
         -- Predict target position with acceleration applied
@@ -96,16 +113,14 @@ local function main()
         end           
     end
     
-    --print(data[1]:getLength() .. " .. " .. data[2] .. " .. " .. time)
-    
     -- Wire outputs
-    local timeOutput = time
+    local timeOutput = time + dt
     local aimposOutput = targetPos + relativeVel * (timeOutput + offset) + 0.5 * relativeAccel * (timeOutput + offset)^2
     wire.ports.Time = timeOutput
     wire.ports.AimPos = aimposOutput
     
     -- Gun fire handling
-    if handleFiring and targetValue < firingRange and gun:acfReady() and time != low then
+    if handleFiring and targetValue < firingRange and time != game.getTickInterval() and gun:acfReady() then
         -- Barrel alignment check
         local muzzle = gun:getAttachment(gun:lookupAttachment("muzzle"))
         local muzzleVec = Vector(muzzle[1], muzzle[2], muzzle[3])
@@ -115,13 +130,12 @@ local function main()
         local closest = muzzleVec + proj
         local error = (aimposOutput - closest):getLength()
 
-        if error < firingAccuracy then
-            gun:acfFire(1)
+        if error < firingAccuracy and not attemptingFire then
+            fireOutput = 1
         end
     end
     
-    -- Acceleration resetting
-    timer.create("Reset Acceleration", 0.3, 1, function() lastVel = Vector() end)
+    wire.ports.Fire = fireOutput
 end
 
 --- Updates variables with their respective values when needed
@@ -138,9 +152,9 @@ end
 
 --- Need to retry in-case the ballistics change, just in case
 -- Try to update the logic every 1s
-timer.create("retry", 0.1, 0, function()
+timer.create("retry", 1, 0, function()
     if gun:isValid() and gun:acfMuzzleVel() == 0 then
-        gun:acfFire(1)
+        wire.ports.Fire = 1
     elseif gun:isValid() then
         if gun:acfMuzzleVel() != storedMuzzleVel then
             storedMuzzleVel = gun:acfMuzzleVel()
@@ -148,14 +162,14 @@ timer.create("retry", 0.1, 0, function()
             local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
             local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
             muzzleDist = gun:localToWorld(Vector()):getDistance(muzzlePos)
+            wire.ports.Fire = 0
         end
-        gun:acfFire(0)
     end
 end)
 
 --- Hook for when the wire inputs are updated
 -- This is basically the only hook we need since we only care when we are actually recieving data
-wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Time = "number", AimPos = "vector"})
+wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Fire = "number", Time = "number", AimPos = "vector"})
 hook.add("input", "Wire Inputs Updated", handleWire)
 
 --- Main think hook, pretty self explanatory
