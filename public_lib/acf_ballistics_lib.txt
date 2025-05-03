@@ -6,6 +6,15 @@
 -- Total implementation
 -- *This is basically just a re-write of the livesim project
 
+--- Version 1.0.1
+-- Slightly refined accuracy
+
+--- Version 1.0.2
+-- Improved interpolation output of capped function
+    
+--- Version 1.0.3
+-- Improved accuracy 
+
 -- Constants go here, we get most of these from ACF itself
 local GRAVITY = physenv.getGravity()
 local TIMESTEP = game.getTickInterval()
@@ -100,7 +109,16 @@ local function generate_ballistics_capped(gun, angle, cap, time_cap, simplicity)
         bullet_flighttime = bullet_flighttime + bullet_timestep
     end
     
-    return {(bullet_pos + prev_pos) / 2, (bullet_flighttime + prev_time) / 2}
+    local delta_x = bullet_pos[1] - prev_pos[1]
+
+    local lerp_factor = (cap - prev_pos[1]) / delta_x
+    lerp_factor = math.max(0, math.min(1, lerp_factor))
+
+    local interp_pos = prev_pos + (bullet_pos - prev_pos) * lerp_factor
+    local interp_time = prev_time + (bullet_flighttime - prev_time) * lerp_factor
+
+    return {interp_pos, interp_time}
+
 end
 
 
@@ -128,7 +146,7 @@ local function logic (gun, position, time) -- String, Any
     local comparison = position[3] - gun:getPos()[3]
     local test = {}
      
-    while (high - low) > 1 do
+    while (high - low) > 0.5 do
         mid = (low + high) / 2
         test = generate_ballistics_capped(gun, mid, distance, MAXTIME, 8)    
 
@@ -143,7 +161,7 @@ local function logic (gun, position, time) -- String, Any
     return outputData     
 end
 
-print("Ballistics Lib Loaded")
+print("Ballistics Lib v1.0.3 Loaded")
 return {
     calculate_maximum_distance = calculate_maximum_distance,
     logic = logic
