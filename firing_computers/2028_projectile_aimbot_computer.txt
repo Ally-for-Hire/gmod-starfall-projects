@@ -47,6 +47,10 @@
 --    > Removed check for main gun ready status for calculations
 -- Added 'predictedRelativePos' and moved all the math appropriately
 
+--- Vesion 1.1.1
+-- Improved high/low handling for binary search
+-- Added single extra refinement at end
+
 ballisticslib = require("../public_lib/acf_ballistics_lib.txt")
 
 --- User Variables
@@ -55,16 +59,16 @@ local offset = 0.00
 
 -- Whether or not to recalculate fullsim every divide
 -- *This is only recommended at low mv
-local recalcFullSim = false 
+local recalcFullSim = true 
 -- Whether or not to use drag calculations
 local simplifiedMath = false 
 
 -- Whether or not the starfall will fire the gun automatically
 local handleFiring = true 
 -- Range the projectile will be at when it gets intercepted if handleFiring is true
-local firingRange = 12000
+local firingRange = 5000
 -- Distance between the target and where the gun is aiming 
-local firingAccuracy = 3 
+local firingAccuracy = 15 
 
 --- Do not touch below this
 
@@ -120,13 +124,14 @@ local function calculate()
     -- Preparing variables for use with our equations
     local relativePos = targetPos - gun:getPos()
     relativeVel = targetVel - gun:getVelocity()
-    local low = (relativePos:getLength() / (storedMuzzleVel * 39.37))
+    
+    local laserTime = (relativePos:getLength() / (storedMuzzleVel * 39.37))
+    local low = laserTime / 2
+    local high = laserTime * 2
     time = low
-    local high = low * 2
 
     -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
-    local predictedTargetPos = relativePos
-    targetValue = predictedTargetPos:getLength() - muzzleDist
+    targetValue = relativePos:getLength() - muzzleDist
     local selfValue = 0
     local data, pitch = ballisticslib.logic(gun, targetPos, low)
     
@@ -136,8 +141,8 @@ local function calculate()
         time = (low + high) / 2
         
         -- Predict target position with acceleration applied
-        predictedTargetPos = targetPos + relativeVel * time + 1/2 * relativeAccel * time^2
-        predictedRelativePos = relativePos + targetVel * time + 1/2 * (relativeAccel + Vector(0, 0, GRAVITY[2])) * time^2
+        predictedRelativePos = relativePos + relativeVel * time + 1/2 * relativeAccel * time^2
+        predictedTargetPos = targetPos + targetVel * time + 1/2 * (relativeAccel + Vector(0, 0, GRAVITY[2])) * time^2
         
         targetValue = predictedRelativePos:getLength() - muzzleDist
         selfValue = storedMuzzleVel * 39.37 * time
