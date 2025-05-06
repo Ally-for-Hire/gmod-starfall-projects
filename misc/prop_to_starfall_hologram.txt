@@ -1,0 +1,27 @@
+--@name Prop to Starfall Hologram
+--@author Ally for Hire / Merydian9
+--@server
+
+CHIP = chip()
+
+props = find.byClass("prop_physics")
+
+print("local currentHolo = nil\nlocal chip = chip()\nlocal parent = chip")
+
+for _,val in pairs(props) do
+    localPos = CHIP:worldToLocal(val:getPos())  
+    localAng = CHIP:worldToLocalAngles(val:getAngles())
+    model = val:getModel()
+    scale = val:getManipulateBoneScale()
+    
+    propMaterial = val:getMaterial()
+    propColor = val:getColor()
+    propAlpha = 255 
+    
+    print("currentHolo = hologram.create(chip:localToWorld(Vector(" .. localPos[1] .. ", " .. localPos[2] .. ", " .. localPos[3]  .. ")), chip:localToWorldAngles(Angle(" 
+                                     .. localAng[1] .. ", " .. localAng[2] .. ", " .. localAng[3]  .. ")), '"
+                                     .. model .. "', Vector(" .. scale[1] .. ", " .. scale[2] .. ", " .. scale[3] .. ")) " 
+                                     .. "currentHolo:setParent(parent) " 
+                                     .. "currentHolo:setColor(Color(" .. propColor[1] .. ", " .. propColor[2] .. ", " .. propColor[3] .. ", " .. propAlpha .. ")) "
+                                     .. "currentHolo:setMaterial('" .. propMaterial .. "')")
+end
