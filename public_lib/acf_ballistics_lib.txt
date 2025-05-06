@@ -11,83 +11,34 @@
 
 --- Version 1.0.2
 -- Improved interpolation output of capped function
-    
+
 --- Version 1.0.3
 -- Improved accuracy 
 
 --- Version 1.1.0
--- Refined bisection method considerabley by calculation direct-to-target pitch
+-- Refined bisection method considerably by calculating direct-to-target pitch
 -- *This is a HUGE optimization improvement
 -- Made the 'generate_ballistics_capped' function public
 
--- Constants go here, we get most of these from ACF itself
+--- Version 1.1.1
+-- Merged generate_ballistics_table and generate_ballistics_capped internally
+
+-- Constants
 local GRAVITY = physenv.getGravity()
 local TIMESTEP = game.getTickInterval()
-local UNITS = 39.37 -- This is what we multiply game units by to get to meters
+local UNITS = 39.37
 local MAXTIME = 99999
 local DRAGDIV = 40
 
--- This will return a table of the shell's positions starting at the guns base
--- taking angle as the pitch, the following function will visualize any given
--- position accurately: gun:localToWorld(Vector(bullet_pos[1], 0, bullet_pos[2]))
-local function generate_ballistics_table (gun, angle, simplicity) -- Entity, Number, Number
-    -- gun is the gun
-    -- angle is the starting pitch
-    -- simplicity is how much less complex it is, 1 is default simplicity
-    
-    -- Initializing the bullet variables
-    local bullet_accel = Vector2(0, GRAVITY[3])
-    local bullet_timestep = TIMESTEP * simplicity
-    local bullet_flighttime = 0
-    local bullet_muzzlevel = gun:acfMuzzleVel() * UNITS
-    local bullet_dragcoef = gun:acfDragCoef() * UNITS
-    local bullet_table = {}
-    
-    -- Doing proper conversion of the angle into vector
-    local angle_muls = Vector2(math.cos(math.rad(angle)), math.sin(math.rad(angle)))
-    
-    -- Calculating the starting position and velocity
-    local muzzle_attachment = gun:getAttachment(gun:lookupAttachment("muzzle"))
-    local muzzle_pos = Vector(muzzle_attachment[1], muzzle_attachment[2], muzzle_attachment[3])
-    local muzzle_dist = gun:getMassCenterW():getDistance(muzzle_pos)
-    
-    local bullet_pos = angle_muls * muzzle_dist
-    local bullet_vel = angle_muls * bullet_muzzlevel
-    
-    -- The actual bullet generation logic
-    while bullet_flighttime < MAXTIME and bullet_pos[2] > 0 do -- You never really need to go farther than 40000 units
-        local drag = (bullet_dragcoef * bullet_vel:getLength()^2) / DRAGDIV
-        local clampedflight = bullet_vel:getLength() * 0.9
-        drag = bullet_vel:getNormalized() * math.min(drag * bullet_timestep, clampedflight)
-        
-        bullet_pos = bullet_pos + (bullet_vel * bullet_timestep)
-        bullet_vel = bullet_vel + (bullet_accel * bullet_timestep - drag)
-        table.insert(bullet_table, {bullet_pos, bullet_vel, bullet_flighttime})
-        bullet_flighttime = bullet_flighttime + bullet_timestep 
-    end
-    
-    -- Returning the given values
-    return bullet_table
-end
-
-
-local function generate_ballistics_capped(gun, angle, cap, time_cap, simplicity) -- Entity, Number, Number, Number
-    -- gun is the gun
-    -- angle is the starting pitch
-    -- cap is the maximum x value
-    -- simplicity is how much less complex it is, 1 is default simplicity     
-
-    -- Initializing the bullet variables
+-- Internal combined function
+local function generate_ballistics(gun, angle, simplicity, cap, time_cap, returnTable)
     local bullet_accel = Vector2(0, GRAVITY[3])
     local bullet_timestep = TIMESTEP * simplicity
     local bullet_flighttime = 0
     local bullet_muzzlevel = gun:acfMuzzleVel() * UNITS
     local bullet_dragcoef = gun:acfDragCoef() * UNITS
 
-    -- Doing proper conversion of the angle into vector
     local angle_muls = Vector2(math.cos(math.rad(angle)), math.sin(math.rad(angle)))
-
-    -- Calculating the starting position and velocity
     local muzzle_attachment = gun:getAttachment(gun:lookupAttachment("muzzle"))
     local muzzle_pos = Vector(muzzle_attachment[1], muzzle_attachment[2], muzzle_attachment[3])
     local muzzle_dist = gun:getMassCenterW():getDistance(muzzle_pos)
@@ -95,15 +46,21 @@ local function generate_ballistics_capped(gun, angle, cap, time_cap, simplicity)
     local bullet_pos = angle_muls * muzzle_dist
     local bullet_vel = angle_muls * bullet_muzzlevel
 
-    -- Hold previous values for interpolation
     local prev_pos = bullet_pos
     local prev_time = bullet_flighttime
 
-    -- The actual bullet generation logic
-    while bullet_flighttime < time_cap and bullet_pos[1] < cap do
-        -- Store current step as previous for interpolation later
-        prev_pos = bullet_pos
-        prev_time = bullet_flighttime
+    local bullet_table = returnTable and {} or nil
+
+    while bullet_flighttime < (time_cap or MAXTIME)
+        and bullet_pos[2] > 0
+        and (returnTable or bullet_pos[1] < cap) do
+
+        if returnTable then
+            table.insert(bullet_table, {bullet_pos, bullet_vel, bullet_flighttime})
+        else
+            prev_pos = bullet_pos
+            prev_time = bullet_flighttime
+        end
 
         local drag = (bullet_dragcoef * bullet_vel:getLength()^2) / DRAGDIV
         local clampedflight = bullet_vel:getLength() * 0.9
@@ -113,67 +70,63 @@ local function generate_ballistics_capped(gun, angle, cap, time_cap, simplicity)
         bullet_vel = bullet_vel + (bullet_accel * bullet_timestep - drag)
         bullet_flighttime = bullet_flighttime + bullet_timestep
     end
-    
-    local delta_x = bullet_pos[1] - prev_pos[1]
 
-    local lerp_factor = (cap - prev_pos[1]) / delta_x
-    lerp_factor = math.max(0, math.min(1, lerp_factor))
+    if returnTable then
+        return bullet_table
+    else
+        local delta_x = bullet_pos[1] - prev_pos[1]
+        local lerp_factor = (cap - prev_pos[1]) / delta_x
+        lerp_factor = math.max(0, math.min(1, lerp_factor))
 
-    local interp_pos = prev_pos + (bullet_pos - prev_pos) * lerp_factor
-    local interp_time = prev_time + (bullet_flighttime - prev_time) * lerp_factor
+        local interp_pos = prev_pos + (bullet_pos - prev_pos) * lerp_factor
+        local interp_time = prev_time + (bullet_flighttime - prev_time) * lerp_factor
 
-    return {interp_pos, interp_time}
-
+        return {interp_pos, interp_time}
+    end
 end
 
-
--- Variables we are going to reuse in the global space
-local maximum_distance = 0
-
--- Function to calculate maximum_distance a gun can make
-local function calculate_maximum_distance (gun) -- Entity
+-- Calculates the maximum distance the gun can fire using a 40 elevation
+local function calculate_maximum_distance(gun)
     if not isValid(gun) then return end
-        
-    local max_shot = generate_ballistics_table(gun, 40, 1)
-    
-    return max_shot[#max_shot][1][1]
+    local data = generate_ballistics(gun, 40, 1, nil, nil, true)
+    return data[#data][1][1]
 end
 
--- Function to run logic whenever input is given
-local function logic (gun, position, time) -- String, Any
-    -- Initialize variables 
+-- Finds best firing angle for a target position using bisection
+local function logic(gun, position, time)
     local distance = gun:getPos():getDistance(position)
-    
     local vertical = position[3] - gun:getPos()[3]
     local direct = math.deg(math.asin(vertical / distance)) 
-    
+
     local low = direct - 1
     local high = math.min(direct + 41, 89)
     local mid = (low + high) / 2
-    local comparison = position[3] - gun:getPos()[3]
+    local comparison = vertical
     local test = {}
-    local loops = 0
-    
+
     while (high - low) > 0.1 do
         mid = (low + high) / 2
-        test = generate_ballistics_capped(gun, mid, distance, MAXTIME, 8)    
-
+        test = generate_ballistics(gun, mid, 8, distance, MAXTIME, false)
         if test[1][2] > comparison then
-            high = mid    
+            high = mid
         else
             low = mid
         end
-        
-        loops = loops + 1
     end
-    
-    outputData = generate_ballistics_capped(gun, mid, distance, time, 1)
-    return outputData, mid     
+
+    local outputData = generate_ballistics(gun, mid, 1, distance, time, false)
+    return outputData, mid
 end
 
-print("Ballistics Lib v1.1.0 Loaded")
+print("Ballistics Lib v1.1.1 Loaded")
 return {
-    generate_ballistics_capped = generate_ballistics_capped,
+    generate_ballistics = generate_ballistics,
+    generate_ballistics_table = function(g, a, s)
+        return generate_ballistics(g, a, s, nil, nil, true)
+    end,
+    generate_ballistics_capped = function(g, a, c, t, s)
+        return generate_ballistics(g, a, s or 1, c, t, false)
+    end,
     calculate_maximum_distance = calculate_maximum_distance,
     logic = logic
 }
