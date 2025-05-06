@@ -104,11 +104,14 @@
 --- Version 1.7.3
 -- Naming convention change
 
+--- Version 1.7.4
+-- Fixed massive logic error on account of me being stupid
+
 --- User Variables
 local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
 local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 6000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
-local firingAccuracy = 0.3 -- Distance between the target and where the gun is aiming in meters
+local firingRange = 12000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
+local firingAccuracy = 1 -- Distance between the target and where the gun is aiming in meters
 
 --- Do not touch below this
 
@@ -255,9 +258,9 @@ local function main()
     -- Preparing variables for use with our equations
     local relativePos = targetPos - gun:getPos()
     local relativeVel = targetVel - gun:getVelocity()
-    local low = 0.01
+    local low = (relativePos):getLength() / (storedMuzzleVel * 39.37)
     local time = low
-    local high = (relativePos):getLength() / (storedMuzzleVel * 39.37)
+    local high = low * 2
 
     -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
     local predictedTargetPos = relativePos
