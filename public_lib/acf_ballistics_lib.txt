@@ -15,6 +15,11 @@
 --- Version 1.0.3
 -- Improved accuracy 
 
+--- Version 1.1.0
+-- Refined bisection method considerabley by calculation direct-to-target pitch
+-- *This is a HUGE optimization improvement
+-- Made the 'generate_ballistics_capped' function public
+
 -- Constants go here, we get most of these from ACF itself
 local GRAVITY = physenv.getGravity()
 local TIMESTEP = game.getTickInterval()
@@ -139,14 +144,17 @@ local function logic (gun, position, time) -- String, Any
     -- Initialize variables 
     local distance = gun:getPos():getDistance(position)
     
-    -- Run a simple binary search to find an acceptable solution
-    local low = -45
-    local high = 45
+    local vertical = position[3] - gun:getPos()[3]
+    local direct = math.deg(math.asin(vertical / distance)) 
+    
+    local low = direct - 1
+    local high = math.min(direct + 41, 89)
     local mid = (low + high) / 2
     local comparison = position[3] - gun:getPos()[3]
     local test = {}
-     
-    while (high - low) > 0.5 do
+    local loops = 0
+    
+    while (high - low) > 0.1 do
         mid = (low + high) / 2
         test = generate_ballistics_capped(gun, mid, distance, MAXTIME, 8)    
 
@@ -155,14 +163,17 @@ local function logic (gun, position, time) -- String, Any
         else
             low = mid
         end
+        
+        loops = loops + 1
     end
     
     outputData = generate_ballistics_capped(gun, mid, distance, time, 1)
-    return outputData     
+    return outputData, mid     
 end
 
-print("Ballistics Lib v1.0.3 Loaded")
+print("Ballistics Lib v1.1.0 Loaded")
 return {
+    generate_ballistics_capped = generate_ballistics_capped,
     calculate_maximum_distance = calculate_maximum_distance,
     logic = logic
 }
