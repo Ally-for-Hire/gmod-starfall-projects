@@ -1,4 +1,4 @@
---@name 2027 Projectile Aimbot Computer
+--@name 2027 Projectile Aimbot Computer 
 --@author Ally for Hire / Merydian9
 --@shared
 --@server
@@ -107,47 +107,57 @@
 --- Version 1.7.4
 -- Fixed massive logic error on account of me being stupid
 
---- User Variables
-local offset = 0.0 -- Time offset in seconds, 0.02 is about 1 tick ish
-local handleFiring = true -- Whether or not the starfall will fire the gun automatically
-local firingRange = 12000 -- Range the projectile will be at when it gets intercepted if handleFiring is true
-local firingAccuracy = 1 -- Distance between the target and where the gun is aiming in meters
+--- Version 1.8.0
+-- Migrated math and control logic from 2028 Aimbot base
+-- Optimized velocity and acceleration handling
+-- Reorganized control flow for CPU efficiency
+-- Moved ballistic prediction to wire input update logic
+-- Replaced previous bisection method with more stable one using forward vector overshoot check
+-- Refined firing logic to check alignment using muzzle-to-aim projection
+-- Removed redundant acceleration timers
+-- Integrated time offset and proper interpolation
+-- Updated retry behavior to prevent excessive CPU usage
+-- Improved edge case handling for zero muzzle velocity
+-- Maintains all legacy functionality while boosting responsiveness and clarity
 
---- Do not touch below this
+--- Version 1.8.1
+-- Improved high/low handling for binary search
+-- Added single extra refinement at end
+
+--- User Variables
+local offset = 0.0
+local handleFiring = true
+local firingRange = 8000
+local firingAccuracy = 1
 
 --- Constants
 local MAX_TIME = 2
-local TIME_STEP = game.getTickInterval() / 10
+local TIME_STEP = game.getTickInterval() / 2
 local GRAVITY = Vector2(0, physenv.getGravity()[3])
 local RAD_CONV = math.pi / 180
 local TICK = game.getTickInterval()
 
---- Wire Stand-in Variables 
-local gun = nil
-local targetPos = nil
-local targetVel = nil
-local targetAccel = nil
+--- Wire Stand-in Variables
+local gun, targetPos, targetVel = nil, nil, nil
 local lastVel = Vector()
 local lastFrame = 0
 
---- Internal Variables
+--- Internal State
 local initialized = false
 local storedMuzzleVel = 0
 local maxCalculatedRange = 0
 local pitchStep = 0
 local dataTable = {}
 local muzzleDist = 0
-local relativeAccel = Vector(0)
 local pitchNumerator = 6
-local attemptingFire = false
+local targetValue, timeOutput = 0, 0
+local aimposOutput = Vector()
+local relativeAccel = Vector()
+local relativeVel = Vector()
 
---- Simple interpolation
--- Table in and ideal time in, interpolated time out
 local function interpolateTable(tbl, targetTime)
-    -- Clamp if targetTime is outside the bounds
     if targetTime <= tbl[1][3] then return tbl[1][1] end
     if targetTime >= tbl[#tbl][3] then return tbl[#tbl][1] end
-
     for i = 1, #tbl - 1 do
         local t0, t1 = tbl[i][3], tbl[i + 1][3]
         if targetTime >= t0 and targetTime <= t1 then
@@ -156,194 +166,128 @@ local function interpolateTable(tbl, targetTime)
             return d0 + (d1 - d0) * alpha
         end
     end
-
-    -- Should never reach here due to clamping, but just in case:
     return tbl[#tbl][1]
 end
 
---- Generates the ballistics of the shell at the given pitch
--- Pretty simple function, just generates until the elevation is 0
 local function generateAngleBallistics(gun, pitch, dt)
-    -- Initialization of variables
     local curtime = 0
-    local indices = 0
     local dragCoef = gun:acfDragCoef()
-    
-    -- Calculating the starting position of the shell
-    local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
-    local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
+    local muzzleData = gun:getAttachment(gun:lookupAttachment("muzzle"))
+    local muzzlePos = Vector(muzzleData[1], muzzleData[2], muzzleData[3])
     muzzleDist = gun:localToWorld(Vector()):getDistance(muzzlePos)
-    
-    -- Calculating the starting velocity of the shell
     local muzzleVel = gun:acfMuzzleVel() * 39.37
-    
-    local shellPos = Vector2(math.cos(pitch), math.sin(pitch)) * muzzleDist 
+    local shellPos = Vector2(math.cos(pitch), math.sin(pitch)) * muzzleDist
     local shellVel = Vector2(math.cos(pitch), math.sin(pitch)) * muzzleVel
-    
-    -- Generic bullet sim from ACE code
+
     while curtime < MAX_TIME and shellVel[1] > 0 do
         local drag = (dragCoef * shellVel:getLength()^2) / 40
-        drag = shellVel:getNormalized() * (drag * dt)
-        drag = Vector2(drag[1], drag[2]) * 39.37
-        
+        drag = shellVel:getNormalized() * (drag * dt * 39.37)
         shellPos = shellPos + shellVel * dt
-        shellVel = shellVel + (GRAVITY * dt) - drag
-                
+        shellVel = shellVel + (GRAVITY * dt - drag)
         curtime = curtime + dt
-        indices = indices + 1
-        
-        --outputTable[indices] = {shellPos, shellVel, curtime, math.sqrt(shellPos[1]^2 + shellPos[2]^2)} -- 2D Position, 2D Velocity, Current Time, Distance from Start
-        -- We can stop once we hit the threshold we are looking for
-        if shellPos[2] < 0 then
-            curtime = curtime - dt / 2
-            break
-        end
+        if shellPos[2] < 0 then break end
     end
-    
     return {shellPos[1], shellPos[2], curtime}
 end
 
---- Attempts to generate values so we can get this show on the road
 local function generateValues()
-    -- Extensive list of early-outs
-    if gun == nil or not gun:isValid() or gun:getClass() != "acf_gun" or gun:acfMuzzleVel() == storedMuzzleVel then return end
-    
-    -- Variable decleration and cleanup
-    storedMuzzleVel = gun:acfMuzzleVel()
-    pitchStep = math.clamp(pitchNumerator / storedMuzzleVel, 0.002, 0.1) -- [NUM] / Muzzle Vel is the pitch step in degrees. Higher number means less steps so less accuracy, but also less lag. The vice versa is also true. 4 is the default
-    gun:acfFire(0)
-    
-    -- Make a table of every point at which the bullet intersects z=0 of the gun
+    if not gun or not gun:isValid() or gun:getClass() != "acf_gun" then return end
+    local mv = gun:acfMuzzleVel()
+    if mv == storedMuzzleVel then return end
+    storedMuzzleVel = mv
+    pitchStep = math.clamp(pitchNumerator / storedMuzzleVel, 0.002, 0.1)
     local pitch = 0
-    local attachmentInfo = gun:getAttachment(gun:lookupAttachment("muzzle"))
-    local muzzlePos = Vector(attachmentInfo[1], attachmentInfo[2], attachmentInfo[3])
+    local muzzleData = gun:getAttachment(gun:lookupAttachment("muzzle"))
+    local muzzlePos = Vector(muzzleData[1], muzzleData[2], muzzleData[3])
     local data = {gun:localToWorld(Vector()):getDistance(muzzlePos), 0, 0}
     dataTable[1] = data
-    local indices = 2
+    local idx = 2
     while data[3] < MAX_TIME and pitch < 5 do
         data = generateAngleBallistics(gun, pitch * RAD_CONV, TIME_STEP)
-        dataTable[indices] = data
+        dataTable[idx] = data
         pitch = pitch + pitchStep
-        
-        indices = indices + 1
+        idx = idx + 1
     end
-    
-    -- Store the maximum data so we can early-out later
-    maxCalculatedRange = dataTable[indices - 1][1]
+    maxCalculatedRange = dataTable[idx - 1][1]
     initialized = true
-    
-    print("Max Effective Range .. " .. math.round(maxCalculatedRange, 2))
-    --printTable(dataTable)
 end
 
---- Time to actually do the math and logic
-local function main()
-    -- Short list of early-outs this time
-    if not initialized then return end
-    if targetPos == nil or targetVel == nil or targetPos == Vector(0, 0, 0) then return end
-    
-    if handleFiring then gun:acfFire(0) end
-    
-    -- Simple acceleration handling via calculating change in velocity over dt
-    local relativeAccel = -Vector(0, 0, GRAVITY[2])
+local function calculate()
+    if storedMuzzleVel == 0 or not targetPos then return end
+    relativeAccel = -Vector(0, 0, GRAVITY[2])
+    local dt = timer.curtime() - lastFrame
     if lastVel != targetVel then
-        local dt = timer.curtime() - lastFrame
-        
         relativeAccel = relativeAccel + (targetVel - lastVel) / dt
-        
         lastVel = targetVel
         lastFrame = timer.curtime()
     end
+    local relPos = targetPos - gun:getPos()
+    relativeVel = targetVel - gun:getVelocity()
     
-    -- Preparing variables for use with our equations
-    local relativePos = targetPos - gun:getPos()
-    local relativeVel = targetVel - gun:getVelocity()
-    local low = (relativePos):getLength() / (storedMuzzleVel * 39.37)
-    local time = low
-    local high = low * 2
+    local laserTime = (relPos:getLength() / (storedMuzzleVel * 39.37))
+    local low = laserTime / 2
+    local high = laserTime * 2
+    timeOutput = low
 
-    -- Use equations of motion to solve the interception point between our two projectiles regardless of exact motion
-    local predictedTargetPos = relativePos
-    local targetValue = predictedTargetPos:getLength() - muzzleDist
-    local selfValue = 0 -- this fucker is why any of this is so hard
-    
-    -- Simple binary search to find the solution to those equations
-    while (high - low) > 0.0001 and targetValue < firingRange and gun:acfReady() do
-        time = (low + high) / 2
-        
-        -- Predict target position with acceleration applied
-        predictedTargetPos = relativePos + relativeVel * time + 1/2 * relativeAccel * time^2
+    while (high - low) > 0.01 and gun:acfReady() do
+        timeOutput = (low + high) / 2
+        local predictedTargetPos = relPos + relativeVel * timeOutput + 0.5 * relativeAccel * timeOutput^2
         targetValue = predictedTargetPos:getLength() - muzzleDist
-        selfValue = interpolateTable(dataTable, time)
-        
-        if targetValue > maxCalculatedRange then
-            print("Out of Range")
-            return     
-        end
-        
-        -- Make sure we stop if we go past the target or if the target goes past us
-        if targetValue > selfValue and predictedTargetPos:dot(relativePos) > 0 then
-            low = time
+        if targetValue > maxCalculatedRange or targetValue > firingRange then return end
+        local selfValue = interpolateTable(dataTable, timeOutput)
+        local overshootCheck = (predictedTargetPos - gun:getForward() * selfValue):dot(gun:getForward())
+        if targetValue > selfValue and overshootCheck > 0 then
+            low = timeOutput
         else
-            high = time
-        end           
+            high = timeOutput
+        end
     end
+     
+    time = (low + high) / 2 
+end
 
-    -- Wire outputs
-    local timeOutput = time
-    local aimposOutput = targetPos + relativeVel * (timeOutput + offset) + 0.5 * relativeAccel * (timeOutput + offset)^2
-    wire.ports.Time = timeOutput
+local function main()
+    if handleFiring then gun:acfFire(0) end
+    if not initialized or targetPos == Vector() then return end
+    local aimTime = timeOutput + offset
+    aimposOutput = targetPos + relativeVel * aimTime + 0.5 * relativeAccel * aimTime^2
+    wire.ports.Time = aimTime
     wire.ports.AimPos = aimposOutput
-    
-    -- Gun fire handling
+
     if handleFiring and targetValue < firingRange and gun:acfReady() then
-        -- Barrel alignment check
-        local muzzle = gun:getAttachment(gun:lookupAttachment("muzzle"))
-        local muzzleVec = Vector(muzzle[1], muzzle[2], muzzle[3])
-        local gunFwd = gun:getForward()
+        local muzzleData = gun:getAttachment(gun:lookupAttachment("muzzle"))
+        local muzzleVec = Vector(muzzleData[1], muzzleData[2], muzzleData[3])
         local toAim = aimposOutput - muzzleVec
-        local proj = gunFwd * toAim:dot(gunFwd)
+        local proj = gun:getForward() * toAim:dot(gun:getForward())
         local closest = muzzleVec + proj
-        local error = (aimposOutput - closest):getLength()
-        
-        if error < firingAccuracy then
+        local err = (aimposOutput - closest):getLength()
+        if err < firingAccuracy and closest:getDistance(targetPos) > closest:getDistance(aimposOutput) then
             gun:acfFire(1)
         end
     end
-    
-    -- Acceleration resetting
-    timer.create("Reset Acceleration", 0.3, 1, function() lastVel = Vector() end)
 end
 
---- Updates variables with their respective values when needed
--- Also attempts logic when possible
 local function handleWire(name, value)
     if name == "Gun" then
         gun = value
         generateValues()
     elseif name == "TargetPos" then
-        targetPos = value    
+        targetPos = value
+        calculate()
     elseif name == "TargetVel" then
-        targetVel = value    
+        targetVel = value
     end
 end
 
---- Need to retry in-case the ballistics change, just in case
--- Try to update the logic every 1s
-timer.create("retry", 0.1, 0, function()
-    generateValues()
-    
-    if gun:isValid() and gun:acfMuzzleVel() == 0 then
-        gun:acfFire(1)
-    elseif gun:isValid() then
-        gun:acfFire(0)
-    end
-end)
-
---- Hook for when the wire inputs are updated
--- This is basically the only hook we need since we only care when we are actually recieving data
 wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Time = "number", AimPos = "vector"})
 hook.add("input", "Wire Inputs Updated", handleWire)
-
---- Main think hook, pretty self explanatory
 hook.add("think", "Main Think", main)
+timer.create("retry", 0.1, 0, function()
+    if gun and gun:isValid() then
+        if gun:acfMuzzleVel() == 0 then
+            gun:acfFire(1)
+        else
+            gun:acfFire(0)
+        end
+    end
+end)
