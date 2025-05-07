@@ -23,6 +23,9 @@
 --- Version 1.1.1
 -- Merged generate_ballistics_table and generate_ballistics_capped internally
 
+--- Version 1.1.2
+-- Added capability to just output pitch without given time
+
 -- Constants
 local GRAVITY = physenv.getGravity()
 local TIMESTEP = game.getTickInterval()
@@ -113,12 +116,14 @@ local function logic(gun, position, time)
             low = mid
         end
     end
-
+    
+    if time == nil then return nil, mid end
+    
     local outputData = generate_ballistics(gun, mid, 1, distance, time, false)
     return outputData, mid
 end
 
-print("Ballistics Lib v1.1.1 Loaded")
+print("Ballistics Lib v1.1.2 Loaded")
 return {
     generate_ballistics = generate_ballistics,
     generate_ballistics_table = function(g, a, s)
