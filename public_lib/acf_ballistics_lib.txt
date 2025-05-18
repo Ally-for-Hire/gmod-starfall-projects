@@ -26,6 +26,11 @@
 --- Version 1.1.2
 -- Added capability to just output pitch without given time
 
+--- Version 1.1.3
+-- *I hate this many versions for small changes but what can you do
+-- Updated logic function with complexity option
+-- Fixed output logic
+
 -- Constants
 local GRAVITY = physenv.getGravity()
 local TIMESTEP = game.getTickInterval()
@@ -96,7 +101,7 @@ local function calculate_maximum_distance(gun)
 end
 
 -- Finds best firing angle for a target position using bisection
-local function logic(gun, position, time)
+local function logic(gun, position, time, complexity)
     local distance = gun:getPos():getDistance(position)
     local vertical = position[3] - gun:getPos()[3]
     local direct = math.deg(math.asin(vertical / distance)) 
@@ -109,7 +114,7 @@ local function logic(gun, position, time)
 
     while (high - low) > 0.1 do
         mid = (low + high) / 2
-        test = generate_ballistics(gun, mid, 8, distance, MAXTIME, false)
+        test = generate_ballistics(gun, mid, complexity * 8, distance, MAXTIME, false)
         if test[1][2] > comparison then
             high = mid
         else
@@ -119,11 +124,11 @@ local function logic(gun, position, time)
     
     if time == nil then return nil, mid end
     
-    local outputData = generate_ballistics(gun, mid, 1, distance, time, false)
+    local outputData = generate_ballistics(gun, mid, complexity, 9999999, time, false)
     return outputData, mid
 end
 
-print("Ballistics Lib v1.1.2 Loaded")
+print("Ballistics Lib v1.1.3 Loaded")
 return {
     generate_ballistics = generate_ballistics,
     generate_ballistics_table = function(g, a, s)
@@ -133,5 +138,7 @@ return {
         return generate_ballistics(g, a, s or 1, c, t, false)
     end,
     calculate_maximum_distance = calculate_maximum_distance,
-    logic = logic
+    logic = function(g, p, t, c)
+        return logic(g, p, t, c or 1)
+    end
 }
