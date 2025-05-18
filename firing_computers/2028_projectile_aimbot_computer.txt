@@ -22,7 +22,7 @@
 ------------------------------------------------------------
 -- Configurable Options
 ------------------------------------------------------------
-local offset = 0.00                  -- Time offset in seconds
+local offset = 0.02                  -- Time offset in seconds
 local recalcFullSim = false         -- Recalculate full sim every loop (low MV only)
 local simplifiedMath = true        -- Use simplified math (no drag)
 local handleFiring = true           -- Whether script should fire the gun
