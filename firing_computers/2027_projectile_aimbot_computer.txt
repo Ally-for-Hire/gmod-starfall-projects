@@ -123,11 +123,15 @@
 -- Improved high/low handling for binary search
 -- Added single extra refinement at end
 
+--- Version 1.8.2
+-- Implemented distance bisection rather than time
+-- *This will ensure the output is close to the target, before it was just assumed that it was
+
 --- User Variables
 local offset = 0.0
 local handleFiring = true
-local firingRange = 8000
-local firingAccuracy = 1
+local firingRange = 18000
+local firingAccuracy = 0.3
 
 --- Constants
 local MAX_TIME = 2
@@ -227,13 +231,16 @@ local function calculate()
     local low = laserTime / 2
     local high = laserTime * 2
     timeOutput = low
+    
+    targetValue = 1000
+    local selfValue = 0
 
-    while (high - low) > 0.01 and gun:acfReady() do
+    while math.abs(targetValue - selfValue) > 5 and math.abs(high - low) > 0.0001 do
         timeOutput = (low + high) / 2
         local predictedTargetPos = relPos + relativeVel * timeOutput + 0.5 * relativeAccel * timeOutput^2
         targetValue = predictedTargetPos:getLength() - muzzleDist
         if targetValue > maxCalculatedRange or targetValue > firingRange then return end
-        local selfValue = interpolateTable(dataTable, timeOutput)
+        selfValue = interpolateTable(dataTable, timeOutput)
         local overshootCheck = (predictedTargetPos - gun:getForward() * selfValue):dot(gun:getForward())
         if targetValue > selfValue and overshootCheck > 0 then
             low = timeOutput
@@ -241,14 +248,14 @@ local function calculate()
             high = timeOutput
         end
     end
-     
+    
     time = (low + high) / 2 
 end
 
 local function main()
     if handleFiring then gun:acfFire(0) end
     if not initialized or targetPos == Vector() then return end
-    local aimTime = timeOutput + offset
+    local aimTime = timeOutput + offset + TICK
     aimposOutput = targetPos + relativeVel * aimTime + 0.5 * relativeAccel * aimTime^2
     wire.ports.Time = aimTime
     wire.ports.AimPos = aimposOutput
