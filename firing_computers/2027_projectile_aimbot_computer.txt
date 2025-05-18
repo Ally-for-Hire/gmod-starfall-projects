@@ -1,163 +1,69 @@
---@name 2027 Projectile Aimbot Computer 
+--@name 2027 Projectile Aimbot Computer
 --@author Ally for Hire / Merydian9
 --@shared
 --@server
 
---- Opening Blurb
--- *This is assuming target on a level plane, but at close-range it honestly shouldn't matter excessively
--- *This ends up working remarkebly well on targets even far away with elevation distances, however it struggles
--- *with fast moving targets for some reason. The math doesn't support that happening so it's kinda shrug from me.
--- *With 1.6 being the final version this solution should be about as optimized and accurate as it's ever going to
--- *get. If you're reading this and understand where i fucked up if i did, reach out at AllyFH.
+------------------------------------------------------------
+-- Version History
+------------------------------------------------------------
+-- 1.1.0: Comments added, fixed firing and data handling logic
+-- 1.2.0: Fixed acceleration bug, cleaned up code
+-- 1.3.0: Accuracy improvements, proper muzzle distance, cleaner outputs
+-- 1.4.0: TIME_STEP refinement removed, fuze fix
+-- 1.5.0: Acceleration + velocity cleanup, major optimizations
+-- 1.5.1: Fixed ACF3 fire compatibility
+-- 1.5.2: ACE compatibility hotfix
+-- 1.6.0: Minor optimizations, added delay for fuzed weapons
+-- 1.6.1: Muzzle dist correction
+-- 1.7.0: Dot product aim logic, time minimum clamp
+-- 1.7.11.7.4: Cleanup, logic fix, naming consistency
+-- 1.8.0: Migrated control logic from 2028 base
+-- 1.8.1: Binary search refinement
+-- 1.8.2: Switched to distance-based bisection
+-- 1.9.0: Complete cleanup, *functionality questionable
 
---- Version 1.1.0
--- Comments added
--- Slight code cleanup
--- Option to fire added
--- Fixed an issue with data table logic
---    > Stopped modifying first data point, added additional data point at start
--- Fixed an issue with firing logic
---    > Added check for invalid TargetPos
--- Fixed an issue with acceleration logic
---    > Ignored overlapping data and updated stored LastVel variable
-
---- Version 1.2.0
--- Cleaned up variables and code further
--- Added further comments
--- Fixed acceleration handling issue introduced by 1.1
---    > A misstype made acceleration ignored
-
---- Version 1.3.0
--- Cleaned up code even more
--- Fixed fuze default case
---    > Made it -1 instead of 0
--- Accounted for muzzle distance in calculations
--- Improved accuracy sligtly
---    > Returned a more accurate time
---    > Made TIME_STEP more refined
--- Added a default 0.01 offset on AimPos
-
---- Version 1.4.0
--- Removed the refinement of TIME_STEP
--- Fixed handling of fuze time with offset
-
---- Version 1.5.0
--- Stored acceleration and updated its handling
--- Added a variable for the pitch numerator
--- Fixed radian conversion
--- Improved debug printout
--- Added clamp on pitch step
--- Removed default 0.01 offset
--- Renamed acceleration variable to be more accurate
--- Properly factored velocity in AimPos output
---    > Now correctly uses relVel instead of targetVel
--- Improved optimization significantly
---    > Lowered MAX_TIME
---    > Improved endpoint for data table generation
---    > Removed extraneous simulation
--- Improved accuracy
---    > Refined TIME_STEP
---    > Refined pitchNumerator
-
---- Version 1.5.1
--- Fixed the acfFire function for use with ACF3
--- *Considering having it output the max range of a no-drag solution, and then using that for optimization purposes
--- Hotfix: offset removal
-
---- Version 1.5.2
--- Hotfix: Fixed acfFire function for use with ACE
--- *Considering having a way to detect later
-
---- Version 1.6.0
--- Slight optimization increases
---    > Only does math when target is within range
---    > Only attempts to fire when gun is ready
---    > Made binary search start more refined
--- Added a delay to firing for accuracy with single-shot fuzed weapons
--- Fixed bug involving the handling of targetValue before calculations are ran
--- *This is probably as good as this is going to get as is honestly
--- Updated wording for comments
-
---- Version 1.6.1
--- Super tiny update to account for correct muzzle distance
-
---- Version 1.7.0
--- Used dot products instead of the bs i was doing before
--- Changed first data point from 0 to muzzledist
--- Added interpolation clamping
--- Added minimum time to binary search of 0.01
--- Skips math when we area too close and uses the minimum time
--- Added variables for output
--- Introduced TICK constant and added it to the time output by default
--- Improved firing logic to only fire when the gun is aiming at target
-
---- Version 1.7.1
--- Cleaned up unused code
--- Fixed our friend that I actually forgot to do
---    > Fixed first data point to actually be muzzledist
-
---- Version 1.7.2
--- Fixed several bugs implemented when attempting to reduce lag
---    > Fixed both incorrect parameters for the binary search
-
---- Version 1.7.3
--- Naming convention change
-
---- Version 1.7.4
--- Fixed massive logic error on account of me being stupid
-
---- Version 1.8.0
--- Migrated math and control logic from 2028 Aimbot base
--- Optimized velocity and acceleration handling
--- Reorganized control flow for CPU efficiency
--- Moved ballistic prediction to wire input update logic
--- Replaced previous bisection method with more stable one using forward vector overshoot check
--- Refined firing logic to check alignment using muzzle-to-aim projection
--- Removed redundant acceleration timers
--- Integrated time offset and proper interpolation
--- Updated retry behavior to prevent excessive CPU usage
--- Improved edge case handling for zero muzzle velocity
--- Maintains all legacy functionality while boosting responsiveness and clarity
-
---- Version 1.8.1
--- Improved high/low handling for binary search
--- Added single extra refinement at end
-
---- Version 1.8.2
--- Implemented distance bisection rather than time
--- *This will ensure the output is close to the target, before it was just assumed that it was
-
---- User Variables
+------------------------------------------------------------
+-- Configurable Options
+------------------------------------------------------------
 local offset = 0.0
 local handleFiring = true
 local firingRange = 18000
 local firingAccuracy = 0.3
 
---- Constants
+------------------------------------------------------------
+-- Constants
+------------------------------------------------------------
 local MAX_TIME = 2
 local TIME_STEP = game.getTickInterval() / 2
 local GRAVITY = Vector2(0, physenv.getGravity()[3])
 local RAD_CONV = math.pi / 180
 local TICK = game.getTickInterval()
 
---- Wire Stand-in Variables
-local gun, targetPos, targetVel = nil, nil, nil
+------------------------------------------------------------
+-- Internal State
+------------------------------------------------------------
+local gun = nil
+local targetPos, targetVel = nil, nil
 local lastVel = Vector()
 local lastFrame = 0
 
---- Internal State
 local initialized = false
 local storedMuzzleVel = 0
 local maxCalculatedRange = 0
 local pitchStep = 0
-local dataTable = {}
-local muzzleDist = 0
 local pitchNumerator = 6
-local targetValue, timeOutput = 0, 0
-local aimposOutput = Vector()
-local relativeAccel = Vector()
-local relativeVel = Vector()
+local muzzleDist = 0
 
+local dataTable = {}
+local aimposOutput = Vector()
+local relativeVel = Vector()
+local relativeAccel = Vector()
+local targetValue = 0
+local timeOutput = 0
+
+------------------------------------------------------------
+-- Utility: Interpolated Table Value
+------------------------------------------------------------
 local function interpolateTable(tbl, targetTime)
     if targetTime <= tbl[1][3] then return tbl[1][1] end
     if targetTime >= tbl[#tbl][3] then return tbl[#tbl][1] end
@@ -172,15 +78,20 @@ local function interpolateTable(tbl, targetTime)
     return tbl[#tbl][1]
 end
 
+------------------------------------------------------------
+-- Ballistics Generator: Given pitch, simulate shell
+------------------------------------------------------------
 local function generateAngleBallistics(gun, pitch, dt)
     local curtime = 0
     local dragCoef = gun:acfDragCoef()
     local muzzleData = gun:getAttachment(gun:lookupAttachment("muzzle"))
     local muzzlePos = Vector(muzzleData[1], muzzleData[2], muzzleData[3])
     muzzleDist = gun:localToWorld(Vector()):getDistance(muzzlePos)
+
     local muzzleVel = gun:acfMuzzleVel() * 39.37
-    local shellPos = Vector2(math.cos(pitch), math.sin(pitch)) * muzzleDist
-    local shellVel = Vector2(math.cos(pitch), math.sin(pitch)) * muzzleVel
+    local direction = Vector2(math.cos(pitch), math.sin(pitch))
+    local shellPos = direction * muzzleDist
+    local shellVel = direction * muzzleVel
 
     while curtime < MAX_TIME and shellVel[1] > 0 do
         local drag = (dragCoef * shellVel:getLength()^2) / 40
@@ -190,20 +101,28 @@ local function generateAngleBallistics(gun, pitch, dt)
         curtime = curtime + dt
         if shellPos[2] < 0 then break end
     end
+
     return {shellPos[1], shellPos[2], curtime}
 end
 
+------------------------------------------------------------
+-- Build Ballistics Table (Runs Once)
+------------------------------------------------------------
 local function generateValues()
     if not gun or not gun:isValid() or gun:getClass() != "acf_gun" then return end
+
     local mv = gun:acfMuzzleVel()
     if mv == storedMuzzleVel then return end
+
     storedMuzzleVel = mv
     pitchStep = math.clamp(pitchNumerator / storedMuzzleVel, 0.002, 0.1)
-    local pitch = 0
+
     local muzzleData = gun:getAttachment(gun:lookupAttachment("muzzle"))
     local muzzlePos = Vector(muzzleData[1], muzzleData[2], muzzleData[3])
     local data = {gun:localToWorld(Vector()):getDistance(muzzlePos), 0, 0}
     dataTable[1] = data
+
+    local pitch = 0
     local idx = 2
     while data[3] < MAX_TIME and pitch < 5 do
         data = generateAngleBallistics(gun, pitch * RAD_CONV, TIME_STEP)
@@ -211,12 +130,17 @@ local function generateValues()
         pitch = pitch + pitchStep
         idx = idx + 1
     end
+
     maxCalculatedRange = dataTable[idx - 1][1]
     initialized = true
 end
 
+------------------------------------------------------------
+-- Solver: Predict Time-to-Intercept
+------------------------------------------------------------
 local function calculate()
     if storedMuzzleVel == 0 or not targetPos then return end
+
     relativeAccel = -Vector(0, 0, GRAVITY[2])
     local dt = timer.curtime() - lastFrame
     if lastVel != targetVel then
@@ -224,39 +148,46 @@ local function calculate()
         lastVel = targetVel
         lastFrame = timer.curtime()
     end
+
     local relPos = targetPos - gun:getPos()
     relativeVel = targetVel - gun:getVelocity()
-    
-    local laserTime = (relPos:getLength() / (storedMuzzleVel * 39.37))
-    local low = laserTime / 2
+
+    local laserTime = relPos:getLength() / (storedMuzzleVel * 39.37)
+    local low = math.max(0.01, laserTime / 2)
     local high = laserTime * 2
-    timeOutput = low
-    
-    targetValue = 1000
     local selfValue = 0
+
+    targetValue = 1000
+    timeOutput = low
 
     while math.abs(targetValue - selfValue) > 5 and math.abs(high - low) > 0.0001 do
         timeOutput = (low + high) / 2
         local predictedTargetPos = relPos + relativeVel * timeOutput + 0.5 * relativeAccel * timeOutput^2
         targetValue = predictedTargetPos:getLength() - muzzleDist
+
         if targetValue > maxCalculatedRange or targetValue > firingRange then return end
+
         selfValue = interpolateTable(dataTable, timeOutput)
         local overshootCheck = (predictedTargetPos - gun:getForward() * selfValue):dot(gun:getForward())
+
         if targetValue > selfValue and overshootCheck > 0 then
             low = timeOutput
         else
             high = timeOutput
         end
     end
-    
-    time = (low + high) / 2 
 end
 
+------------------------------------------------------------
+-- Main Think Logic
+------------------------------------------------------------
 local function main()
     if handleFiring then gun:acfFire(0) end
     if not initialized or targetPos == Vector() then return end
+
     local aimTime = timeOutput + offset + TICK
     aimposOutput = targetPos + relativeVel * aimTime + 0.5 * relativeAccel * aimTime^2
+
     wire.ports.Time = aimTime
     wire.ports.AimPos = aimposOutput
 
@@ -267,12 +198,16 @@ local function main()
         local proj = gun:getForward() * toAim:dot(gun:getForward())
         local closest = muzzleVec + proj
         local err = (aimposOutput - closest):getLength()
+
         if err < firingAccuracy and closest:getDistance(targetPos) > closest:getDistance(aimposOutput) then
             gun:acfFire(1)
         end
     end
 end
 
+------------------------------------------------------------
+-- Wire Input Handling
+------------------------------------------------------------
 local function handleWire(name, value)
     if name == "Gun" then
         gun = value
@@ -285,9 +220,17 @@ local function handleWire(name, value)
     end
 end
 
-wire.adjustPorts({Gun = "entity", TargetPos = "vector", TargetVel = "vector"},{Time = "number", AimPos = "vector"})
+------------------------------------------------------------
+-- Setup Wire Ports + Retry Logic
+------------------------------------------------------------
+wire.adjustPorts(
+    { Gun = "entity", TargetPos = "vector", TargetVel = "vector" },
+    { Time = "number", AimPos = "vector" }
+)
+
 hook.add("input", "Wire Inputs Updated", handleWire)
 hook.add("think", "Main Think", main)
+
 timer.create("retry", 0.1, 0, function()
     if gun and gun:isValid() then
         if gun:acfMuzzleVel() == 0 then
