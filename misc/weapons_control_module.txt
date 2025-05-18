@@ -1,0 +1,69 @@
+--@name Weapons Control Module
+--@author Ally for Hire / Merydian9
+--@server
+
+--- Version 1.0.0
+
+--- Variables
+local playerAimPos, mathAimPos = Vector(), Vector()
+local playerControl, canReturnControl = true, true
+local deactivating = false
+local turretIdleStage = 0
+local idleAngle = chip():getAngles() + Angle(90, 180, 0)
+wire.ports.AimAngle = idleAngle
+
+local function main()
+    if not deactivating then
+        outputVector = playerAimPos
+        if not playerControl then
+            outputVector = mathAimPos
+        end
+        
+        wire.ports.AimPos = outputVector
+    else
+        if math.abs(wire.ports.DegreesA) < 0.05 and math.abs(wire.ports.DegreesB) < 0.05 then -- Need to fix this, possibley make on global scale?
+            wire.ports.TurretActive = 0
+        end
+    end
+    
+    if turretIdleStage == 1 then
+        wire.ports.AimAngle = idleAngle + Angle(0.1, 0, 0)   
+        turretIdleStage = 2 
+        timer.create("Idle Stage Update", 0.1, 1, function() 
+            wire.ports.AimAngle = idleAngle 
+        end)    
+    end      
+end
+
+--- Updates variables with their respective values when needed
+local function handleWire(name, value)
+    if name == "DegreesA" or name == "DegreesB" then return end
+    
+    turretIdleStage = 0
+    timer.create("Idle Stage Init", 3, 0, function() turretIdleStage = math.max(1, turretIdleStage) end)
+    
+    if name == "PlayerAimPos" then
+        playerAimPos = value
+    elseif name == "MathAimPos" then
+        mathAimPos = value   
+        playerControl, canReturnControl = false, false
+        timer.create("Return Control", 1, 1, function() canReturnControl = true end)
+    elseif name == "Fire" then
+        wire.ports.Fire = value
+    elseif name == "TurretActive" then
+        if value == 0 then
+            deactivating = true
+            turretIdleStage = 1
+        else
+            deactivating = false
+            wire.ports.TurretActive = 1
+        end
+    end
+end
+
+--- Hook for when the wire inputs are updated
+wire.adjustPorts({TurretActive = "number", Fire = "number", PlayerAimPos = "vector", MathAimPos = "vector", DegreesA = "number", DegreesB = "number"},{TurretActive = "number", Fire = "number", AimPos = "vector", AimAngle = "angle"})
+hook.add("input", "Wire Inputs Updated", handleWire)
+
+--- Main think hook, pretty self explanatory
+hook.add("think", "Main Think", main)
