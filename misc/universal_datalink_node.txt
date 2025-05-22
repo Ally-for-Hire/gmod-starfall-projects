@@ -1,0 +1,193 @@
+--@name Universal Datalink Node
+--@author Ally for Hire / Merydian9
+--@include ../public_lib/helpful_hud_functions.txt
+
+--- Version 1.0.0
+
+local CLIENTDISPLAY = true
+local INTERCEPTDATA = false
+local TYPE          = 1    -- 1 = Vehicle Radar, 2 = Missile Radar
+
+if SERVER then
+    local positions, velocities, ids, owners = {}, {}, {}, {}
+    local currentTracks = {}
+    local nodeCount, updateCount = 0, 0
+    local masterNode = nil
+    local lastTime = timer.curtime()
+    
+    local function handleWire(name, value)
+        if updateCount == -1 then updateCount = 0 end
+        
+        if name == "Position" then positions = value updateCount = updateCount + 1
+        elseif name == "Velocity" then velocities = value updateCount = updateCount + 1
+        elseif name == "IDs" then ids = value updateCount = updateCount + 1
+        elseif name == "Owner" then owners = value updateCount = updateCount + 1
+        end
+        
+        if updateCount == 4 then updateCount = -1 end
+        
+        if not CLIENTDISPLAY then return end
+        
+        local curTime = timer.curtime()
+        
+        if updateCount == -1 and (curTime - lastTime) > 0.3 then
+            net.start("Server Variable Update")
+            net.writeTable({positions, velocities, ids, owners})
+            net.send()
+            
+            updateCount = 0
+            lastTime = curTime
+        end
+    end
+    
+    wire.adjustPorts(
+        {IDs = "Array", Owner = "Array", Position = "Array", Velocity = "Array"},
+        {OutputIDs = "Array", OutputOwners = "Array", OutputPos = "Array", OutputVels = "Array"}
+    )
+    
+    hook.add("input", "Wire Inputs Updated", handleWire)
+    
+    hook.add("remote", "Remote Response", function(sender, owner, payload)
+        if sender == chip() then return end
+        
+        if payload == "Node Ping" then
+            hook.runRemote(sender, "Node Response")
+        elseif payload == "Node Response" then
+            nodeCount = nodeCount + 1
+            
+            net.start("Node Count Changed")
+            net.writeInt(nodeCount, 4)
+            net.send()
+        elseif payload == "Master Response" and masterNode == nil or payload == "Master Ping" then
+            masterNode = sender
+        elseif payload != "Master Response" and INTERCEPTDATA then
+            print("---- Information Intercepted")
+            print("---- Owner and Sender:")
+            print(owner)
+            print(sender)
+            print("---- Data:")
+            print(payload)
+            print("---- End of Information")
+        end
+    end)
+    
+    timer.create("Send", 0.1, 1, function() hook.runRemote(nil, "Node Ping") end)
+    
+    --hook.add("removed", "Chip Removed", function() hook.runRemote(nil, "Node Removal") end)
+elseif CLIENT and CLIENTDISPLAY then
+    if player() != owner() then return end
+    
+    local fps = 30
+    local hudcolor = Color(255, 255, 255)
+    
+    local hudRT = "Main"
+    local hudStatic = "Static"
+    local lastHUDUpdate = timer.curtime()
+    local lastServerUpdate = timer.curtime()
+    local resx, resy, nodeCount = 0, 0, 0
+    local drawStatic = true
+    local lib = require("../public_lib/helpful_hud_functions.txt")
+    
+    local fontbig = render.createFont("DefaultFixed", 30, 1200)
+    local fontmed = render.createFont("DefaultFixed", 20, 1200)
+    local fontsmall = render.createFont("DefaultFixed", 15, 1200)
+    
+    local positions, velocities, ids, owners = {}, {}, {}, {}
+    local uniqueIDs = 0
+        
+    enableHud(player(), true)
+    render.createRenderTarget(hudRT)
+    render.createRenderTarget(hudStatic)
+    
+    local function updateHud()
+        if timer.curtime() - lastHUDUpdate < 1 / fps then return end
+        lastHUDUpdate = timer.curtime()
+        local x, y = 512, 512
+        
+        _selectRT(hudRT)
+            render.clear(COL_RENDERTARGET)
+            _setColor(hudcolor)
+            _setFont(fontmed)
+            _drawText(x + 90, y - 5, #ids, TEXT_ALIGN.RIGHT)
+            _drawText(x + 90, y + 20, uniqueIDs, TEXT_ALIGN.RIGHT)
+            
+            _setFont(fontsmall)
+            
+            _setColor(COL_RED)
+            _drawText(x + 90, y + 85, "LINK", TEXT_ALIGN.RIGHT)
+            radarDataColor = (timer.curtime() - lastServerUpdate < 0.4 and #ids == #positions and #positions == #velocities) and COL_GREEN or COL_RED
+            _setColor(radarDataColor)
+            _drawText(x, y + 85, "RADAR", TEXT_ALIGN.CENTER)
+        _selectRT()
+        
+        if not drawStatic then return end
+        
+        _selectRT(hudStatic)
+            render.clear(COL_RENDERTARGET)
+            _setColor(Color(0, 0, 0, 200))
+            drawCenterRect(x, y - 52.5, 200, 30)
+
+            _setColor(Color(0, 0, 0, 150))
+            drawCenterRect(x, y + 37.5, 200, 150)
+            
+            _setColor(hudcolor)
+            _setFont(fontbig)
+            _drawText(x - 100, y - 67.5, "DATA NODE " .. nodeCount, TEXT_ALIGN.LEFT)
+            
+            drawCenterRect(x, y - 37.5, 200, 2)
+            
+            _setFont(fontmed)
+            _drawText(x - 90, y - 30, "TRACKING DATA", TEXT_ALIGN.LEFT)
+            _drawText(x - 90, y + 55, "SYSTEM STATUS", TEXT_ALIGN.LEFT)
+            
+            _setFont(fontsmall)
+            _drawText(x - 90, y, "CONTACTS", TEXT_ALIGN.LEFT)
+            _drawText(x - 90, y + 30, "UNIQUE OWNERS", TEXT_ALIGN.LEFT)
+            
+            _setColor(COL_GREEN)
+            _drawText(x - 90, y + 85, "CHIP", TEXT_ALIGN.LEFT)
+        _selectRT()
+        
+        drawStatic = false
+    end
+    
+    local function renderHud()
+        resx, resy = render.getResolution()
+        local x, y = resx / 2, resy / 2
+        
+        _setRTTexture(hudStatic)
+        _drawTexturedRect(150 - 512 + 225 * nodeCount, 120 - 512, 1024, 1024)
+        
+        _setRTTexture(hudRT)
+        _drawTexturedRect(150 - 512 + 225 * nodeCount, 120 - 512, 1024, 1024)
+    end
+    
+    local function updateWire()
+        local data = net.readTable()
+        
+        positions = data[1]
+        velocities = data[2]
+        ids = data[3]
+        owners = data[4]
+        
+        uniqueIDs = 0
+        local knownOwners = {}
+        for key, value in pairs(owners) do
+            if knownOwners[value] == true then continue end
+            
+            knownOwners[value] = true
+            uniqueIDs = uniqueIDs + 1
+        end
+        
+        lastServerUpdate = timer.curtime()
+    end
+    
+    hook.add("drawhud", "Render HUD", renderHud)
+    net.receive("Server Variable Update", updateWire)
+    net.receive("Node Count Changed", function()
+        nodeCount = net.readInt(4)
+        drawStatic = true
+    end)
+    hook.add("renderoffscreen", "Update HUD", updateHud)
+end
+
