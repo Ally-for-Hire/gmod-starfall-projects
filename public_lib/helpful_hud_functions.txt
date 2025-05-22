@@ -58,6 +58,6 @@ end
 --- Function to draw a rectangle outline centered on x, y
 -- x, y: the middle of the rectangle
 -- width, height: the width and height of the rectangle
-function drawCenterRectOutline (x, y, width, height) 
-    _drawRectOutline(x - width / 2, y - height / 2, width, height) 
+function drawCenterRectOutline (x, y, width, height, thickness) 
+    _drawRectOutline(x - width / 2, y - height / 2, width, height, thickness) 
 end
