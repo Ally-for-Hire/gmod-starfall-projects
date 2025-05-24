@@ -24,13 +24,11 @@ if SERVER then
         elseif name == "Owner" then owners = value updateCount = updateCount + 1
         end
         
-        if updateCount == 4 then updateCount = -1 end
-        
-        if not CLIENTDISPLAY then return end
-        
         local curTime = timer.curtime()
         
-        if updateCount == -1 and (curTime - lastTime) > 0.3 then
+        if updateCount == 4 then hook.runRemote(masterNode, {position, velocity, ids, owner, curTime}) updateCount = -1 end
+        
+        if updateCount == -1 and (curTime - lastTime) > 0.3 and CLIENTDISPLAY then
             net.start("Server Variable Update")
             net.writeTable({positions, velocities, ids, owners})
             net.send()
@@ -60,6 +58,7 @@ if SERVER then
             net.send()
         elseif payload == "Master Response" and masterNode == nil or payload == "Master Ping" then
             masterNode = sender
+            print("Master Node Connected")
         elseif payload != "Master Response" and INTERCEPTDATA then
             print("---- Information Intercepted")
             print("---- Owner and Sender:")
