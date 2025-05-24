@@ -26,8 +26,8 @@ local offset = 0.02                  -- Time offset in seconds
 local recalcFullSim = false         -- Recalculate full sim every loop (low MV only)
 local simplifiedMath = true        -- Use simplified math (no drag)
 local handleFiring = true           -- Whether script should fire the gun
-local firingRange = 120000           -- Max intercept distance for firing
-local firingAccuracy = 6            -- Acceptable aiming error in units
+local firingRange = 1200000           -- Max intercept distance for firing
+local firingAccuracy = 15            -- Acceptable aiming error in units
 
 ------------------------------------------------------------
 -- Constants and Globals
