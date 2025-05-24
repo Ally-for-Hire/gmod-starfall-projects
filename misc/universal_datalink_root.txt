@@ -1,0 +1,90 @@
+--@name Universal Datalink Root
+--@author Ally for Hire / Merydian9
+--@include ../public_lib/helpful_hud_functions.txt
+
+--- Version 1.0.0
+
+local CLIENTDISPLAY = true
+
+if SERVER then
+    local currentVehicleTracks = {}
+    local currentMissileTracks = {}
+    local currentTracks = {currentVehicleTracks, currentMissileTracks}
+    
+    local checkedIDs = {}
+    local lastUpdate = timer.curtime()
+    
+    hook.add("remote", "Remote Response", function(sender, owner, payload)
+        if sender == chip() then return end
+    
+        if payload == "Node Ping" then
+            hook.runRemote(sender, "Master Response")
+        elseif #payload > 0 then
+            local positions = payload[1]
+            local velocities = payload[2]
+            local ids = payload[3]
+            local owners = payload[4]
+            local inputTime = payload[5]
+            local tableType = payload[6]
+    
+            local curTime = timer.curtime()
+            local curTable = currentTracks[tableType]
+    
+            checkedIDs = {}
+    
+            for i = 1, #positions do
+                local id = ids[i]
+                if curTable[id] == nil or curTable[id][4] < inputTime then
+                    curTable[id] = {positions[i], velocities[i], owners[i], inputTime}
+                    checkedIDs[id] = true
+                end
+            end
+    
+            for id, data in pairs(curTable) do
+                if not checkedIDs[id] and (curTime - data[4]) > 3 then
+                    --print("Purging outdated track:", id)
+                    curTable[id] = nil
+                end
+            end
+    
+            wire.ports.Tracks = currentTracks[1]
+    
+            if CLIENTDISPLAY and (curTime - lastUpdate) > 0.1 then
+                net.start("Server Variable Update")
+                net.writeTable(currentTracks)
+                net.send()
+    
+                lastUpdate = curTime
+            end
+        end
+    end)
+    
+    hook.runRemote(nil, "Master Ping")
+    
+    wire.adjustPorts({}, {Tracks = "Table"})
+elseif CLIENT and CLIENTDISPLAY then
+    local currentVehicleTracks = {}
+    local currentMissileTracks = {}
+    local currentTracks = {currentVehicleTracks, currentMissileTracks}
+    
+    local lib = require("../public_lib/helpful_hud_functions.txt")
+    
+    local function renderHud()
+        for key, value in pairs(currentVehicleTracks) do
+            local pos = value[1]
+            local x, y = pos:toScreen().x, pos:toScreen().y
+            
+            _setColor(COL_GREEN)
+            drawCenterRectOutline(x, y, 15, 15, 2)
+        end    
+    end
+    
+    net.receive("Server Variable Update", function()
+        local data = net.readTable()
+        currentVehicleTracks = data[1]
+        currentMissileTracks = data[2]
+        currentTracks = {currentVehicleTracks, currentMissileTracks}
+    end)
+    
+    hook.add("drawhud", "Render HUD", renderHud)
+end
