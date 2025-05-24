@@ -2,9 +2,9 @@
 --@author Ally for Hire / Merydian9
 --@include ../public_lib/helpful_hud_functions.txt
 
---- Version 1.0.0
+--- Version 1.1.0
 
-local CLIENTDISPLAY = true
+local CLIENTDISPLAY = false
 local INTERCEPTDATA = false
 local TYPE          = 1    -- 1 = Vehicle Radar, 2 = Missile Radar
 
@@ -14,6 +14,7 @@ if SERVER then
     local nodeCount, updateCount = 0, 0
     local masterNode = nil
     local lastTime = timer.curtime()
+    local hasLink = false
     
     local function handleWire(name, value)
         if updateCount == -1 then updateCount = 0 end
@@ -26,11 +27,22 @@ if SERVER then
         
         local curTime = timer.curtime()
         
-        if updateCount == 4 then hook.runRemote(masterNode, {position, velocity, ids, owner, curTime}) updateCount = -1 end
+        if updateCount == 4 then 
+            updateCount = -1
+            hasLink = false
+            
+            if masterNode != nil and masterNode:isValid() then
+                local data = {positions, velocities, ids, owners, curTime, TYPE}
+                hasLink = true
+                if pcall(function() hook.runRemote(masterNode, data) end) then
+                    hasLink = true
+                end
+            end
+        end
         
         if updateCount == -1 and (curTime - lastTime) > 0.3 and CLIENTDISPLAY then
             net.start("Server Variable Update")
-            net.writeTable({positions, velocities, ids, owners})
+            net.writeTable({positions, velocities, ids, owners, hasLink})
             net.send()
             
             updateCount = 0
@@ -58,7 +70,7 @@ if SERVER then
             net.send()
         elseif payload == "Master Response" and masterNode == nil or payload == "Master Ping" then
             masterNode = sender
-            print("Master Node Connected")
+            --print("Master Node Connected")
         elseif payload != "Master Response" and INTERCEPTDATA then
             print("---- Information Intercepted")
             print("---- Owner and Sender:")
@@ -93,6 +105,7 @@ elseif CLIENT and CLIENTDISPLAY then
     
     local positions, velocities, ids, owners = {}, {}, {}, {}
     local uniqueIDs = 0
+    local hasLink = false
         
     enableHud(player(), true)
     render.createRenderTarget(hudRT)
@@ -112,7 +125,7 @@ elseif CLIENT and CLIENTDISPLAY then
             
             _setFont(fontsmall)
             
-            _setColor(COL_RED)
+            _setColor(hasLink and COL_GREEN or COL_RED)
             _drawText(x + 90, y + 85, "LINK", TEXT_ALIGN.RIGHT)
             radarDataColor = (timer.curtime() - lastServerUpdate < 0.4 and #ids == #positions and #positions == #velocities) and COL_GREEN or COL_RED
             _setColor(radarDataColor)
@@ -168,6 +181,7 @@ elseif CLIENT and CLIENTDISPLAY then
         velocities = data[2]
         ids = data[3]
         owners = data[4]
+        hasLink = data[5]
         
         uniqueIDs = 0
         local knownOwners = {}
