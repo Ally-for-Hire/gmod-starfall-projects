@@ -2,7 +2,7 @@
 --@author Ally for Hire / Merydian9
 --@include ../public_lib/helpful_hud_functions.txt
 
---- Version 1.1.0
+--- Version 1.1.1
 
 local CLIENTDISPLAY = false
 local INTERCEPTDATA = false
@@ -33,10 +33,7 @@ if SERVER then
             
             if masterNode != nil and masterNode:isValid() then
                 local data = {positions, velocities, ids, owners, curTime, TYPE}
-                hasLink = true
-                if pcall(function() hook.runRemote(masterNode, data) end) then
-                    hasLink = true
-                end
+                hasLink = pcall(function() hook.runRemote(masterNode, data) end)
             end
         end
         
@@ -99,9 +96,9 @@ elseif CLIENT and CLIENTDISPLAY then
     local drawStatic = true
     local lib = require("../public_lib/helpful_hud_functions.txt")
     
-    local fontbig = render.createFont("DefaultFixed", 30, 1200)
-    local fontmed = render.createFont("DefaultFixed", 20, 1200)
-    local fontsmall = render.createFont("DefaultFixed", 15, 1200)
+    local fontbig = render.createFont("", 30, 1200, nil, nil, nil, true)
+    local fontmed = render.createFont("", 20, 1200, nil, nil, nil, true)
+    local fontsmall = render.createFont("", 15, 1200, nil, nil, nil, true)
     
     local positions, velocities, ids, owners = {}, {}, {}, {}
     local uniqueIDs = 0
