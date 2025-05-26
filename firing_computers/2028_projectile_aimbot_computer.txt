@@ -22,9 +22,9 @@
 ------------------------------------------------------------
 -- Configurable Options
 ------------------------------------------------------------
-local offset = 0.02                  -- Time offset in seconds
+local offset = 0.00                  -- Time offset in seconds
 local recalcFullSim = false         -- Recalculate full sim every loop (low MV only)
-local simplifiedMath = true        -- Use simplified math (no drag)
+local simplifiedMath = false        -- Use simplified math (no drag)
 local handleFiring = true           -- Whether script should fire the gun
 local firingRange = 1200000           -- Max intercept distance for firing
 local firingAccuracy = 15            -- Acceptable aiming error in units
@@ -49,7 +49,7 @@ local fireOutput, timeOutput = 0, 0
 local noSolution = true
 local attemptingFire = false
 local targetValue, dt, time = 0, 0, 0
-local maxDeltaT, maxDeltaD = 1e-4, 15
+local maxDeltaT, maxDeltaD = 0.01, 5
 
 local ballisticslib = require("../public_lib/acf_ballistics_lib.txt")
 
