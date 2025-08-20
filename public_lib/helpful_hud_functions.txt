@@ -1,63 +1,162 @@
---- Local Overwrites
--- Setters
-_setMaterial = render.setMaterial
-_setColor = render.setColor
-_setFont = render.setFont
+-- SHARED Space
 
--- Shapes
-_drawRect = render.drawRect
-_drawRectOutline = render.drawRectOutline
-_drawTexturedRect = render.drawTexturedRect
-_drawCircle = render.drawCircle
-_drawFilledCircle = render.drawFilledCircle
-_drawPoly = render.drawPoly
-
--- Text
-_drawText = render.drawText
-_drawSimpleText = render.drawSimpleText
-
--- RenderTargets
-_createRT = render.createRenderTarget
-_setRTTexture = render.setRenderTargetTexture
-_selectRT = render.selectRenderTarget
-
---- Main Color Constants
--- General Colors
-COL_BLACK = Color(0, 0, 0)
-COL_RED = Color(255, 0, 0)
-COL_GREEN = Color(0, 255, 0)
-COL_BLUE = Color(0, 0, 255)
-
--- Color for clearing RenderTargets with
-COL_RENDERTARGET = Color(0, 0, 0, 0)
-
---- Function to draw a thick line
--- x1, y1: the starting position coordinates
--- x2, y2: the end position coordinates
--- thickness: thickness of line
-function drawThickLine (x1, y1, x2, y2, thickness)
-    local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
-    local perpX = perpDir[1]
-    local perpY = perpDir[2]
-
-    _drawPoly({
-        { x = x1 + perpX, y = y1 + perpY },
-        { x = x2 + perpX, y = y2 + perpY },
-        { x = x2 - perpX, y = y2 - perpY },
-        { x = x1 - perpX, y = y1 - perpY },
-    })
+--- Function interface data easily between server and client
+-- name: the name of the stream
+-- value: the data being sent
+-- safe: whether or not to resend every second for 3 seconds to make sure it gets to target
+function sendData(name, value, safe)
+    if safe == nil then
+        net.start(name) 
+        net.writeType(value) 
+        net.send(owner())
+        return
+    end
+        
+    timer.create(name, 1, 0, function()
+        net.start(name) 
+        net.writeType(value) 
+        net.send(owner())  
+        timer.create("remove " .. name, 3, function()
+            timer.remove("remove " .. name)    
+        end)  
+    end)
 end
 
---- Function to draw a rectangle centered on x, y
--- x, y: the middle of the rectangle
--- width, height: the width and height of the rectangle
-function drawCenterRect (x, y, width, height) 
-    _drawRect(x - width / 2, y - height / 2, width, height)
-end
+curtime = timer.curtime
 
---- Function to draw a rectangle outline centered on x, y
--- x, y: the middle of the rectangle
--- width, height: the width and height of the rectangle
-function drawCenterRectOutline (x, y, width, height, thickness) 
-    _drawRectOutline(x - width / 2, y - height / 2, width, height, thickness) 
+-- CLIENT Space
+if CLIENT then
+    --- Local Overwrites
+    -- Setters
+    _setMaterial = render.setMaterial
+    _setColor = render.setColor
+    _setFont = render.setFont
+    
+    -- Shapes
+    _drawRect = render.drawRect
+    _drawRectOutline = render.drawRectOutline
+    _drawTexturedRect = render.drawTexturedRect
+    _drawCircle = render.drawCircle
+    _drawFilledCircle = render.drawFilledCircle
+    _drawPoly = render.drawPoly
+    _drawLine = render.drawLine
+    
+    -- Text
+    _drawText = render.drawText
+    _drawSimpleText = render.drawSimpleText
+    
+    -- RenderTargets
+    _createRT = render.createRenderTarget
+    _setRTTexture = render.setRenderTargetTexture
+    _selectRT = render.selectRenderTarget
+
+    --- Main Color Constants
+    -- General Colors
+    COL_BLACK = Color(0, 0, 0)
+    COL_WHITE = Color(255, 255, 255)
+    COL_RED = Color(255, 0, 0)
+    COL_GREEN = Color(0, 255, 0)
+    COL_BLUE = Color(0, 0, 255)
+    
+    -- Specific Colors
+    COL_PURPLE = Color(255, 0, 255)
+    COL_GOLD = Color(225, 150, 0)
+    
+    -- Color for clearing RenderTargets with
+    COL_RENDERTARGET = Color(0, 0, 0, 0)
+    
+    --- Function to draw a thick line
+    -- x1, y1: the starting position coordinates
+    -- x2, y2: the end position coordinates
+    -- thickness: thickness of line
+    function drawThickLine (x1, y1, x2, y2, thickness)
+        local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
+        local perpX = perpDir[1]
+        local perpY = perpDir[2]
+    
+        _drawPoly({
+            { x = x1 + perpX, y = y1 + perpY },
+            { x = x2 + perpX, y = y2 + perpY },
+            { x = x2 - perpX, y = y2 - perpY },
+            { x = x1 - perpX, y = y1 - perpY },
+        })
+    end
+
+    --- Function to draw a thick circle
+    -- x, y: the center position coordinates
+    -- thickness: thickness of the circle
+    function drawThickCircle(x, y, diameter, thickness)
+        for i = 0, thickness - 1, 0.5 do 
+            _drawCircle(x, y, diameter + i)
+        end
+    end
+    
+    --- Function to draw a rectangle centered on x, y
+    -- x, y: the middle of the rectangle
+    -- width, height: the width and height of the rectangle
+    function drawCenterRect (x, y, width, height) 
+        _drawRect(x - width / 2, y - height / 2, width, height)
+    end
+    
+    --- Function to draw a rectangle outline centered on x, y
+    -- x, y: the middle of the rectangle
+    -- width, height: the width and height of the rectangle
+    function drawCenterRectOutline (x, y, width, height, thickness) 
+        _drawRectOutline(x - width / 2, y - height / 2, width, height, thickness) 
+    end
+
+    --- Function to draw a + centered on x, y with 4 controllable directions
+    -- x, y: the middle of the +
+    -- up, down: the length for the up and down prongs
+    -- left, right: the length for the left and right prongs
+    -- thickness: thickness of the prongs
+    function drawPlus(x, y, up, down, left, right, thickness)
+        -- If given (x, y, size, thickness)
+        if left == nil then
+            thickness = down
+            down = up
+            left = up 
+            right = up 
+        end
+        drawThickLine(x, y, x, y - up, thickness)
+        drawThickLine(x, y, x, y + down, thickness)
+        drawThickLine(x, y, x - left, y, thickness)
+        drawThickLine(x, y, x + right, y, thickness)
+    end
+
+    function drawCenterRT (x, y, rtname)
+        _setRTTexture(rtname)
+        _drawTexturedRect(x - 512, y - 512, 1024, 1024)    
+        _setRTTexture()
+    end
+    
+    function initRT (rtName)
+        _createRT(rtName)
+        return rtName    
+    end
+
+    -- Convenient Functions
+    rect = _drawRect
+    centerRect = drawCenterRect 
+    centerRectOutline = drawCenterRectOutline
+    rectOutline = _drawRectOutline
+    function circle (x, y, diameter, thickness)
+        if thickness ~= nil then
+            drawThickCircle(x, y, diameter, thickness)
+            return
+        end
+        _drawCircle(x, y, diameter)
+    end
+    filledCircle  = _drawFilledCircle
+    font = _setFont
+    color = _setColor
+    text = _drawText
+    textSimple = _drawSimpleText
+    function line (x1, y1, x2, y2, thickness)
+        if thickness ~= nil then
+            drawThickLine(x1, y1, x2, y2, thickness)
+            return
+        end
+        _drawLine(x1, y1, x2, y2)
+    end
 end
