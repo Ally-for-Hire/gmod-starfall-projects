@@ -1,0 +1,24 @@
+--@client
+
+-- Believe this was from legokidlogan on the starfall discord.
+
+local rtName = "whatever"
+render.createRenderTarget( rtName )
+
+hook.add( "renderoffscreen", "drawStatic", function()
+    hook.remove( "renderoffscreen", "drawStatic" ) -- only call once
+    
+    render.selectRenderTarget( rtName )
+    render.clear( Color( 0, 0, 0, 0 ) ) -- change this if you want
+    -- draw stuff here
+    
+    -- optional:
+    render.selectRenderTarget()
+end )
+
+hook.add( "Render", "blah", function()
+    render.setRenderTargetTexture( rtName )
+    render.drawTexturedRect( x, y, w, h ) -- change these
+    
+    -- draw dynamic stuff over the top, or below by putting them above
+end )
