@@ -44,6 +44,7 @@ local function handleWire(name, value)
     
     if name == "PlayerAimPos" then
         playerAimPos = value
+        if canReturnControl then playerControl = true end
     elseif name == "MathAimPos" then
         mathAimPos = value   
         playerControl, canReturnControl = false, false
