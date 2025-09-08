@@ -1,0 +1,31 @@
+--@name they massacred my boy
+--@author Merydian9 / Ally for Hire
+--@shared
+
+if SERVER then
+    local inputTable = {
+        {"Wheels", "ARRAY"}
+    }
+    local inputs = {}
+    local inputTypes = {}
+    for _, k in ipairs(inputTable) do
+        inputs[#inputs+1] = k[1]
+        inputTypes[#inputTypes+1] = k[2]       
+    end
+    
+    wire.adjustInputs(inputs, inputTypes)
+    
+    local wireData = {}
+    local function wireInput( name, value ) 
+        if value then
+            wireData[name] = value
+        end
+        
+    -- and now i can finally run my code
+        for key,value in pairs(wireData["Wheels"]) do 
+            wireData["Wheels"][key]:setCollisionGroup(1)
+        end
+    end
+    
+    hook.add( "input", "", wireInput )
+end

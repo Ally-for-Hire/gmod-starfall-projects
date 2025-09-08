@@ -22,6 +22,30 @@ function sendData(name, value, safe)
     end)
 end
 
+--- Functions to create and update a PID
+-- kp, ki, kd: the proportional, integral, and derivitive values
+function createPID(kp, ki, kd)
+    return {
+        kp = kp,
+        ki = ki,
+        kd = kd,
+        errorSum = 0,
+        lastError = 0,
+        lastTime = timer.curtime(),
+        update = function(self, error)
+            local now = timer.curtime()
+            local dt = now - self.lastTime
+            self.lastTime = now
+
+            self.errorSum = self.errorSum + error * dt
+            local dError = (error - self.lastError) / math.max(dt, 0.001)
+            self.lastError = error
+
+            return self.kp * error + self.ki * self.errorSum + self.kd * dError
+        end
+    }
+end
+
 curtime = timer.curtime
 
 -- CLIENT Space
@@ -122,6 +146,22 @@ if CLIENT then
         drawThickLine(x, y, x, y + down, thickness)
         drawThickLine(x, y, x - left, y, thickness)
         drawThickLine(x, y, x + right, y, thickness)
+    end
+    
+    --- Function to get the endpoint toward a target without overshooting
+    -- x1, y1: start coordinates
+    -- x2, y2: target coordinates
+    -- length: desired segment length (max). If longer than the distance, returns the target
+    -- returns: a table {x = number, y = number}
+    function getPoint(x1, y1, x2, y2, length)
+        local dx = x2 - x1
+        local dy = y2 - y1
+        local dist = math.sqrt(dx*dx + dy*dy)
+        if dist == 0 then
+            return { x = x1, y = y1 }
+        end
+        local scale = math.min(1, length / dist)
+        return {x = x1 + dx * scale, y = y1 + dy * scale}
     end
 
     function drawCenterRT (x, y, rtname)
