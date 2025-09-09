@@ -1,0 +1,244 @@
+--@name Universal Datalink Node
+--@author Ally for Hire / Merydian9
+--@include ../public_lib/helpful_hud_functions.txt
+
+--- Version 1.3.1
+
+--- Universal1 System Node Explanation
+-- First Stage: System Identification
+/*
+- When the U1 Node is spawned it searches for U1 Roots
+- If none are found, it awaits a search ping from one and goes dormant
+- If one is found, it identifies itself as part of the system
+*/
+-- Second Stage: Data Transit
+/*
+- With its system identified, the U1 node sends all data to the U1 Root on a tick delay
+- Also on a tick delay, the U1 Node will recieve all of its data from the Root and move it to the output
+*/
+-- Final Stage: Removal
+/*
+- The U1 Node identifies itself as removed on the system
+*/
+
+-- Please do not use the U1 system ingame, it is extremely laggy
+-- This is simply a tech demo I am releasing to the public, U4-5 
+-- are considerabley less laggy, if you want to make your own don't
+-- replicate this process as it's a very innefficient method.
+
+local CLIENTDISPLAY = false
+local INTERCEPTDATA = false
+local TYPE          = 1    -- 1 = Vehicle Radar, 2 = Missile Radar
+
+if SERVER then
+    -- Local information
+    local positions, velocities, ids, owners = {}, {}, {}, {}
+    local nodeCount, updateCount = 0, 0
+    local masterNode = nil
+    local lastTime = timer.curtime()
+    local hasLink = false
+
+    -- Networked information
+    local currentVehicleTracks = {}
+    local currentMissileTracks = {}
+    local currentTracks = {currentVehicleTracks, currentMissileTracks}
+    
+    local function handleWire(name, value)
+        if updateCount == -1 then updateCount = 0 end
+        
+        if name == "Position" then positions = value updateCount = updateCount + 1
+        elseif name == "Velocity" then velocities = value updateCount = updateCount + 1
+        elseif name == "IDs" then ids = value updateCount = updateCount + 1
+        elseif name == "Owner" then owners = value updateCount = updateCount + 1
+        end
+        
+        local curTime = timer.curtime()
+        
+        if updateCount == 4 then 
+            updateCount = -1
+            hasLink = false
+            
+            if masterNode != nil and masterNode:isValid() then
+                local data = {positions, velocities, ids, owners, curTime, TYPE}
+                hasLink = pcall(function() hook.runRemote(masterNode, data) end)
+            end
+        end
+    end
+    
+    wire.adjustPorts(
+        {IDs = "Array", Owner = "Array", Position = "Array", Velocity = "Array"},
+        {VicIDs = "Array", VicOwners = "Array", VicPos= "Array", VicVels = "Array", MissIDs = "Array", MissOwners = "Array", MissPos= "Array", MissVels = "Array"}
+    )
+    
+    hook.add("input", "Wire Inputs Updated", handleWire)
+    
+    hook.add("remote", "Remote Response", function(sender, owner, payload)
+        if sender == chip() then return end
+        
+        if payload == "Node Ping" then
+            hook.runRemote(sender, "Node Response")
+        elseif payload == "Node Response" then
+            nodeCount = nodeCount + 1
+            
+            net.start("Node Count Changed")
+            net.writeInt(nodeCount, 4)
+            net.send()
+        elseif payload == "Master Ping" then
+            hook.runRemote(sender, "Master Response")
+            masterNode = sender
+            -- print("Master Node Connected")
+        elseif #payload > 0 and sender == masterNode then
+            local v_pos, m_pos = payload[1], payload[5]
+            local v_vels, m_vels = payload[2], payload[6]
+            local v_owners, m_owners = payload[3], payload[7]
+            local v_ids, m_ids = payload[4], payload[8]
+            
+            wire.ports.VicIDs = v_ids
+            wire.ports.VicOwners = v_owners
+            wire.ports.VicPos = v_pos
+            wire.ports.VicVels = v_vels
+            
+            wire.ports.MissIDs = m_ids
+            wire.ports.MissOwners = m_owners
+            wire.ports.MissPos = m_pos
+            wire.ports.MissVels = m_vels
+            
+            net.start("Server Variable Update")
+            net.writeTable({v_pos, v_vels, v_owners, v_ids, m_pos, m_vels, m_owners, m_ids})
+            net.send()
+            
+            hasLink = true
+        elseif INTERCEPTDATA then
+            print("---- Information Intercepted")
+            print("---- Owner and Sender:")
+            print(owner)
+            print(sender)
+            print("---- Data:")
+            print(payload)
+            print("---- End of Information")
+        end
+    end)
+    
+    timer.create("Send", 0.1, 1, function() hook.runRemote(nil, "Node Ping") end)
+    
+    --hook.add("removed", "Chip Removed", function() hook.runRemote(nil, "Node Removal") end)
+elseif CLIENT and CLIENTDISPLAY then
+    if player() != owner() then return end
+    
+    local hudColorVehicle = Color(0, 255, 0)
+    local hudColorVehicleBack = Color(0, 255, 0, 150)
+    local hudColorMissile = Color(255, 0, 0)
+    local hudColorMissileBack = Color(255, 0, 0, 150)
+    
+    local lastUpdate = 0
+    local resx, resy = 0, 0
+    local drawStatic = true
+    local lib = require("public_release_projects/public_lib/helpful_hud_functions.txt")
+    
+    local fontbig = render.createFont("", 30, 1200, nil, nil, nil, true)
+    local fontmed = render.createFont("", 20, 1200, nil, nil, nil, true)
+    local fontsmall = render.createFont("", 15, 1200, nil, nil, nil, true)
+    
+    local v_pos, m_pos = {}, {}
+    local v_vels, m_vels = {}, {}
+    local v_owners, m_owners = {}, {}
+    local v_ids, m_ids = {}, {}
+    
+    local vehicleDiamondMiscRT = "Vehicle Diamond RT"
+    local missileDiamondRT = "Missile Diamond"
+
+    enableHud(player(), true)
+    render.createRenderTarget(vehicleDiamondMiscRT)
+    render.createRenderTarget(missileDiamondRT)
+    
+    local function renderHud()
+        resx, resy = render.getResolution()
+        local x, y = resx / 2, resy / 2
+        local chipPos = chip():getPos()
+        local currentTime = timer.curtime()
+        
+        for i, pos in pairs(v_pos) do
+            _setColor(COL_WHITE)
+            local _ = pos:toScreen()
+            drawCenterRT(_.x, _.y, vehicleDiamondMiscRT)
+            
+            _setColor(hudColorVehicle)
+            _setFont(fontsmall)
+            _drawText(_.x, _.y - 25 - 7.5, v_owners[i], TEXT_ALIGN.CENTER)
+            _drawText(_.x - 15, _.y + 25 - 7.5, math.round(chipPos:getDistance(pos) / 39.37) .. "m", TEXT_ALIGN.RIGHT)
+            _drawText(_.x + 15, _.y + 25 - 7.5, math.round(v_vels[i]:getLength() / 39.37) .. "m/s", TEXT_ALIGN.LEFT)
+        end
+        for i, pos in pairs(m_pos) do
+            _setColor(COL_WHITE)
+            local _ = pos:toScreen()
+            drawCenterRT(_.x, _.y, missileDiamondRT)
+            
+            _setColor(hudColorMissile)
+            _setFont(fontsmall)
+            _drawText(_.x - 15, _.y + 25 - 7.5, math.round(chipPos:getDistance(pos) / 39.37) .. "m", TEXT_ALIGN.RIGHT)
+            _drawText(_.x + 15, _.y + 25 - 7.5, math.round(m_vels[i]:getLength() / 39.37) .. "m/s", TEXT_ALIGN.LEFT)
+        end
+    end
+    
+    local function updateHud()
+        local x, y = 512, 512
+        
+        _selectRT()
+        
+        if not drawStatic then return end
+
+        _selectRT(vehicleDiamondMiscRT)
+            render.clear(COL_RENDERTARGET)
+            
+            local m = Matrix()
+            m:translate(Vector(x, y, 0 ))
+            m:rotate(Angle(0, 45, 0 ))
+            
+            render.pushMatrix(m)
+            _setColor(hudColorVehicleBack)
+            drawCenterRect(0, 0, 14, 14, 2)
+            _setColor(COL_BLACK)
+            drawCenterRectOutline(0, 0, 14, 14, 2)
+            render.popMatrix()
+            
+            _drawCircle(x, y, 2)
+            _drawCircle(x, y, 3)
+            _drawCircle(x, y, 4)
+        _selectRT(missileDiamondRT)
+            render.clear(COL_RENDERTARGET)
+            
+            local m = Matrix()
+            m:translate(Vector(x, y, 0 ))
+            m:rotate(Angle(0, 45, 0 ))
+            
+            render.pushMatrix(m)
+            _setColor(hudColorMissileBack)
+            drawCenterRect(0, 0, 14, 14, 2)
+            _setColor(COL_BLACK)
+            drawCenterRectOutline(0, 0, 14, 14, 2)
+            drawCenterRect(0, 0, 14, 2)
+            drawCenterRect(0, 0, 2, 14)
+            render.popMatrix()
+        _selectRT()
+        
+        drawStatic = false
+    end
+    
+    local function updateWire()
+        local payload = net.readTable()
+        v_pos, m_pos = payload[1], payload[5]
+        v_vels, m_vels = payload[2], payload[6]
+        v_owners, m_owners = payload[3], payload[7]
+        v_ids, m_ids = payload[4], payload[8]
+        
+        lastUpdate = timer.curtime()
+    end
+    
+    hook.add("drawhud", "Render HUD", renderHud)
+    net.receive("Server Variable Update", updateWire)
+    net.receive("Node Count Changed", function()
+        nodeCount = net.readInt(4)
+        drawStatic = true
+    end)
+    hook.add("renderoffscreen", "Update HUD", updateHud)
+end
