@@ -89,6 +89,22 @@ if CLIENT then
     -- Color for clearing RenderTargets with
     COL_RENDERTARGET = Color(0, 0, 0, 0)
     
+    --- Function to get the endpoint toward a target without overshooting
+    -- x1, y1: start coordinates
+    -- x2, y2: target coordinates
+    -- length: desired segment length (max). If longer than the distance, returns the target
+    -- returns: a table {x = number, y = number}
+    function getPoint(x1, y1, x2, y2, length)
+        local dx = x2 - x1
+        local dy = y2 - y1
+        local dist = math.sqrt(dx*dx + dy*dy)
+        if dist == 0 then
+            return { x = x1, y = y1 }
+        end
+        local scale = math.min(1, length / dist)
+        return {x = x1 + dx * scale, y = y1 + dy * scale}
+    end
+
     --- Function to draw a thick line
     -- x1, y1: the starting position coordinates
     -- x2, y2: the end position coordinates
@@ -104,6 +120,17 @@ if CLIENT then
             { x = x2 - perpX, y = y2 - perpY },
             { x = x1 - perpX, y = y1 - perpY },
         })
+    end
+    
+    --- Function to a draw a line with space away from the start and end
+    -- x1, y1: the starting position coordinates
+    -- x2, y2: the ending position coordinates
+    -- startLength, endLength: the distance away from the start and end
+    -- thickness: the thickness of the line
+    function drawSpacedLine(x1, y1, x2, y2, startLength, endLength, thickness)
+        local pt1 = getPoint(x1, y1, x2, y2, startLength)
+        local pt2 = getPoint(x2, y2, x1, y1, endLength)
+        drawThickLine(pt1.x, pt1.y, pt2.x, pt2.y, thickness)
     end
 
     --- Function to draw a thick circle
@@ -147,22 +174,6 @@ if CLIENT then
         drawThickLine(x, y, x - left, y, thickness)
         drawThickLine(x, y, x + right, y, thickness)
     end
-    
-    --- Function to get the endpoint toward a target without overshooting
-    -- x1, y1: start coordinates
-    -- x2, y2: target coordinates
-    -- length: desired segment length (max). If longer than the distance, returns the target
-    -- returns: a table {x = number, y = number}
-    function getPoint(x1, y1, x2, y2, length)
-        local dx = x2 - x1
-        local dy = y2 - y1
-        local dist = math.sqrt(dx*dx + dy*dy)
-        if dist == 0 then
-            return { x = x1, y = y1 }
-        end
-        local scale = math.min(1, length / dist)
-        return {x = x1 + dx * scale, y = y1 + dy * scale}
-    end
 
     function drawCenterRT (x, y, rtname)
         _setRTTexture(rtname)
@@ -199,4 +210,5 @@ if CLIENT then
         end
         _drawLine(x1, y1, x2, y2)
     end
+    spacedLine = drawSpacedLine
 end
