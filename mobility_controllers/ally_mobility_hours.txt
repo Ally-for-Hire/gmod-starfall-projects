@@ -3,7 +3,7 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.1.0
+--- Version 0.3.1
 
 --- Constants
 local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
@@ -17,7 +17,7 @@ local finalRatio = (1/1.3) * (0.75) -- Ratio of all gearboxes final drives
 local hasWheels = false -- True if the vehicle has wheels instead of tracks
 
 local yawDeadzone = 15 -- Yaw velocity deadzone for countersteering
-local counterSteerStrength = 1.5 -- How strong the countersteering will be (1 is normal strength)
+local counterSteerStrength = 2 -- How strong the countersteering will be (1 is normal strength)
 
 local invertedTransfers = -1 -- 1 if they face their respective sides, -1 if they face the other
 local inlineTransfers = true -- True if the transfers are inline (will error if this is set to the wrong value)
@@ -33,7 +33,7 @@ local minClutch = 0
 local remainderClutch = 0
 local gearCount = 0
 local gearUpBuffer = 1.05
-local gearDownBuffer = 0.85 
+local gearDownBuffer = 0.95 
 local biteRPM, releaseRPM = 0, 0
 
 local input_engine = nil
@@ -153,6 +153,8 @@ local function think()
     local A = input_pod["A"]
     local S = input_pod["S"]
     local D = input_pod["D"]
+    outputLeftGear = 1
+    outputRightGear = 1
     
     if isAutogearing then
         brakePower = maxBrakePower - (maxBrakePower - minBrakePower) * math.min(speed / gearSpeeds[gearCount], 1)
@@ -174,8 +176,10 @@ local function think()
     --- Gear Handling Logic
     if isAutogearing then
         local usableGears = gearCount
+        local min_gear = 1
         if S == 1 and not canNeutralSteer then
             usableGears = gearCount + reverseGears
+            min_gear = gearCount + 1
             output_gear = gearCount + 1
         end
         
@@ -194,15 +198,9 @@ local function think()
             end
 
         elseif gearingType == 3 then
-            if output_gear < usableGears and speed > gearSpeeds[output_gear] * gearUpBuffer then
+            if output_gear < usableGears and ((speed > gearSpeeds[output_gear] * gearUpBuffer) or (rpm > input_engine:acfPowerbandMax() * 0.95)) then
                 output_gear = output_gear + 1
-            elseif output_gear > 1 and speed < gearSpeeds[output_gear - 1] * gearDownBuffer then
-                output_gear = output_gear - 1
-            end
-
-            if rpm > input_engine:acfPowerbandMax() * 0.98 and output_gear < usableGears then
-                output_gear = output_gear + 1
-            elseif rpm < input_engine:acfPowerbandMin() * 0.85 and output_gear > 1 then
+            elseif output_gear > min_gear and ((speed < gearSpeeds[output_gear - 1] * gearDownBuffer) or (rpm < input_engine:acfPowerbandMin() * 0.85)) then
                 output_gear = output_gear - 1
             end
         end
