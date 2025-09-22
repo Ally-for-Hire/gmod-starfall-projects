@@ -11,16 +11,16 @@ local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
 --- Customizable Variables
 local gearingType = 3 -- 1:RPM, 2:Speed, 3:Hybrid
 local maxBrakePower = 125 -- Maximum brake power at low speed
-local minBrakePower = 50 -- Minimum brake power at high speed
-local wheelSize = 30 -- Diameter of wheels
+local minBrakePower = 25 -- Minimum brake power at high speed
+local wheelSize = 29.5 -- Diameter of wheels
 local finalRatio = (1/1.3) * (0.75) -- Ratio of all gearboxes final drives
 local hasWheels = false -- True if the vehicle has wheels instead of tracks
 
 local yawDeadzone = 15 -- Yaw velocity deadzone for countersteering
-local counterSteerStrength = 1 -- How strong the countersteering will be (1 is normal strength)
+local counterSteerStrength = 1.5 -- How strong the countersteering will be (1 is normal strength)
 
 local invertedTransfers = -1 -- 1 if they face their respective sides, -1 if they face the other
-local inlineTransfers = true -- True if the transfers are inline (will error otherwise)
+local inlineTransfers = true -- True if the transfers are inline (will error if this is set to the wrong value)
 
 local showDebug = false -- True will print debug information
 
@@ -33,7 +33,7 @@ local minClutch = 0
 local remainderClutch = 0
 local gearCount = 0
 local gearUpBuffer = 1.05
-local gearDownBuffer = 0.8 
+local gearDownBuffer = 0.85 
 local biteRPM, releaseRPM = 0, 0
 
 local input_engine = nil
@@ -161,9 +161,6 @@ local function think()
     end
     
     --- Output Resetting
-    outputGear = 1
-    outputRightGear = 1
-    outputLeftGear = 1
     applyBrakeClutch(maxBrakePower, maxBrakePower, clutchBrake, clutchBrake)
     if (W == 1 || A == 1 || S == 1 || D == 1) then
         output_throttle = 100
