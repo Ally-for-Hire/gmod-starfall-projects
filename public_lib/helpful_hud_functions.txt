@@ -110,6 +110,7 @@ if CLIENT then
     -- x2, y2: the end position coordinates
     -- thickness: thickness of line
     function drawThickLine (x1, y1, x2, y2, thickness)
+        thickness = thickness or 1
         local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
         local perpX = perpDir[1]
         local perpY = perpDir[2]
@@ -130,6 +131,7 @@ if CLIENT then
     function drawSpacedLine(x1, y1, x2, y2, startLength, endLength, thickness)
         local pt1 = getPoint(x1, y1, x2, y2, startLength)
         local pt2 = getPoint(x2, y2, x1, y1, endLength)
+        thickness = thickness or 1
         drawThickLine(pt1.x, pt1.y, pt2.x, pt2.y, thickness)
     end
 
