@@ -1,0 +1,65 @@
+-- SHARED space
+
+ANIMATION = {}
+ANIMATION.__index = ANIMATION
+ANIMATION._registry = {}
+
+function linear(t)
+    return t
+end
+
+function easeInQuad(t)
+    return t * t
+end
+
+function ANIMATION:new(params)
+    local obj = setmetatable({}, self)
+    
+    obj.id         = params.id or nil
+    obj.startValue = params.startV or 1
+    obj.endValue   = params.endV or 0
+    obj.duration   = params.duration or 1
+    obj.easing     = params.easing or linear
+    obj.startTime  = timer.curtime()
+    obj.repeats    = params.repeating or 1
+    
+    return obj
+end
+
+function ANIMATION:getProgress()
+    local elapsed = timer.curtime() - self.startTime
+    if elapsed <= 0 then return 0 end
+    if elapsed >= self.duration then return 1 end
+    return elapsed / self.duration
+end
+
+
+function ANIMATION:getValue()
+    local progress = self:getProgress()
+    
+    if progress >= 1 then
+        return self.endValue
+    end
+
+    local t = self.easing(progress)
+    return math.lerp(t, self.startValue, self.endValue)
+end
+
+function ANIMATION:isFinished()
+    return (timer.curtime() - self.startTime) >= self.duration
+end
+
+function ANIMATION:reset()
+    self.startTime = timer.curtime()
+end
+
+function ANIMATION:get(id, params)
+    if self._registry[id] then
+        return self._registry[id]
+    end
+
+    local anim = ANIMATION:new(params or { id = id })
+    anim.id = id
+    self._registry[id] = anim
+    return anim
+end
