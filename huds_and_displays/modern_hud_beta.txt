@@ -5,7 +5,10 @@
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@shared
 
---- Version 0.1.1
+--- Version 0.1.2
+-- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/huds_and_displays/modern_hud_beta.txt
+-- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
+-- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
 
 -- Shared space
 local SELF = chip()
