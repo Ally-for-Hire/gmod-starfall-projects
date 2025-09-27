@@ -1,16 +1,16 @@
 --@name Modern HUD Beta
 --@author Ally for Hire / Merydian9
---@include public_release_projects/public_lib/helpful_hud_functions.txt
---@include public_release_projects/public_lib/animation_class.txt
+--@include ../public_lib/helpful_hud_functions.txt
+--@include ../public_lib/animation_class.txt
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@shared
 
---- Version 0.1.0
+--- Version 0.1.1
 
 -- Shared space
 local SELF = chip()
-local LIB = require("public_release_projects/public_lib/helpful_hud_functions.txt")
-local ANIMLIB = require("public_release_projects/public_lib/animation_class.txt")
+local LIB = require("../public_lib/helpful_hud_functions.txt")
+local ANIMLIB = require("../public_lib/animation_class.txt")
 
 if SERVER then
     -- Variable Declaration and Wire Initialization
