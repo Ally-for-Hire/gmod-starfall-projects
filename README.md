@@ -7,8 +7,8 @@ Each project demonstrates practical scripting implementations and techniques for
 If you have any questions, comments, or concerns, contact me on the discord linked below.
 
 # Links and Socials
-GitHub: https://github.com/Ally-for-Hire
-Google Drive: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
-Youtube: https://www.youtube.com/@allyforhire
-Steam: https://steamcommunity.com/id/alliedmerydian/
-Discord: @allyfh
+- GitHub: https://github.com/Ally-for-Hire
+- Google Drive: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
+- Youtube: https://www.youtube.com/@allyforhire
+- Steam: https://steamcommunity.com/id/alliedmerydian/
+- Discord: @allyfh
