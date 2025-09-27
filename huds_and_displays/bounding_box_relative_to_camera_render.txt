@@ -1,0 +1,120 @@
+--@name Bounding Box Relative to Camera Render
+--@author Ally for Hire / Merydian9
+--@client
+-- CLIENT VARIABLES HERE
+
+-- General Variables
+local WIDTH, HEIGHT, CENTER = 0, 0, Vector()
+local FILTER = {owner(), chip()}
+local GLOBAL_CAMANG = Angle()
+
+-- CLIENT FUNCTIONS HERE
+
+-- Local overwrites
+local _line = trace.line
+local _hull = trace.hull
+local _setColor = render.setColor
+local _drawRect = render.drawRect
+local _drawRectOutline = render.drawRectOutline
+
+-- Returns the absolute value of vectors
+local function vectorAbs(Vec)
+    return Vector(math.abs(Vec[1]), math.abs(Vec[2]), math.abs(Vec[3]))    
+end
+
+-- Recursively send traces in the given direction until it works
+local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILTER, STARTING_DISTANCE) -- Starting trace, Starting Position, Direction, Starting Distance  
+    -- Default value of CURRENT_TRACE simulating what a trace would return for the first run
+    local CURRENT_TRACE = {Hit = true, HitPos = HITPOS}
+    
+    -- Initializing fun variables
+    local ATTEMPTS, TOTAL_DISTANCE = 0, 0
+    local HULL_SIZE, CURRENT_STEP, MAX_SIZE = 3, 50, 250
+    
+    while CURRENT_TRACE["Hit"] and TOTAL_DISTANCE < MAX_SIZE and CURRENT_STEP > 5 do
+        TOTAL_DISTANCE = TOTAL_DISTANCE + CURRENT_STEP
+
+        local TRACEEND = HITPOS + (MOVE_DIRECTION * TOTAL_DISTANCE)
+        local TRACENORMAL = (TRACEEND - STARTING_POSITION):getNormalized()
+        local TRACE_ATTEMPT = _hull(STARTING_POSITION, STARTING_POSITION + TRACENORMAL * (STARTING_DISTANCE + 200), -Vector(HULL_SIZE), Vector(HULL_SIZE), FILTER, nil, nil, true)
+    
+        if TRACE_ATTEMPT["Hit"] then
+            CURRENT_TRACE = TRACE_ATTEMPT
+        else
+            TOTAL_DISTANCE = TOTAL_DISTANCE - CURRENT_STEP
+            CURRENT_STEP = CURRENT_STEP / 2
+        end
+        
+        ATTEMPTS = ATTEMPTS + 1
+    end
+    
+    return {Trace = CURRENT_TRACE, HitPos = CURRENT_TRACE["HitPos"], Distance = TOTAL_DISTANCE + CURRENT_STEP - HULL_SIZE}
+end    
+
+-- Returns the Center, Width, Height of whatever is being aimed at
+local function getBoxSize(CAMPOS, CAMANG, FILTER) 
+    -- Send a trace at the center of the screen
+    local CENTER_TRACE = _line(CAMPOS, CAMPOS + CAMANG:getForward():getNormalized() * 40000, FILTER, nil, nil, true)
+    
+    -- If the initial trace didnt hit anything, try a longer trace
+    if not CENTER_TRACE["Hit"] then 
+        CENTER_TRACE = _line(CAMPOS + CAMANG:getForward():getNormalized() * 40000, CAMPOS + CAMANG:getForward():getNormalized() * 80000, FILTER, nil, nil, true)
+    end
+    
+    -- If neither trace hit, nothing will
+    if not CENTER_TRACE["Hit"] then  return {Width = 0, Height = 0, Center = Vector()} end
+
+    -- If the traces did hit, setup initial variables and move to logic
+    local TRACE_DISTANCE = CENTER_TRACE["Fraction"] * 64000
+    local HITPOS = CENTER_TRACE["HitPos"]
+    
+    -- Recursively sends traces in 4 directions around the target, trying to find the bounding box size
+    local LEFT_CALL = recursiveTraceDir(CAMPOS, -CAMANG:getRight(), HITPOS, FILTER, TRACE_DISTANCE) 
+    local RIGHT_CALL = recursiveTraceDir(CAMPOS, CAMANG:getRight(), HITPOS, FILTER, TRACE_DISTANCE) 
+    local UP_CALL = recursiveTraceDir(CAMPOS, CAMANG:getUp(), HITPOS, FILTER, TRACE_DISTANCE)
+    local DOWN_CALL = recursiveTraceDir(CAMPOS, -CAMANG:getUp(), HITPOS, FILTER, TRACE_DISTANCE) 
+
+    -- Interpret the values from the final traces into usable information
+    return {
+        Width = LEFT_CALL["Distance"] + RIGHT_CALL["Distance"],
+        Height = UP_CALL["Distance"] + DOWN_CALL["Distance"],
+        Center = (LEFT_CALL["HitPos"] + RIGHT_CALL["HitPos"] + UP_CALL["HitPos"] + DOWN_CALL["HitPos"]) / 4
+    }
+end
+
+-- CLIENT HOOKS HERE
+
+--  Update the  GLOBAL_CAMANG variable, used for the hud
+hook.add("tick", "Update Camera", function() 
+    local EYEVEC = render.getEyeVector()
+    GLOBAL_CAMANG =  EYEVEC:getAngle() 
+    
+    -- Grab the approximate bounding box size of the target
+    BOX_SIZES = getBoxSize(render.getEyePos() + EYEVEC * 1000, GLOBAL_CAMANG, FILTER)
+    WIDTH = BOX_SIZES["Width"]
+    HEIGHT = BOX_SIZES["Height"]
+    CENTER = BOX_SIZES["Center"]
+end)
+
+-- Hook for when the hud gets drawn
+hook.add('drawhud', 'Draw Hud', function()
+    -- If CENTER isn't valid then quit early
+    if CENTER == Vector() then return end
+
+    -- Convert the 3d coordinates to 2d coordinates on the screen
+    local CENTER_COORDS = CENTER:toScreen()
+    local CX, CY = CENTER_COORDS.x, CENTER_COORDS.y
+    
+    -- Then, convert the 3d widths and heights into 2d dimensions
+    local SCREEN_WIDTH = math.abs((CENTER + GLOBAL_CAMANG:getRight() * WIDTH):toScreen().x - CENTER_COORDS.x)
+    local SCREEN_HEIGHT = math.abs((CENTER + GLOBAL_CAMANG:getUp() * HEIGHT):toScreen().y - CENTER_COORDS.y)
+    
+    -- Then draw the display
+    _setColor(Color(0, 255, 0))
+    _drawRect(CENTER_COORDS.x - 8 / 2, CENTER_COORDS.y - 1 / 2, 8, 1)
+    _drawRect(CENTER_COORDS.x - 1 / 2, CENTER_COORDS.y - 8 / 2, 1, 8)
+    _drawRectOutline(CENTER_COORDS.x - SCREEN_WIDTH / 2, CENTER_COORDS.y - SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT, 1)
+    
+    -- Finally, update LASTPOS
+    LASTPOS = TARGETPOS
+end)
