@@ -3,37 +3,42 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.5.5
+--- Version 0.6.0
 
 --- Constants
 local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
 
 --- Customizable Variables
+-- Gearing and Braking Setup
 local gearingType = 3 -- 1:RPM, 2:Speed, 3:Hybrid
-local maxBrakePower = 100 -- Maximum brake power at low speed
-local wheelSize = 30.5 -- Diameter of wheels (Required for Speed Gearing)
-local finalRatio = 0.325 -- Ratio of all gearboxes final drives (Required for Speed Gearing)
-local hasWheels = false -- True if the vehicle has wheels instead of tracks
+local maxBrakePower = 100 -- Maximum brake power
+local brakeScaling = true -- True if you want the brake strength to scale with speed
+local wheelSize = 30 -- Diameter of wheels (Required for type 2 or 3 gearing)
+local finalRatio = 0.325 -- Ratio of all gearboxes final drives (Required for type 2 or 3 gearing)
 
+-- Vehicle Setup 
+local hasWheels = false -- True if the vehicle has wheels instead of tracks
+local dualClutch = true -- True if the gearbox is dual clutch. Only matters if we aren't using transfers.
 local invertedTransfers = -1 -- 1 if they face their respective sides, -1 if they face the other
 local inlineTransfers = true -- True if the transfers are inline (will error if this is set to the wrong value)
 
+-- Countersteering Setup
 local yawDeadzone = 15 -- Yaw velocity deadzone for countersteering
 local counterSteerStrength = 2 -- How strong the countersteering will be (1 is normal strength)
-local brakeScaling = true -- True if you want the brake strength to scale with speed
 
+-- Misc
 local showDebug = false -- True will print debug information
+local clutchStart = 0.8 -- RPM the gearboxes start working, don't touch this, 0.8 is good.
 
 --- Internal Variables
 -- Don't touch below this unless you understand what you are doing
-local clutchStart = 0.8
 local clutchTurn = 1
 local clutchBrake = 0
 local minClutch = 0
 local remainderClutch = 0
 local gearCount = 0
 local gearUpBuffer = 1.05
-local gearDownBuffer = 0.85 
+local gearDownBuffer = 0.95 
 local biteRPM, releaseRPM = 0, 0
 
 local input_engine = nil
@@ -280,12 +285,16 @@ local function think()
         leftTransfer:getWirelink()["Right Clutch"] = outputLeftClutch
         rightTransfer:getWirelink()["Left Clutch"] = outputRightClutch
         rightTransfer:getWirelink()["Right Clutch"] = outputRightClutch
-    else
+    elseif dualClutch then
         input_mainGearbox:getWirelink()["Left Brake"] = outputLeftBrake
         input_mainGearbox:getWirelink()["Right Brake"] = outputRightBrake
         input_mainGearbox:getWirelink()["Left Clutch"] = outputLeftClutch
         input_mainGearbox:getWirelink()["Right Clutch"] = outputRightClutch
     end
+
+    -- Uh, if you don't have a dual clutch gearbox, and you can't neutral steer,
+    -- there's no built-in way to turn without doing some really strange setups
+    -- lol.
 end
 
 --- Hooks
