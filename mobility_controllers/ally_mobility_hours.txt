@@ -3,17 +3,16 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.4.0
+--- Version 0.5.3
 
 --- Constants
 local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
 
 --- Customizable Variables
 local gearingType = 3 -- 1:RPM, 2:Speed, 3:Hybrid
-local maxBrakePower = 150 -- Maximum brake power at low speed
-local minBrakePower = 50 -- Minimum brake power at high speed
-local wheelSize = 29.5 -- Diameter of wheels (Required for Speed Gearing)
-local finalRatio = 0.58 -- Ratio of all gearboxes final drives (Required for Speed Gearing)
+local maxBrakePower = 100 -- Maximum brake power at low speed
+local wheelSize = 30.5 -- Diameter of wheels (Required for Speed Gearing)
+local finalRatio = 0.325 -- Ratio of all gearboxes final drives (Required for Speed Gearing)
 local hasWheels = false -- True if the vehicle has wheels instead of tracks
 
 local invertedTransfers = -1 -- 1 if they face their respective sides, -1 if they face the other
@@ -21,6 +20,7 @@ local inlineTransfers = true -- True if the transfers are inline (will error if 
 
 local yawDeadzone = 15 -- Yaw velocity deadzone for countersteering
 local counterSteerStrength = 1.5 -- How strong the countersteering will be (1 is normal strength)
+local brakeScaling = true -- True if you want the brake strength to scale with speed
 
 local showDebug = false -- True will print debug information
 
@@ -156,11 +156,13 @@ local function think()
     outputLeftGear = 1
     outputRightGear = 1
     
-    if isAutogearing then
-        brakePower = maxBrakePower - (maxBrakePower - minBrakePower) * math.min(speed / gearSpeeds[gearCount], 1)
-    else
-        brakePower = maxBrakePower - (maxBrakePower - minBrakePower) * math.min(speed / 60, 1)
+    brakePower = maxBrakePower
+    if isAutogearing and brakeScaling then
+        brakePower = maxBrakePower * math.min(gearSpeeds[gearCount] / 2 / speed, 1)
+    elseif brakeScaling then
+        brakePower = maxBrakePower * math.min(30 / speed, 1)
     end
+     
     
     --- Output Resetting
     applyBrakeClutch(maxBrakePower, maxBrakePower, clutchBrake, clutchBrake)
@@ -200,7 +202,7 @@ local function think()
         elseif gearingType == 3 then
             if output_gear < usableGears and ((speed > gearSpeeds[output_gear] * gearUpBuffer) or (rpm > input_engine:acfPowerbandMax() * 0.95)) then
                 output_gear = output_gear + 1
-            elseif output_gear > min_gear and ((speed < gearSpeeds[output_gear - 1] * gearDownBuffer) or (rpm < input_engine:acfPowerbandMin() * 0.85)) then
+            elseif output_gear > min_gear and ((speed < gearSpeeds[output_gear - 1] * gearDownBuffer) and (rpm < input_engine:acfPowerbandMin())) then
                 output_gear = output_gear - 1
             end
         end
