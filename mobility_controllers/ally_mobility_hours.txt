@@ -3,47 +3,34 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.6.1
+--- Version 0.6.2
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/mobility_controllers/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
 
 /*
+--- Overview
+Plug-and-play mobility brain for tracked or wheeled ACF vehicles. It manages autogearing, clutch modulation, braking, and counter-steer logic so you can concentrate on driving instead of juggling wirelinks.
+
 --- Wiring
-I mean, you really don't get much simpler to wire lol. This basically does everything.
+1. "MainGearbox" -> main gearbox (typically the largest gearbox on the vehicle).
+2. "Engine" -> the engine you want monitored; pick the one with the largest powerband if you have multiple different types.
+3. "Base" -> vehicle baseplate entity.
+4. "Pod" -> pod controller
 
-- MainGearbox goes to your main gearbox (probably the big one)
-- Engine goes to an engine of your choice (if you have multiple types I recommend the one 
-  with the largest powerband differences)
-- Base goes to your baseplate
-- Pod goes to your pod controller. 
-
-Job done! You are most of the way finished.
+Once those links are set, the chip begins driving the gearbox and throttle outputs automatically.
 
 --- Customizing
-This is about as simple as it gets, all the settings are labelled for you and have descriptions.
+Every tunable sits in the "Customizable Variables" block and includes inline descriptions.
 
-The following are the important notes
-- RPM gearing 'Just Works'(tm) but isn't the best for every scenario, it tends to struggle
-  in a few like climbing and situations where you want to hold gears. Speed gearing is 
-  often preferred by those who are more experienced in mobility. Hybrid is a combination of
-  both that I made myself to maximize the strengths of both. 
-- wheelSize and finalRatio come from an older chip called CTMC and are used to calculate your 
-  speeds to gear at. wheelSize is the diameter of your wheels, and finalRatio is the finalRatio
-  of all your gearboxes multiplied. Here's an example where the chip does math: ... = (1/1.5) * (1/1.4)
-- Feel free to turn debug on and see your gear speeds, at this point if you're unhappy I'd just modify
-  wheelSize. Lowering it will lower the speeds and vice versa.
-- I wouldn't touch the Counter Steering settings really, I tuned them to work in as many situations as 
-  possible. A yaw deadzone of 15 rad/s is high enough to not get you stuck in place because it's trying
-  to overcorrect, and 2 scales enough in most cases to minimize drift.
-- Let's talk about clutchStart. This comes from a very fancy clutch equation I stole from Cheezus. Do
-  Not Touch This, you are unlikely to see any change unless you know what you're doing. It improves 
-  engine performance at low RPM, 0.8 is my favorite value for this to stay at to not mess with mobility
-  beyond letting you move better at low speeds. Lowering this will improve manueverability when your
-  engine would usually be struggling but it's not really a life and day difference in most cases.
+Key notes:
+- "gearingType": "1" uses RPM-based shifts, "2" uses speed gates, and "3" blends both. Hybrid is the recommended default.
+- "wheelSize" and "finalRatio" should match your physical wheel diameter and combined gearbox ratios so the shift map stays accurate. Example: (1/1.5) * (1/1.4).
+- Flip "showDebug" on to review gear-speed targets; nudge "wheelSize" if the speeds feel off.
+- Counter-steer defaults are tuned for general use. Only tweak them for exceptionally unusual drivetrains.
+- "clutchStart" comes from Cheezus' clutch curve; leave it at "0.8" unless you have a specific low-RPM behaviour to chase.
 
-And voila! Enjoy Ally's Mobility Hours. If you have any questions you can reach me @allyfh, I'm available
-a solid amount of the time.
+Need a hand tailoring it to a particular rig? Ping @allyfh and I'll walk you through it.
 */
 
 --- Constants
