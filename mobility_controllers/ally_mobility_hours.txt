@@ -3,7 +3,7 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.6.2
+--- Version 0.6.3
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/mobility_controllers/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -39,7 +39,7 @@ local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
 --- Customizable Variables
 -- Gearing and Braking Setup
 local gearingType = 3 -- 1:RPM, 2:Speed, 3:Hybrid
-local maxBrakePower = 100 -- Maximum brake power
+local maxBrakePower = 125 -- Maximum brake power
 local brakeScaling = true -- True if you want the brake strength to scale with speed
 local wheelSize = 30 -- Diameter of wheels (Required for type 2 or 3 gearing)
 local finalRatio = 0.325 -- Ratio of all gearboxes final drives (Required for type 2 or 3 gearing)
@@ -143,6 +143,7 @@ local function updateEngineVariables()
     
     local transfers = 0
     for i = 1, #gearLinks do
+        if gearlinks[i]:getClass() == "prop_physics" then continue end
         local type = gearLinks[i]:acfType()  
         if type == "Transfer Case" or type == "Transfer" then 
             transfers = transfers + 1
