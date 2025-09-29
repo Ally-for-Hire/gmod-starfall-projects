@@ -3,7 +3,7 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.7.0
+--- Version 0.7.1
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/mobility_controllers/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -143,7 +143,7 @@ local function updateEngineVariables()
     
     local transfers = 0
     for i = 1, #gearLinks do
-        if gearlinks[i]:getClass() == "prop_physics" then continue end
+        if gearLinks[i]:getClass() == "prop_physics" then continue end
         local type = gearLinks[i]:acfType()  
         if type == "Transfer Case" or type == "Transfer" then 
             transfers = transfers + 1
