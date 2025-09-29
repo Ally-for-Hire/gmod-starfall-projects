@@ -3,7 +3,7 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.7.3
+--- Version 0.7.4
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/mobility_controllers/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -261,17 +261,17 @@ local function think()
         elseif W == 0 and S == 1 then
             outputLeftGear = 2
             outputRightGear = 2
-            if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, 1)
-            elseif D == 1 then applyBrakeClutch(0, brakePower, 1, clutchTurn) 
+            if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
+            elseif D == 1 then applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn) 
             end
         elseif W == 1 and S == 0 then
-            if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, 1)
-            elseif D == 1 then applyBrakeClutch(0, brakePower, 1, clutchTurn)
+            if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
+            elseif D == 1 then applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)
             end
         end
     else
-        if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, 1)
-        elseif D == 1 then applyBrakeClutch(0, brakePower, 1, clutchTurn)      
+        if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
+        elseif D == 1 then applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)      
     end
     
     --- Oversteer Handling
