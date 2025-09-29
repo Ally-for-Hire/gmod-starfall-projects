@@ -3,7 +3,7 @@
 --@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 
---- Version 0.6.3
+--- Version 0.7.0
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/mobility_controllers/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -294,17 +294,7 @@ local function think()
     input_mainGearbox:getWirelink()["Gear"] = output_gear
     wire.ports.Throttle = output_throttle
     
-    if inlineTransfers then
-        leftTransfer:getWirelink()["Gear"] = outputLeftGear
-        rightTransfer:getWirelink()["Gear"] = outputRightGear
-    else
-        leftTransfer:getWirelink()["Left Gear"] = outputLeftGear
-        leftTransfer:getWirelink()["Right Gear"] = outputLeftGear
-        rightTransfer:getWirelink()["Left Gear"] = outputRightGear
-        rightTransfer:getWirelink()["Right Gear"] = outputRightGear
-    end
-    
-    if canNeutralSteer then
+    if canNeutralSteer then -- If we have transfers rather.
         leftTransfer:getWirelink()["Left Brake"] = outputLeftBrake
         leftTransfer:getWirelink()["Right Brake"] = outputLeftBrake
         rightTransfer:getWirelink()["Left Brake"] = outputRightBrake
@@ -314,6 +304,16 @@ local function think()
         leftTransfer:getWirelink()["Right Clutch"] = outputLeftClutch
         rightTransfer:getWirelink()["Left Clutch"] = outputRightClutch
         rightTransfer:getWirelink()["Right Clutch"] = outputRightClutch
+
+        if inlineTransfers then
+            leftTransfer:getWirelink()["Gear"] = outputLeftGear
+            rightTransfer:getWirelink()["Gear"] = outputRightGear
+        else
+            leftTransfer:getWirelink()["Left Gear"] = outputLeftGear
+            leftTransfer:getWirelink()["Right Gear"] = outputLeftGear
+            rightTransfer:getWirelink()["Left Gear"] = outputRightGear
+            rightTransfer:getWirelink()["Right Gear"] = outputRightGear
+        end
     elseif dualClutch then
         input_mainGearbox:getWirelink()["Left Brake"] = outputLeftBrake
         input_mainGearbox:getWirelink()["Right Brake"] = outputRightBrake
