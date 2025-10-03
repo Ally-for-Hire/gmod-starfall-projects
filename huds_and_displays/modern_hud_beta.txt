@@ -5,7 +5,7 @@
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@shared
 
---- Version 0.4.0
+--- Version 0.4.1
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/huds_and_displays/modern_hud_beta.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -23,6 +23,7 @@ if SERVER then
 
     local input_position, input_velocity, input_ids, input_owner, input_time = {}, {}, {}, {}, {}
     local input_targetPos, input_targetVel, input_targetID, input_targetName = {}, {}, {}, {}
+    local input_leadPos = Vector()
     
     local lastSlowSend, lastStaticSend = 0, 0
     local inputs = {DATA = "TABLE"}
@@ -32,8 +33,10 @@ if SERVER then
     end
     
     local hasMultipleGuns, hasMainGun, hasEngineInfo = false, false, false
+    local maxElevation, maxDepression = 0, 0
     local showsRadarData, showsTargetTrack = false, false
-    local crosshairType, mainColor = 0, Color(255, 255, 255)
+    local crosshairType, mainColor, outlineColor = 0, Color(255, 255, 255), Color(0, 0, 0)
+    local hasLeadPos = false
     
     -- Function for defining the chip's initial values and inputs and handling wire inputs
     local function doWire(name, value)
@@ -73,9 +76,17 @@ if SERVER then
                 inputs["TargetID"] = "Number"
                 showsTargetTrack = true
             end
+            if value["ShowLeadPosition"] then
+                inputs["LeadPos"] = "Vector"
+                hasLeadPos = true
+            end
             crosshairType = value["CrosshairType"]
+            maxElevation = value["Elevation"]
+            maxDepression = value["Depression"]
             local cT = value["MainColor"]
             mainColor = Color(cT[1], cT[2], cT[3], cT[4])
+            local bT = Value["OutlineColor"]
+            backgroundColor = Color(bT[1], bT[2], bT[3], bT[4])
             inputs["Base"] = "Entity"
             inputs["Turret"] = "Entity"
             
@@ -99,6 +110,8 @@ if SERVER then
         elseif name == "TargetVel" then input_targetVel = value
         elseif name == "TargetID" then input_targetID = value
         elseif name == "TargetName" then input_targetName = value
+
+        elseif name == "LeadPos" then input_leadPos = value
         end
     end
     
@@ -122,6 +135,10 @@ if SERVER then
                 net.writeVector(input_targetVel)
                 net.writeInt(input_targetID, 32)
                 net.writeString(input_targetName)
+            end
+
+            if showLeadPos then
+                net.writeVector(input_leadPos)
             end
             
             net.writeFloat(input_base:getVelocity():getLength() / 17.6)
@@ -162,6 +179,8 @@ if SERVER then
             net.start("MHB - Static Send")
                 net.writeBool(hasMultipleGuns)
                 net.writeBool(hasMainGun)
+                net.writeInt(elevation, 16)
+                net.writeInt(depression, 16)
                 net.writeBool(hasEngineInfo)
                 net.writeEntity(input_base)
                 net.writeEntity(input_turret)
@@ -174,6 +193,7 @@ if SERVER then
                 net.writeBool(showsTargetTrack)
                 net.writeInt(crosshairType, 16)
                 net.writeColor(mainColor)
+                net.writeColor(backgroundColor)
             net.send(owner())
             lastStaticSend = theTime
         end
@@ -194,11 +214,14 @@ if CLIENT then
 
     local input_position, input_velocity, input_ids, input_owner, input_time = {}, {}, {}, {}, {}
     local input_targetPos, input_targetVel, input_targetID, input_targetName = Vector(), Vector(), -1, "UNDEFINED"
-    
+    local input_leadPos = Vector()
+
     local resx, resy, x, y = 0, 0, 0, 0
     local hasMultipleGuns, hasMainGun, hasEngineInfo = 0, 0, 0
+    local showLeadPos = false
     local showsRadarData, showsTargetTrack = false, false
-    local crosshairType, mainColor = 0, Color(255, 255, 255)
+    local crosshairType, mainColor, backgroundColor = 0, Color(255, 255, 255), Color(0, 0, 0)
+    local maxElevation, maxDepression = 0, 0
 
     local staticDrawn = false
     local lastUpdate = timer.curtime()
@@ -233,7 +256,6 @@ if CLIENT then
     --- Needed Information:
     /*
     - Armor Information (Possibley listing everything lost like GHPC or WT?)
-    - Elevation, Depression
     */
 
     --- Known Information:
@@ -242,6 +264,7 @@ if CLIENT then
 
     - ID, Time of Radar Data
     - Position, Velocity, ID, Name of Target 
+    - Elevation, Depression
     */
 
     --- Displayed Information:
@@ -268,7 +291,7 @@ if CLIENT then
         aimDir = render.getEyeVector()
         
         if hasMainGun then
-            local mainGunTrace = trace.line(input_mainGun:getPos() + input_mainGun:getForward() * 300, input_mainGun:getPos() + input_mainGun:getForward() * 99999)
+            local mainGunTrace = trace.line(input_mainGun:getPos() + input_mainGun:getForward() * 300, input_mainGun:getPos() + input_mainGun:getForward() * 999999)
             local coords = mainGunTrace["HitPos"]:toScreen()
             drawCenterRT(coords.x, coords.y, gunCircleRT)
             
@@ -277,10 +300,10 @@ if CLIENT then
             text(textX, textY, mainGunRound, TEXT_ALIGN.CENTER)
             local leftright = render.getTextSize(mainGunRound)
             
-            color(COL_BLACK)
+            color(backgroundColor)
             drawCenterRect(textX, textY + 25, leftright * 1.5, 3)
-            color(COL_WHITE)
-            drawCenterRect(textX, textY + 25, leftright * 1.5, 1)
+            color(mainColor)
+            drawCenterRect(textX, textY + 25, leftright * 1.5 - 1, 1)
             
             font(FONT_MAIN)
             if mainGunReady then
@@ -289,6 +312,8 @@ if CLIENT then
             else
                 text(textX, textY + 30, mainGunStatus .. " .. " .. math.round(mainGunReloadTime - (mainGunReloadTime * mainGunReloadProgress), 1) .. "s", TEXT_ALIGN.CENTER)
             end
+
+            local relativePitch = input_base:getAngles().p - input_mainGun:getAngles().p
         end
         
         -- Multi Target Display
@@ -305,12 +330,12 @@ if CLIENT then
             local _pv = (pos + vel * (dt + 0.21)):toScreen()
             
             -- Information we always need
-            color(COL_BLACK)
+            color(backgroundColor)
             spacedLine(_p.x, _p.y, _pv.x, _pv.y, 10, 0, 3)
             local pt1 = getPoint(x, y, _p.x, _p.y, 80)
             spacedLine(x, y, pt1.x, pt1.y, 65, 0, 3)
 
-            color(COL_WHITE)
+            color(mainColor)
             spacedLine(_p.x, _p.y, _pv.x, _pv.y, 10, 0)
             spacedLine(x, y, pt1.x, pt1.y, 65, 0)
             drawCenterRT(_p.x, _p.y, targetBoxGen)
@@ -334,7 +359,7 @@ if CLIENT then
         if hasEngineInfo then
             local engX, engY = x - 105, y * 2 - 60
             
-            color(COL_BLACK)
+            color(backgroundColor)
             --centerRectOutline(engX, engY, 55, 55, 3)
             --rectOutline(engX + 35, engY - 55 / 2, 195, 55, 3)
             drawPlus(engX + 25, engY + 25, 10, 0, 10, 0, 3)
@@ -348,7 +373,7 @@ if CLIENT then
             centerRect(engX + 230 - 5, engY + 25, 10, 3)
             centerRect(engX + 230 - 5, engY - 25, 10, 3)
             
-            color(COL_WHITE)
+            color(mainColor)
             --centerRectOutline(engX, engY, 53, 53, 1)
             --rectOutline(engX + 36, engY - 55 / 2 + 1, 193, 53, 1)
             drawPlus(engX + 25, engY + 25, 10, 0, 10, 0, 1)
@@ -365,9 +390,9 @@ if CLIENT then
             m:translate(Vector(engX, engY, 0 ))
             m:rotate(Angle(0, aimDir:getAngle().y - input_base:getAngles().y, 0 ))
             render.pushMatrix(m)
-                color(COL_BLACK)
+                color(backgroundColor)
                 centerRectOutline(0, 0, 27, 42, 3)
-                color(COL_WHITE)
+                color(mainColor)
                 centerRectOutline(0, 0, 25, 40, 1)
             render.popMatrix()
             m = Matrix()
@@ -391,20 +416,20 @@ if CLIENT then
         local heading = aimDir:getAngle().y 
         local headX, headY = x, 60
         
-        color(COL_WHITE)
+        color(mainColor)
         render.enableScissorRect(headX - 512, headY - 40, headX + 512, headY + 40)
             drawCenterRT(headX + 512 + 1024 * (heading / 360), headY, headingRT)
             drawCenterRT(headX - 1536 + 1024 * (heading / 360), headY, headingRT)
             drawCenterRT(headX - 512 + 1024 * (heading / 360), headY, headingRT)
         render.disableScissorRect()
         
-        color(COL_BLACK)
+        color(backgroundColor)
         line(headX + 10, headY - 35, headX, headY - 25, 3)
         line(headX - 10, headY - 35, headX, headY - 25, 3)
         centerRect(headX - 25, headY + 17.5, 3, 15)
         centerRect(headX + 25, headY + 17.5, 3, 15)
         
-        color(COL_WHITE)
+        color(mainColor)
         line(headX + 10, headY - 35, headX, headY - 25, 1)
         line(headX - 10, headY - 35, headX, headY - 25, 1)
         centerRect(headX - 25, headY + 17.5, 1, 13)
@@ -424,27 +449,31 @@ if CLIENT then
         --centerRectOutline(headX, headY + 17.5, 48, 23)
         
         local gunInfoX, gunInfoY = x * 2 - 60, y * 2 - 30
+        local smokes = 0
         local subtract = 0
         for k, v in pairs(gunInformation) do
             local curPosY = gunInfoY - 65 * (v.i - subtract)
             if v.type == "Smoke Launcher" then
-                color(COL_WHITE)
-                drawCenterRT(gunInfoX - 320, gunInfoY, gunInfoBracket)
+                color(mainColor)
+                drawCenterRT(gunInfoX - 320 - 70 * smokes, gunInfoY, gunInfoBracket)
                 m = Matrix()
-                m:translate(Vector(gunInfoX-370, gunInfoY, 0))
+                m:translate(Vector(gunInfoX - 370 - 70 * smokes, gunInfoY, 0))
                 m:rotate(Vector(0, 180, 0))
                 render.pushMatrix(m)
                     drawCenterRT(0, 0, gunInfoBracket)
                 render.popMatrix()
                 
-                color(v.ready and COL_WHITE or COL_BLACK)
-                drawCenterRT(gunInfoX - 350, gunInfoY, smokeIcon)
-                color(COL_WHITE)
+                color(v.ready and mainColor or backgroundColor)
+                drawCenterRT(gunInfoX - 350 - 70 * smokes, gunInfoY, smokeIcon)
+                color(mainColor)
                 font(FONT_MAIN)
-                text(gunInfoX - 325, gunInfoY, v.totalRounds, TEXT_ALIGN.RIGHT)
+                text(gunInfoX - 325 - 70 * smokes, gunInfoY, "x" .. v.totalRounds, TEXT_ALIGN.RIGHT)
+
+                subtract = subtract + 1
+                smokes = smokes + 1
                 continue
             end
-            color(COL_WHITE)
+            color(mainColor)
             drawCenterRT(gunInfoX, curPosY, gunInfoBracket)
             
             m = Matrix()
@@ -460,12 +489,12 @@ if CLIENT then
             text(gunInfoX - 60, curPosY - 7.5 - 7.5, " // " .. v.totalRounds, TEXT_ALIGN.LEFT)
             text(gunInfoX - 60, curPosY - 7.5 + 7.5, v.caliber .. "MM " .. v.ammoType, TEXT_ALIGN.RIGHT)
             
-            color(v.ready and COL_WHITE or COL_BLACK)
+            color(v.ready and mainColor or backgroundColor)
             font(v.ready and FONT_MAIN or FONT_MAIN_NOOUTLINE)
             text(gunInfoX - 60, curPosY - 7.5 + 7.5, " READY", TEXT_ALIGN.LEFT)
             
             font(FONT_BIG)
-            color(COL_WHITE)
+            color(mainColor)
             if v.type == "Cannon" or v.type == "Smooth-Bore Cannon" then
                 drawCenterRT(gunInfoX - 220, curPosY, cannonIcon)
             elseif v.type == "Machinegun" then
@@ -474,10 +503,12 @@ if CLIENT then
                 text(gunInfoX - 120, curPosY - 12.5, string.upper(v.type), TEXT_ALIGN.RIGHT)
             end
         end
-        
-        color(COL_WHITE)
+
+        color(mainColor)
         drawCenterRT(x, y, crosshairRT)
     end
+
+    if 
 
     local function doStaticElements()
         local x, y = 512, 512
@@ -490,22 +521,22 @@ if CLIENT then
             m:translate(Vector(x, y, 0 ))
             m:rotate(Angle(0, 45, 0 ))
             render.pushMatrix(m)
-                color(COL_BLACK)
+                color(backgroundColor)
                 centerRectOutline(0, 0, 23, 23, 2)
                 
-                color(COL_WHITE)
+                color(mainColor)
                 centerRectOutline(0, 0, 20, 20)
             render.popMatrix()
 
         selectClearRT(targetBoxMain)
-            color(COL_BLACK)
+            color(backgroundColor)
             centerRectOutline(x, y, 23, 23, 3)
             
-            color(COL_WHITE)
+            color(mainColor)
             centerRectOutline(x, y, 20, 20) 
 
         selectClearRT(tankIcon)
-            color(COL_BLACK)
+            color(backgroundColor)
             line(x + 10, y - 5, x + 10, y + 15, 3)
             line(x + 10, y - 5, x, y - 15, 3)
             line(x, y - 15, x - 10, y - 5, 3)
@@ -513,7 +544,7 @@ if CLIENT then
             line(x - 10, y + 15, x + 10, y + 15, 3)
             line(x, y, x, y-25, 3)
             
-            color(COL_WHITE)
+            color(mainColor)
             line(x + 10, y - 5, x + 10, y + 15, 1)
             line(x + 10, y - 5, x, y - 15, 1)
             line(x, y - 15, x - 10, y - 5, 1)
@@ -524,29 +555,29 @@ if CLIENT then
         selectClearRT(crosshairRT)
             -- Plus, Circle, Dot
             if crosshairType == 1 then
-                color(COL_BLACK)
+                color(backgroundColor)
                 drawPlus(x, y, 15, 3)
-                color(COL_WHITE)
+                color(mainColor)
                 drawPlus(x, y, 14, 1)
             elseif crosshairType == 2 then 
-                color(COL_BLACK)
+                color(backgroundColor)
                 circle(x, y, 15)
-                color(COL_WHITE)
+                color(mainColor)
                 circle(x, y, 14)
             elseif crosshairType == 3 then 
-                color(COL_BLACK)
+                color(backgroundColor)
                 render.drawFilledCircle(x, y, 3)
-                color(COL_WHITE)
+                color(mainColor)
                 render.drawFilledCircle(x, y, 2)
             elseif crosshairType == 4 then
-                color(COL_BLACK)
+                color(backgroundColor)
                 line(x, y, x + 10, y + 10, 3)
                 line(x, y, x - 10, y + 10, 3)
                 line(x, y, x, y + 25, 3)
                 line(x - 10, y + 25, x + 10, y + 25, 3)
                 line(x + 5, y, x + 15, y, 3)
                 line(x - 5, y, x - 15, y, 3)
-                color(COL_WHITE)
+                color(mainColor)
                 line(x, y, x + 10, y + 10, 1)
                 line(x, y, x - 10, y + 10, 1)
                 line(x, y, x, y + 25, 1)
@@ -554,7 +585,7 @@ if CLIENT then
                 line(x + 5, y, x + 15, y, 1)
                 line(x - 5, y, x - 15, y, 1)
             elseif crosshairType == 5 then
-                color(COL_BLACK)
+                color(backgroundColor)
                 render.drawFilledCircle(x, y, 2)
                 line(x, y + 4, x, y + 11, 4)
                 line(x, y - 4, x, y - 11, 4)
@@ -571,7 +602,7 @@ if CLIENT then
                 line(x, y + 39, x, y + 71, 4)
                 line(x, y - 39, x, y - 71, 4)
                 
-                color(COL_WHITE)
+                color(mainColor)
                 render.drawFilledCircle(x, y, 1)
                 line(x, y + 5, x, y + 10, 2)
                 line(x, y - 5, x, y - 10, 2)
@@ -590,7 +621,7 @@ if CLIENT then
             end
         
         selectClearRT(headingRT)
-            color(COL_WHITE)
+            color(mainColor)
             for i = 0, 12 do
                 if (i * 30) % 90 == 0 then 
                     font(FONT_BIG)
@@ -599,58 +630,58 @@ if CLIENT then
                     text(i * (1012/12)+5, y-22.5, txt, TEXT_ALIGN.CENTER)
                 else 
                     font(FONT_MAIN)
-                    color(COL_BLACK)
+                    color(backgroundColor)
                     line(i * (1012/12)+5, y - 12.5, i * (1012/12)+5, y - 2.5, 3)
-                    color(COL_WHITE)
+                    color(mainColor)
                     line(i * (1012/12)+5, y - 12.5, i * (1012/12)+5, y - 2.5, 1) 
                 end
             end
             for i = 0, 12 do
                 local lineX = i * (1012/12)+5 + (1012/12) / 2
-                color(COL_BLACK)
+                color(backgroundColor)
                 line(lineX, y - 12.5, lineX, y - 2.5, 3)
-                color(COL_WHITE)
+                color(mainColor)
                 line(lineX, y - 12.5, lineX, y - 2.5, 1)
             end
 
         selectClearRT(headingBracket)
-            color(COL_BLACK)
+            color(backgroundColor)
             centerRect(x, y - 7.5, 3, 25)
             centerRect(x + 6, y - 7.5 - 12.5, 12, 3)
             centerRect(x + 6, y + 7.5 - 2.5, 12, 3)
-            color(COL_WHITE)
+            color(mainColor)
             centerRect(x, y - 7.5, 1, 25)
             centerRect(x + 6, y - 7.5 - 12.5, 12, 1)
             centerRect(x + 6, y + 7.5 - 2.5, 12, 1)
             
         selectClearRT(gunReticle)
-            color(COL_BLACK)
+            color(backgroundColor)
             drawPlus(x, y, 6, 6, 6, 6, 3)
             --circle(x, y, 9, 3)
             
-            color(COL_WHITE)
+            color(mainColor)
             drawPlus(x, y, 5, 5, 5, 5, 1)
             --circle(x, y, 10)
         
         selectClearRT(gunCircleRT)
-                color(COL_BLACK)
+                color(backgroundColor)
                 circle(x, y, 9, 3)
-                color(COL_WHITE)
+                color(mainColor)
                 circle(x, y, 10, 1)
         
         selectClearRT(cannonIcon)
-            color(COL_BLACK)
+            color(backgroundColor)
             drawCenterRect(x, y, 48, 23)
             drawCenterRect(x + 35, y, 18, 23)
             render.drawTriangle(x - 22.5, y + 11.5, x - 67, y, x - 22.5, y - 11.5)
             
-            color(COL_WHITE)
+            color(mainColor)
             drawCenterRect(x, y, 45, 20)
             drawCenterRect(x + 35, y, 15, 20)
             render.drawTriangle(x - 22.5, y + 10, x - 65, y, x - 22.5, y - 10)
             
         selectClearRT(mgIcon)
-            color(COL_BLACK)
+            color(backgroundColor)
             drawCenterRect(x, y + 12, 47, 10.5)
             drawCenterRect(x, y, 47, 10.5)
             drawCenterRect(x, y - 12, 47, 10.5)
@@ -661,7 +692,7 @@ if CLIENT then
             render.drawTriangle(x - 27, y + 4.25, x - 52, y, x - 27, y - 4.25)
             render.drawTriangle(x - 27, y - 12 + 4.25, x - 52, y - 12, x - 27, y - 12 - 4.25)
             
-            color(COL_WHITE)
+            color(mainColor)
             drawCenterRect(x, y + 12, 45, 7.5)
             drawCenterRect(x, y, 45, 7.5)
             drawCenterRect(x, y - 12, 45, 7.5)
@@ -673,11 +704,11 @@ if CLIENT then
             render.drawTriangle(x - 27.5, y - 12 + 3.25, x - 50, y - 12, x - 27.5, y - 12 - 3.25)
             
         selectClearRT(gunInfoBracket)
-            color(COL_BLACK)
+            color(backgroundColor)
             drawCenterRect(x, y, 3, 35)
             drawCenterRect(x-5, y-17.5, 10, 3)
             drawCenterRect(x-5, y+17.5, 10, 3)
-            color(COL_WHITE)
+            color(mainColor)
             drawCenterRect(x, y, 1, 34)
             drawCenterRect(x-5, y-17.5, 8, 1)
             drawCenterRect(x-5, y+17.5, 8, 1)
@@ -687,11 +718,11 @@ if CLIENT then
             m:translate(Vector(x, y, 0))
             m:rotate(Angle(0, 45, 0))
             render.pushMatrix(m)
-                color(COL_BLACK)
+                color(backgroundColor)
                 drawCenterRect(0, 0, 10, 25)
                 drawCenterRect(0, -15, 10, 5)
                 
-                color(COL_WHITE)
+                color(mainColor)
                 drawCenterRect(0, 0, 10, 22)
                 drawCenterRect(0, -15, 10, 2)
             render.popMatrix()
@@ -728,6 +759,10 @@ if CLIENT then
             input_targetID = net.readInt(32)
             input_targetName = net.readString()
         end
+
+        if showLeadPos then
+            input_leadPos = net.readVector()
+        end
         
         speed = net.readFloat()
         
@@ -763,6 +798,8 @@ if CLIENT then
     local function processStaticSend()
         hasMultipleGuns = net.readBool()
         hasMainGun = net.readBool()
+        maxElevation = net.readInt(16)
+        maxDepression = net.readInt(16)
         hasEngineInfo = net.readBool()
         input_base = net.readEntity()
         input_turret = net.readEntity()
@@ -772,6 +809,7 @@ if CLIENT then
         showsTargetTrack = net.readBool()
         crosshairType = net.readInt(16)
         mainColor = net.readColor()
+        backgroundColor = net.readColor()
         staticDrawn = false
     end
     
