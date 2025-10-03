@@ -1,4 +1,8 @@
--- SHARED space
+--- Animation Class
+-- By Merydian9 / Ally for Hire
+-- An animation class for effects
+
+--- SHARED space
 
 ANIMATION = {}
 ANIMATION.__index = ANIMATION

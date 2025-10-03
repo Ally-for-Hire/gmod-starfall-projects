@@ -1,0 +1,48 @@
+--- General Algorithms 
+-- By Merydian9 / Ally for Hire
+-- A general collection of algorithms and functions for use in many situations
+
+-- kp, ki, kd: the proportional, integral, and derivitive values
+function createPID(kp, ki, kd)
+    return {
+        kp = kp,
+        ki = ki,
+        kd = kd,
+        errorSum = 0,
+        lastError = 0,
+        lastTime = timer.curtime(),
+        update = function(self, error)
+            local now = timer.curtime()
+            local dt = now - self.lastTime
+            self.lastTime = now
+
+            self.errorSum = self.errorSum + error * dt
+            local dError = (error - self.lastError) / math.max(dt, 0.001)
+            self.lastError = error
+
+            return self.kp * error + self.ki * self.errorSum + self.kd * dError
+        end
+    }
+end
+
+-- low, high: the initial range of the search
+-- func: the function to use with mid
+-- condition: the condition to continue iterating
+function binarySearch(low, high, func, condition)
+    if MAX_ITER == nil then MAX_ITER = 10 end
+    local mid, value, iter = 0, 0, 0
+
+    while condition(low, high) and iter < MAX_ITER do
+        mid = low + (high - low) / 2;
+        value = func(mid)
+        iter = iter + 1
+
+        if value > 0 then
+            low = mid
+        else
+            high = mid
+        end
+    end
+
+    return low + (high - low) / 2; 
+end
