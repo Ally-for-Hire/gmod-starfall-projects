@@ -3,7 +3,7 @@
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@server
 
---- Version 0.1.1
+--- Version 0.1.2
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/huds_and_displays/modern_hud_beta_varlib.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -14,9 +14,9 @@ local outputTable = {}
 outputTable["HasMultipleGuns"] = 1 -- 1 = Has multiple guns
 outputTable["HasMainGun"] = 1 -- 1 = Has main gun, overwritten by HasMultipleGuns
 outputTable["HasEngineInfo"] = 1 -- Has engine information
-outputTable["ShowRadarData"] = 1 -- 1 = Shows input radar data
+outputTable["ShowRadarData"] = 0 -- 1 = Shows input radar data
 outputTable["ShowTargetTrack"] = 0 -- 1 = Shows input target data
-outputTable["CrosshairType"] = 4 -- 0 = No crosshair, 1 = Plus, 2 = Circle, 3 = Dot
+outputTable["CrosshairType"] = 5 -- 0 = No crosshair, 1 = Plus, 2 = Circle, 3 = Dot, 4 = ZTZ99, 5 = Merkava
 outputTable["MainColor"] = Color(255, 255, 255) -- Main color of hud
 
 -- NOTE: Showing radar data is rather intensive

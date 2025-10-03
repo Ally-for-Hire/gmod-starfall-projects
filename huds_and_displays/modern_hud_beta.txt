@@ -5,7 +5,7 @@
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@shared
 
---- Version 0.1.3
+--- Version 0.4.0
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/huds_and_displays/modern_hud_beta.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -41,7 +41,7 @@ if SERVER then
 
         if name == "DATA" then 
             if table.count(value) == 0 then return end
-            
+
             if value["HasMultipleGuns"] == 1 then
                 inputs["Guns"] = "Array"
                 hasMultipleGuns = true
@@ -178,13 +178,13 @@ if SERVER then
             lastStaticSend = theTime
         end
     end
-    
+
     hook.add("input", "MHB - Wire Updates", doWire)
     timer.create("MHB - Interface", 0.05, 0, doClientSends)
 end
 
 if CLIENT then
-    if player() ~= owner() then return end
+    --if player() ~= owner() then return end
     
     -- Variable Declaration
     local input_base, input_turret = chip(), chip()
@@ -228,6 +228,7 @@ if CLIENT then
     local gunInfoBracket = initRT("Gun Info Bracket")
     local cannonIcon = initRT("Cannon Icon")
     local mgIcon = initRT("MG Icon")
+    local smokeIcon = initRT("SM Icon")
     
     --- Needed Information:
     /*
@@ -237,7 +238,6 @@ if CLIENT then
 
     --- Known Information:
     /*
-    - Gun End Point
     - Lead Position
 
     - ID, Time of Radar Data
@@ -253,9 +253,11 @@ if CLIENT then
     - Gear
     - Fuel
     - Speed
+    - Gun End Point
     - Gun Names
     - Gun Statuses
     - Gun Ammo Counts
+    - Smoke Ammo and Ready
     */
 
     -- Functionality
@@ -270,6 +272,7 @@ if CLIENT then
             local coords = mainGunTrace["HitPos"]:toScreen()
             drawCenterRT(coords.x, coords.y, gunCircleRT)
             
+            font(FONT_BIG)
             local textX, textY = x, y * 1.25
             text(textX, textY, mainGunRound, TEXT_ALIGN.CENTER)
             local leftright = render.getTextSize(mainGunRound)
@@ -332,12 +335,32 @@ if CLIENT then
             local engX, engY = x - 105, y * 2 - 60
             
             color(COL_BLACK)
-            centerRectOutline(engX, engY, 55, 55, 3)
-            rectOutline(engX + 35, engY - 55 / 2, 195, 55, 3)
+            --centerRectOutline(engX, engY, 55, 55, 3)
+            --rectOutline(engX + 35, engY - 55 / 2, 195, 55, 3)
+            drawPlus(engX + 25, engY + 25, 10, 0, 10, 0, 3)
+            drawPlus(engX + 25, engY - 25, 0, 10, 10, 0, 3)
+            drawPlus(engX - 25, engY + 25, 10, 0, 0, 10, 3)
+            drawPlus(engX - 25, engY - 25, 0, 10, 0, 10, 3)
+            centerRect(engX + 35, engY, 3, 50)
+            centerRect(engX + 35 + 5, engY + 25, 10, 3)
+            centerRect(engX + 35 + 5, engY - 25, 10, 3)
+            centerRect(engX + 230, engY, 3, 50)
+            centerRect(engX + 230 - 5, engY + 25, 10, 3)
+            centerRect(engX + 230 - 5, engY - 25, 10, 3)
             
             color(COL_WHITE)
-            centerRectOutline(engX, engY, 53, 53, 1)
-            rectOutline(engX + 36, engY - 55 / 2 + 1, 193, 53, 1)
+            --centerRectOutline(engX, engY, 53, 53, 1)
+            --rectOutline(engX + 36, engY - 55 / 2 + 1, 193, 53, 1)
+            drawPlus(engX + 25, engY + 25, 10, 0, 10, 0, 1)
+            drawPlus(engX + 25, engY - 25, 0, 10, 10, 0, 1)
+            drawPlus(engX - 25, engY + 25, 10, 0, 0, 10, 1)
+            drawPlus(engX - 25, engY - 25, 0, 10, 0, 10, 1)
+            centerRect(engX + 35, engY, 1, 49)
+            centerRect(engX + 35 + 5, engY + 25, 10, 1)
+            centerRect(engX + 35 + 5, engY - 25, 10, 1)
+            centerRect(engX + 230, engY, 1, 49)
+            centerRect(engX + 230 - 5, engY + 25, 10, 1)
+            centerRect(engX + 230 - 5, engY - 25, 10, 1)
             local m = Matrix()
             m:translate(Vector(engX, engY, 0 ))
             m:rotate(Angle(0, aimDir:getAngle().y - input_base:getAngles().y, 0 ))
@@ -401,8 +424,26 @@ if CLIENT then
         --centerRectOutline(headX, headY + 17.5, 48, 23)
         
         local gunInfoX, gunInfoY = x * 2 - 60, y * 2 - 30
+        local subtract = 0
         for k, v in pairs(gunInformation) do
-            local curPosY = gunInfoY - 65 * v.i
+            local curPosY = gunInfoY - 65 * (v.i - subtract)
+            if v.type == "Smoke Launcher" then
+                color(COL_WHITE)
+                drawCenterRT(gunInfoX - 320, gunInfoY, gunInfoBracket)
+                m = Matrix()
+                m:translate(Vector(gunInfoX-370, gunInfoY, 0))
+                m:rotate(Vector(0, 180, 0))
+                render.pushMatrix(m)
+                    drawCenterRT(0, 0, gunInfoBracket)
+                render.popMatrix()
+                
+                color(v.ready and COL_WHITE or COL_BLACK)
+                drawCenterRT(gunInfoX - 350, gunInfoY, smokeIcon)
+                color(COL_WHITE)
+                font(FONT_MAIN)
+                text(gunInfoX - 325, gunInfoY, v.totalRounds, TEXT_ALIGN.RIGHT)
+                continue
+            end
             color(COL_WHITE)
             drawCenterRT(gunInfoX, curPosY, gunInfoBracket)
             
@@ -425,7 +466,7 @@ if CLIENT then
             
             font(FONT_BIG)
             color(COL_WHITE)
-            if v.type == "Cannon" then
+            if v.type == "Cannon" or v.type == "Smooth-Bore Cannon" then
                 drawCenterRT(gunInfoX - 220, curPosY, cannonIcon)
             elseif v.type == "Machinegun" then
                 drawCenterRT(gunInfoX - 230, curPosY, mgIcon)
@@ -444,8 +485,7 @@ if CLIENT then
 
         if staticDrawn then return end
         -- Static elements that don't need updates go here
-        _selectRT(targetBoxGen)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(targetBoxGen)
             local m = Matrix()
             m:translate(Vector(x, y, 0 ))
             m:rotate(Angle(0, 45, 0 ))
@@ -457,16 +497,14 @@ if CLIENT then
                 centerRectOutline(0, 0, 20, 20)
             render.popMatrix()
 
-        _selectRT(targetBoxMain)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(targetBoxMain)
             color(COL_BLACK)
             centerRectOutline(x, y, 23, 23, 3)
             
             color(COL_WHITE)
             centerRectOutline(x, y, 20, 20) 
 
-        _selectRT(tankIcon)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(tankIcon)
             color(COL_BLACK)
             line(x + 10, y - 5, x + 10, y + 15, 3)
             line(x + 10, y - 5, x, y - 15, 3)
@@ -483,8 +521,7 @@ if CLIENT then
             line(x - 10, y + 15, x + 10, y + 15, 1)
             line(x, y, x, y-25, 1)
 
-        _selectRT(crosshairRT)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(crosshairRT)
             -- Plus, Circle, Dot
             if crosshairType == 1 then
                 color(COL_BLACK)
@@ -516,10 +553,43 @@ if CLIENT then
                 line(x - 10, y + 25, x + 10, y + 25, 1)
                 line(x + 5, y, x + 15, y, 1)
                 line(x - 5, y, x - 15, y, 1)
+            elseif crosshairType == 5 then
+                color(COL_BLACK)
+                render.drawFilledCircle(x, y, 2)
+                line(x, y + 4, x, y + 11, 4)
+                line(x, y - 4, x, y - 11, 4)
+                line(x + 4, y, x + 16, y, 4)
+                line(x - 4, y, x - 16, y, 4)
+                
+                line(x + 29, y, x + 51, y, 4)
+                line(x - 29, y, x - 51, y, 4)
+                line(x + 69, y, x + 121, y, 4)
+                line(x - 69, y, x - 121, y, 4)
+                
+                line(x, y + 19, x, y + 31, 4)
+                line(x, y - 19, x, y - 31, 4)
+                line(x, y + 39, x, y + 71, 4)
+                line(x, y - 39, x, y - 71, 4)
+                
+                color(COL_WHITE)
+                render.drawFilledCircle(x, y, 1)
+                line(x, y + 5, x, y + 10, 2)
+                line(x, y - 5, x, y - 10, 2)
+                line(x + 5, y, x + 15, y, 2)
+                line(x - 5, y, x - 15, y, 2)
+                
+                line(x + 30, y, x + 50, y, 2)
+                line(x - 30, y, x - 50, y, 2)
+                line(x + 70, y, x + 120, y, 2)
+                line(x - 70, y, x - 120, y, 2)
+                
+                line(x, y + 20, x, y + 30, 2)
+                line(x, y - 20, x, y - 30, 2)
+                line(x, y + 40, x, y + 70, 2)
+                line(x, y - 40, x, y - 70, 2)
             end
         
-        _selectRT(headingRT)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(headingRT)
             color(COL_WHITE)
             for i = 0, 12 do
                 if (i * 30) % 90 == 0 then 
@@ -543,8 +613,7 @@ if CLIENT then
                 line(lineX, y - 12.5, lineX, y - 2.5, 1)
             end
 
-        _selectRT(headingBracket)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(headingBracket)
             color(COL_BLACK)
             centerRect(x, y - 7.5, 3, 25)
             centerRect(x + 6, y - 7.5 - 12.5, 12, 3)
@@ -554,8 +623,7 @@ if CLIENT then
             centerRect(x + 6, y - 7.5 - 12.5, 12, 1)
             centerRect(x + 6, y + 7.5 - 2.5, 12, 1)
             
-        _selectRT(gunReticle)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(gunReticle)
             color(COL_BLACK)
             drawPlus(x, y, 6, 6, 6, 6, 3)
             --circle(x, y, 9, 3)
@@ -564,15 +632,13 @@ if CLIENT then
             drawPlus(x, y, 5, 5, 5, 5, 1)
             --circle(x, y, 10)
         
-        _selectRT(gunCircleRT)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(gunCircleRT)
                 color(COL_BLACK)
                 circle(x, y, 9, 3)
                 color(COL_WHITE)
                 circle(x, y, 10, 1)
         
-        _selectRT(cannonIcon)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(cannonIcon)
             color(COL_BLACK)
             drawCenterRect(x, y, 48, 23)
             drawCenterRect(x + 35, y, 18, 23)
@@ -583,8 +649,7 @@ if CLIENT then
             drawCenterRect(x + 35, y, 15, 20)
             render.drawTriangle(x - 22.5, y + 10, x - 65, y, x - 22.5, y - 10)
             
-        _selectRT(mgIcon)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(mgIcon)
             color(COL_BLACK)
             drawCenterRect(x, y + 12, 47, 10.5)
             drawCenterRect(x, y, 47, 10.5)
@@ -607,8 +672,7 @@ if CLIENT then
             render.drawTriangle(x - 27.5, y + 3.25, x - 50, y, x - 27.5, y - 3.25)
             render.drawTriangle(x - 27.5, y - 12 + 3.25, x - 50, y - 12, x - 27.5, y - 12 - 3.25)
             
-        _selectRT(gunInfoBracket)
-            render.clear(COL_RENDERTARGET)
+        selectClearRT(gunInfoBracket)
             color(COL_BLACK)
             drawCenterRect(x, y, 3, 35)
             drawCenterRect(x-5, y-17.5, 10, 3)
@@ -617,6 +681,20 @@ if CLIENT then
             drawCenterRect(x, y, 1, 34)
             drawCenterRect(x-5, y-17.5, 8, 1)
             drawCenterRect(x-5, y+17.5, 8, 1)
+            
+        selectClearRT(smokeIcon)
+            m = Matrix()
+            m:translate(Vector(x, y, 0))
+            m:rotate(Angle(0, 45, 0))
+            render.pushMatrix(m)
+                color(COL_BLACK)
+                drawCenterRect(0, 0, 10, 25)
+                drawCenterRect(0, -15, 10, 5)
+                
+                color(COL_WHITE)
+                drawCenterRect(0, 0, 10, 22)
+                drawCenterRect(0, -15, 10, 2)
+            render.popMatrix()
 
         staticDrawn = true
     end
@@ -701,7 +779,7 @@ if CLIENT then
     hook.add("drawhud", "MHB - Drawhud", doHud)
     hook.add("renderoffscreen", "MHB - Renderoffscreen", doStaticElements)
     hook.add("HUDShouldDraw", "Hide HUD", function(name) 
-        if not (name == "CHudHealth" or name == "CHudBattery") then return end
+    if not (name == "CHudHealth" or name == "CHudBattery") then return end
         return false
     end)
     net.receive("MHB - Fast Send", processFastSend)

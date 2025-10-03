@@ -1,4 +1,8 @@
--- SHARED Space
+--- Helpful HUD Functions
+-- By Merydian9 / Ally for Hire
+-- A general collection of helpful functions for HUDs
+
+--- SHARED Space
 
 --- Function interface data easily between server and client
 -- name: the name of the stream
@@ -20,30 +24,6 @@ function sendData(name, value, safe)
             timer.remove("remove " .. name)    
         end)  
     end)
-end
-
---- Functions to create and update a PID
--- kp, ki, kd: the proportional, integral, and derivitive values
-function createPID(kp, ki, kd)
-    return {
-        kp = kp,
-        ki = ki,
-        kd = kd,
-        errorSum = 0,
-        lastError = 0,
-        lastTime = timer.curtime(),
-        update = function(self, error)
-            local now = timer.curtime()
-            local dt = now - self.lastTime
-            self.lastTime = now
-
-            self.errorSum = self.errorSum + error * dt
-            local dError = (error - self.lastError) / math.max(dt, 0.001)
-            self.lastError = error
-
-            return self.kp * error + self.ki * self.errorSum + self.kd * dError
-        end
-    }
 end
 
 curtime = timer.curtime
@@ -84,7 +64,7 @@ if CLIENT then
     
     -- Specific Colors
     COL_PURPLE = Color(255, 0, 255)
-    COL_GOLD = Color(225, 150, 0)
+    COL_GOLD = Color(255, 200, 0)
     
     -- Color for clearing RenderTargets with
     COL_RENDERTARGET = Color(0, 0, 0, 0)
@@ -186,6 +166,11 @@ if CLIENT then
     function initRT (rtName)
         _createRT(rtName)
         return rtName    
+    end
+
+    function selectClearRT(rtName)
+        _selectRT(rtName)
+        render.clear(COL_RENDERTARGET)
     end
 
     -- Convenient Functions
