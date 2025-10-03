@@ -1,0 +1,58 @@
+--@name 2029 Projectile Aimbot Computer
+--@author Ally for Hire / Merydian9
+--@include ../public_lib/general_algorithms.txt
+--@server
+
+--- CONSTANTS
+local TICK = game.getTickInterval()
+local G = physenv.getGravity()[3]
+local TO_M = 39.37
+local MAXΔT = 0.01
+local MAX_ITER = 10
+require("../public_lib/general_algorithms.txt")
+
+--- VARIABLES
+local input_targetPos = Vector()
+local input_targetVel = Vector()
+local input_gun = chip()
+local internalMuzzleVel = 9999
+local muzzleDist = 0
+
+--- HELPER FUNCTIONS
+local function storeValues()
+    if not input_gun:isValid() then return end
+
+    local attachment = input_gun:getAttachment(input_gun:lookupAttachment("muzzle"))
+    local muzzlePos = Vector(attachment[1], attachment[2], attachment[3])
+    muzzleDist = input_gun:localToWorld(Vector()):getDistance(muzzlePos)
+    internalMuzzleVel = input_gun:acfMuzzleVel() * TO_M        
+end
+local function condition(low, high) return (high - low) > MAXΔT end
+
+--- MAIN LOOP
+local function main()
+    local interceptTime = 0
+    local interceptPos = Vector()
+
+    
+
+    wire.ports.Time = interceptTime
+    wire.ports.AimPos = interceptPos
+end
+
+--- WIRE HANDLING
+local function handleWire(name, value)
+    if name == "Gun" then input_gun = value; storeValues()
+    elseif name == "TargetPos" then input_targetPos = value
+    elseif name == "TargetVel" then input_targetVel = value
+    end
+end
+wire.adjustPorts(
+    {Gun = "entity", TargetPos = "vector", TargetVel = "vector"},
+    {Time = "number", AimPos = "vector"}
+)
+
+
+--- HOOKS
+hook.add("input", "Wire Inputs Updated", handleWire)
+hook.add("think", "Main Logic Loop", main)
