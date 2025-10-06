@@ -1,6 +1,6 @@
 --@name 2028 Projectile Aimbot Computer
 --@author Ally for Hire / Merydian9
---@include ../public_lib/acf_ballistics_lib.txt
+--@include ../allylib/acf_ballistics_lib.txt
 --@shared
 --@server
 
