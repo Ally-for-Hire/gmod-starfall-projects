@@ -3,7 +3,6 @@
 --@shared
 --@server
 
-
 -- GLOBAL VARIABLES HERE
 -- Wire port setup
 wire.adjustPorts({

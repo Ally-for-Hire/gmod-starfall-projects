@@ -1,9 +1,9 @@
 --@name Ally Mobility Hours
 --@author Ally for Hire / Merydian9
---@server
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
+--@server
 
---- Version 0.8.1
+--- Version 0.9.1
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/mobility_controllers/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -13,10 +13,13 @@
 Plug-and-play mobility brain for tracked or wheeled ACF vehicles. It manages autogearing, clutch modulation, braking, and counter-steer logic so you can concentrate on driving instead of spinning out.
 
 --- Wiring
+-- Inputs
 1. "MainGearbox" -> main gearbox (typically the largest gearbox on the vehicle).
 2. "Engine" -> the engine you want monitored; pick the one with the largest powerband if you have multiple different types.
 3. "Base" -> vehicle baseplate entity.
 4. "Pod" -> pod controller
+-- Outputs
+1. "Throttle" <- all of your engines' throttle inputs.
 
 Once those links are set, the chip begins driving the gearbox and throttle outputs automatically.
 
@@ -38,10 +41,10 @@ local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
 
 --- Customizable Variables
 -- Gearing and Braking Setup
-local gearingType = 1 -- 1:RPM, 2:Speed, 3:Hybrid
-local maxBrakePower = 50 -- Maximum brake power
-local brakeScaling = true -- True if you want the brake strength to scale with speed
-local wheelSize = 30 -- Diameter of wheels (Required for type 2 or 3 gearing)
+local gearingType = 2 -- 1:RPM, 2:Speed, 3:Hybrid
+local maxBrakePower = 15 -- Maximum brake power
+local brakeScaling = false -- True if you want the brake strength to scale with speed
+local wheelSize = 36 -- Diameter of wheels (Required for type 2 or 3 gearing)
 local finalRatio = 2*0.1 -- Ratio of all gearboxes final drives (Required for type 2 or 3 gearing)
 
 -- Vehicle Setup 
@@ -61,7 +64,7 @@ local clutchStart = 0.8 -- RPM the gearboxes start working, don't touch this, 0.
 --- Internal Variables
 -- Don't touch below this unless you understand what you are doing
 local clutchTurn = 1
-local clutchBrake = 0
+local clutchBrake = 1
 local minClutch = 0
 local remainderClutch = 0
 local gearCount = 0
@@ -206,7 +209,7 @@ local function think()
         local clutchRelease = 1 -math.clamp((RPM - biteRPM) / (releaseRPM - biteRPM), 0, 1)  
         applyBrakeClutch(0, 0, clutchRelease, clutchRelease)
     else
-        output_throttle = 0
+        output_throttle = 10
     end
     
     --- Gear Handling Logic
@@ -325,8 +328,8 @@ local function think()
         input_mainGearbox:getWirelink()["Right Clutch"] = outputRightClutch
     end
 
-    wire.ports.LeftWeldLatch = math.clamp(outputLeftBrake, 0, 1)
-    wire.ports.RightWeldLatch = math.clamp(outputRightBrake, 0, 1)
+    wire.ports.LeftWeldLatch = outputLeftBrake > 0 and 1 or 0
+    wire.ports.RightWeldLatch = outputRightBrake > 0 and 1 or 0
 
     -- Uh, if you don't have a dual clutch gearbox, and you can't neutral steer,
     -- there's no built-in way to turn without doing some really strange setups

@@ -1,6 +1,6 @@
 --@name 2029 Projectile Aimbot Computer
 --@author Ally for Hire / Merydian9
---@include ../public_lib/general_algorithms.txt
+--@include allylib/general_algorithms.txt
 --@server
 
 --- CONSTANTS
@@ -9,7 +9,7 @@ local G = physenv.getGravity()[3]
 local TO_M = 39.37
 local MAXΔT = 0.01
 local MAX_ITER = 10
-require("../public_lib/general_algorithms.txt")
+require("allylib/general_algorithms.txt")
 
 --- VARIABLES
 local input_targetPos = Vector()

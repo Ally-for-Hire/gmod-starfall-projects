@@ -16,6 +16,23 @@ function easeInQuad(t)
     return t * t
 end
 
+function easeInLog(t)
+    return math.log(t * 9 + 1) / math.log(10)
+end
+
+function makeEaseInLog(strength)
+    return function(t)
+        local base = strength or 4 
+        return math.log(t * (base - 1) + 1) / math.log(base)
+    end
+end
+
+
+function easeOutLog(t)
+    return 1 - (math.log(10 - t * 9) / math.log(10))
+end
+
+
 function ANIMATION:new(params)
     local obj = setmetatable({}, self)
     
@@ -29,6 +46,35 @@ function ANIMATION:new(params)
     
     return obj
 end
+
+function ANIMATION:get(params)
+    local id = params.id
+    if self._registry[id] then
+        return self._registry[id]
+    end
+
+    local anim = ANIMATION:new(params or { id = id })
+    anim.id = id
+    self._registry[id] = anim
+    return anim
+end
+
+function ANIMATION:delete(id)
+    if type(id) == "string" then
+        if self._registry[id] then
+            self._registry[id] = nil
+            return true
+        end
+        return false
+    elseif self.id then
+        if ANIMATION._registry[self.id] then
+            ANIMATION._registry[self.id] = nil
+            return true
+        end
+    end
+    return false
+end
+
 
 function ANIMATION:getProgress()
     local elapsed = timer.curtime() - self.startTime
@@ -55,15 +101,4 @@ end
 
 function ANIMATION:reset()
     self.startTime = timer.curtime()
-end
-
-function ANIMATION:get(id, params)
-    if self._registry[id] then
-        return self._registry[id]
-    end
-
-    local anim = ANIMATION:new(params or { id = id })
-    anim.id = id
-    self._registry[id] = anim
-    return anim
 end
