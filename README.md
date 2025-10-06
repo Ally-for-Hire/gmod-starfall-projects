@@ -15,15 +15,6 @@ A curated portfolio of Starfall Lua systems built for Garry's Mod. The projects 
 - **Simulation & analytics:** telemetry logging, diagnostics overlays, decision support
 - **Collaboration:** consistent naming, inline docs, and versioned releases for teammates
 
-## Project Categories
-- `huds_and_displays` - Player-facing HUDs, diagnostics panels, and visualization tooling
-- `firing_computers` - Fire-control systems, targeting solutions, and weapon management logic
-- `mobility_controllers` - Navigation aides, drive systems, and stabilization control loops
-- `information_systems` - Sensor fusion, alerting, and command-information utilities
-- `public_lib` - Shared helper modules that enforce consistent patterns across projects
-
-Each directory contains released Starfall chips ready to drop into a Garry's Mod world. Many include configuration tables so teams can adapt behavior without modifying code.
-
 ## Working with the Projects
 1. Place the desired `.txt` file inside `garrysmod/data/starfall/` (already mirrored in this repository).
 2. Load it through a Starfall chip in-game and tweak any exposed variables or config tables.
@@ -33,7 +24,7 @@ I am happy to walk through setup, customization, or broader workflow questions, 
 
 ## Links
 - GitHub: https://github.com/Ally-for-Hire
-- Google Drive (legacy releases & docs): https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
+- Google Drive (legacy releases): https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
 - YouTube (demos & tutorials): https://www.youtube.com/@allyforhire
 - Steam: https://steamcommunity.com/id/alliedmerydian/
 - Discord: @allyfh
