@@ -2,7 +2,7 @@
 --@author Ally for Hire / Merydian9
 --@server
 
--- Version 1.2
+-- Version 1.2.0
 
 -- Constants go here, we get most of these from ACF itself
 local GRAVITY = physenv.getGravity()
