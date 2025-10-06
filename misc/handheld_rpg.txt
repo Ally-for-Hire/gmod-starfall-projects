@@ -1,7 +1,7 @@
---@name RPG Functionality
+--@name Handheld RPG
 --@author Ally for Hire / Merydian9
---@include ../public_lib/helpful_hud_functions.txt
---@include ../public_lib/projectile_library.txt
+--@include allylib/helpful_hud_functions.txt
+--@include allylib/projectile_library.txt
 
 if CLIENT then
     --- Variable Initialization
@@ -11,7 +11,7 @@ if CLIENT then
     local OWNER = owner()
     local ISOWNER = PLY == OWNER
     if PLY == OWNER then enableHud(nil, true) end
-    require("../public_lib/helpful_hud_functions.txt")
+    require("allylib/helpful_hud_functions.txt")
     
     -- User Variables
     local handPos = Vector(3, -7.5, -18)

@@ -24,6 +24,7 @@ if SERVER then
     -- and now i can finally run my code
         for key,value in pairs(wireData["Wheels"]) do 
             wireData["Wheels"][key]:setCollisionGroup(1)
+            print(1)
         end
     end
     

@@ -1,207 +1,20 @@
 --@name Modern HUD Beta
 --@author Ally for Hire / Merydian9
---@include ../public_lib/helpful_hud_functions.txt
---@include ../public_lib/animation_class.txt
+--@include allylib/helpful_hud_functions.txt
+--@include allylib/animation_class.txt
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@shared
 
---- Version 0.4.1
+--- Version 0.8.2
 -- Sourced from https://github.com/Ally-for-Hire/gmod-script-projects/blob/main/huds_and_displays/modern_hud_beta.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-script-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
 
 -- Shared space
 local SELF = chip()
-local LIB = require("../public_lib/helpful_hud_functions.txt")
-local ANIMLIB = require("../public_lib/animation_class.txt")
-
-if SERVER then
-    -- Variable Declaration and Wire Initialization
-    local input_base, input_turret, input_engine = chip(), chip(), chip()
-    local input_mainGun, input_guns = chip(), {}
-    local gearbox_gear, engine_fuel = 0, 0
-
-    local input_position, input_velocity, input_ids, input_owner, input_time = {}, {}, {}, {}, {}
-    local input_targetPos, input_targetVel, input_targetID, input_targetName = {}, {}, {}, {}
-    local input_leadPos = Vector()
-    
-    local lastSlowSend, lastStaticSend = 0, 0
-    local inputs = {DATA = "TABLE"}
-    local outputs = {}
-    if #wire.getInputs(chip()) == 0 then
-        wire.adjustPorts(inputs, outputs)
-    end
-    
-    local hasMultipleGuns, hasMainGun, hasEngineInfo = false, false, false
-    local maxElevation, maxDepression = 0, 0
-    local showsRadarData, showsTargetTrack = false, false
-    local crosshairType, mainColor, outlineColor = 0, Color(255, 255, 255), Color(0, 0, 0)
-    local hasLeadPos = false
-    
-    -- Function for defining the chip's initial values and inputs and handling wire inputs
-    local function doWire(name, value)
-        if value == nil or value == entity(-1) then return end
-
-        if name == "DATA" then 
-            if table.count(value) == 0 then return end
-
-            if value["HasMultipleGuns"] == 1 then
-                inputs["Guns"] = "Array"
-                hasMultipleGuns = true
-            end
-            if value["HasMainGun"] == 1 then
-                hasMainGun = true
-                if not hasMultipleGuns then
-                    inputs["MainGun"] = "Entity"
-                end
-            end
-            if value["HasEngineInfo"] == 1 then
-                inputs["Engine"] = "Entity"
-                inputs["Fuel"] = "Number"
-                inputs["Gear"] = "Number"
-                hasEngineInfo = true
-            end
-            if value["ShowRadarData"] == 1 then
-                inputs["Position"] = "Array"
-                inputs["Velocity"] = "Array"
-                inputs["IDs"] = "Array"
-                inputs["Owner"] = "Array"
-                inputs["Time"] = "Array"
-                showsRadarData = true
-            end
-            if value["ShowTargetTrack"] == 1 then
-                inputs["TargetName"] = "String"
-                inputs["TargetPos"] = "Vector"
-                inputs["TargetVel"] = "Vector"
-                inputs["TargetID"] = "Number"
-                showsTargetTrack = true
-            end
-            if value["ShowLeadPosition"] then
-                inputs["LeadPos"] = "Vector"
-                hasLeadPos = true
-            end
-            crosshairType = value["CrosshairType"]
-            maxElevation = value["Elevation"]
-            maxDepression = value["Depression"]
-            local cT = value["MainColor"]
-            mainColor = Color(cT[1], cT[2], cT[3], cT[4])
-            local bT = Value["OutlineColor"]
-            backgroundColor = Color(bT[1], bT[2], bT[3], bT[4])
-            inputs["Base"] = "Entity"
-            inputs["Turret"] = "Entity"
-            
-            wire.adjustPorts(inputs, outputs)
-        elseif name == "Base" then input_base = value
-        elseif name == "Turret" then input_turret = value
-        elseif name == "Engine" then input_engine = value
-        elseif name == "Guns" then input_guns = value; input_mainGun = input_guns[1]
-        elseif name == "MainGun" then input_mainGun = value; input_guns[1] = input_mainGun
-        
-        elseif name == "Gear" then gearbox_gear = value
-        elseif name == "Fuel" then engine_fuel = value
-        
-        elseif name == "Position" then input_position = value
-        elseif name == "Velocity" then input_velocity = value
-        elseif name == "IDs" then input_ids = value
-        elseif name == "Owner" then input_owner = value
-        elseif name == "Time" then input_time = value
-        
-        elseif name == "TargetPos" then input_targetPos = value
-        elseif name == "TargetVel" then input_targetVel = value
-        elseif name == "TargetID" then input_targetID = value
-        elseif name == "TargetName" then input_targetName = value
-
-        elseif name == "LeadPos" then input_leadPos = value
-        end
-    end
-    
-    -- Function for interfacing all of the data with the client at the various speeds, works in 0.1s intervals
-    local function doClientSends()
-        local theTime = curtime()
-        
-        net.start("MHB - Fast Send")
-            if showsRadarData then
-                net.writeInt(#input_position, 16)
-                for i = 1, #input_position do
-                    net.writeVector(input_position[i])
-                    net.writeVector(input_velocity[i])
-                    net.writeString(input_owner[i])
-                    net.writeInt(input_ids[i], 16)
-                end
-            end
-
-            if showsTargetTrack then
-                net.writeVector(input_targetPos)
-                net.writeVector(input_targetVel)
-                net.writeInt(input_targetID, 32)
-                net.writeString(input_targetName)
-            end
-
-            if showLeadPos then
-                net.writeVector(input_leadPos)
-            end
-            
-            net.writeFloat(input_base:getVelocity():getLength() / 17.6)
-            
-            if hasMainGun then
-                net.writeBool(input_mainGun:acfReady())
-                net.writeString(input_mainGun:acfAmmoType())
-                net.writeString(input_mainGun:acfState())
-                net.writeFloat(input_mainGun:acfReloadTime())
-                net.writeFloat(input_mainGun:acfReloadProgress())
-            end
-        net.send(owner(), true)
-        
-        if (theTime - lastSlowSend) > 0.3 then
-            net.start("MHB - Slow Send")
-                if hasEngineInfo then
-                    net.writeInt(input_engine ~= chip() and isValid(input_engine) and input_engine:acfRPM() or 0, 32)
-                    net.writeInt(gearbox_gear, 16)
-                    net.writeInt(engine_fuel, 16)
-                end
-                if hasMultipleGuns then
-                    for i = 1, #input_guns do
-                        local gun = input_guns[i]
-                        net.writeString(gun:acfType())
-                        net.writeInt(gun:acfCaliber(), 16)
-                        net.writeString(gun:acfAmmoType())
-                        net.writeInt(gun:acfMagRounds(), 16)
-                        net.writeInt(gun:acfTotalAmmoCount(), 16)
-                        net.writeBool(gun:acfReady())
-                        net.writeInt(i - 1, 16)
-                    end    
-                end
-            net.send(owner())
-            lastSlowSend = theTime
-        end 
-        
-        if (theTime - lastStaticSend) > 1 then
-            net.start("MHB - Static Send")
-                net.writeBool(hasMultipleGuns)
-                net.writeBool(hasMainGun)
-                net.writeInt(elevation, 16)
-                net.writeInt(depression, 16)
-                net.writeBool(hasEngineInfo)
-                net.writeEntity(input_base)
-                net.writeEntity(input_turret)
-                if hasMultipleGuns then net.writeTable(input_guns) end
-                if hasMainGun then 
-                    if isValid(input_mainGun) then net.writeEntity(input_mainGun) 
-                    else net.writeEntity(chip()) end
-                end
-                net.writeBool(showsRadarData)
-                net.writeBool(showsTargetTrack)
-                net.writeInt(crosshairType, 16)
-                net.writeColor(mainColor)
-                net.writeColor(backgroundColor)
-            net.send(owner())
-            lastStaticSend = theTime
-        end
-    end
-
-    hook.add("input", "MHB - Wire Updates", doWire)
-    timer.create("MHB - Interface", 0.05, 0, doClientSends)
-end
+local REFRESHRATE = 500
+local LIB = require("allylib/helpful_hud_functions.txt")
+local ANIMLIB = require("allylib/animation_class.txt")
 
 if CLIENT then
     --if player() ~= owner() then return end
@@ -218,9 +31,9 @@ if CLIENT then
 
     local resx, resy, x, y = 0, 0, 0, 0
     local hasMultipleGuns, hasMainGun, hasEngineInfo = 0, 0, 0
-    local showLeadPos = false
+    local showLeadPos, detectsAmmoTypes = false, false
     local showsRadarData, showsTargetTrack = false, false
-    local crosshairType, mainColor, backgroundColor = 0, Color(255, 255, 255), Color(0, 0, 0)
+    local crosshairType, mainColor, outlineColor = 0, Color(255, 255, 255), Color(0, 0, 0)
     local maxElevation, maxDepression = 0, 0
 
     local staticDrawn = false
@@ -228,6 +41,7 @@ if CLIENT then
     local internal_times = {}
     local eyePos, aimDir = Vector(), Vector()
     local speed = 0
+    local lastHUDUpdate = timer.curtime()
     
     local mainGunReady = false
     local mainGunRound = ""
@@ -285,6 +99,9 @@ if CLIENT then
 
     -- Functionality
     local function doHud()
+        if (timer.curtime() - lastHUDUpdate) < (1 / REFRESHRATE) then return end
+        lastHUDUpdate = timer.curtime()
+        
         resx, resy = render.getResolution()
         x, y = resx / 2, resy / 2
         eyePos = render.getEyePos()
@@ -293,14 +110,19 @@ if CLIENT then
         if hasMainGun then
             local mainGunTrace = trace.line(input_mainGun:getPos() + input_mainGun:getForward() * 300, input_mainGun:getPos() + input_mainGun:getForward() * 999999)
             local coords = mainGunTrace["HitPos"]:toScreen()
-            drawCenterRT(coords.x, coords.y, gunCircleRT)
+            m = Matrix()
+            m:translate(Vector(coords.x, coords.y, 0))
+            m:scale(Vector(0.5))
+            render.pushMatrix(m)
+                drawCenterRT(0, 0, gunCircleRT)
+            render.popMatrix()
             
             font(FONT_BIG)
             local textX, textY = x, y * 1.25
             text(textX, textY, mainGunRound, TEXT_ALIGN.CENTER)
             local leftright = render.getTextSize(mainGunRound)
             
-            color(backgroundColor)
+            color(outlineColor)
             drawCenterRect(textX, textY + 25, leftright * 1.5, 3)
             color(mainColor)
             drawCenterRect(textX, textY + 25, leftright * 1.5 - 1, 1)
@@ -317,36 +139,52 @@ if CLIENT then
         end
         
         -- Multi Target Display
-        local theTime = timer.curtime()
-        font(FONT_MAIN)
-        for k, v in pairs(input_position) do
-            local pos = input_position[k]
-            local vel = input_velocity[k]
-            local name = input_owner[k]
-            local id = input_ids[k]
-            local dt = (theTime - internal_times[id])
-            
-            local _p = (pos + vel * (dt + 0.01)):toScreen()
-            local _pv = (pos + vel * (dt + 0.21)):toScreen()
-            
-            -- Information we always need
-            color(backgroundColor)
-            spacedLine(_p.x, _p.y, _pv.x, _pv.y, 10, 0, 3)
-            local pt1 = getPoint(x, y, _p.x, _p.y, 80)
-            spacedLine(x, y, pt1.x, pt1.y, 65, 0, 3)
-
-            color(mainColor)
-            spacedLine(_p.x, _p.y, _pv.x, _pv.y, 10, 0)
-            spacedLine(x, y, pt1.x, pt1.y, 65, 0)
-            drawCenterRT(_p.x, _p.y, targetBoxGen)
-            text(_p.x, _p.y + 15, name, TEXT_ALIGN.CENTER)
+        if showsRadarData then
+            local theTime = timer.curtime()
+            font(FONT_MAIN)
+            for k, v in pairs(internal_times) do
+                local pos = v.pos
+                local vel = v.vel
+                local name = v.owner
+                local id = k
+                local dt = (theTime - v.time)
                 
-            -- Information we only need conditionally
-            local toTarget = (pos + vel * (dt + 0.01) - eyePos):getNormalized()
-            local dot = aimDir:dot(toTarget) 
-
-            if dot > 0.9995 then
+                anim = ANIMATION:get({
+                    id = k,
+                    startV = 3,
+                    endV = 1,
+                    duration = 0.5,
+                    easing = makeEaseInLog(12)
+                })
                 
+                if dt > 8 then internal_times[k] = nil; anim:delete(); continue end
+                
+                local progress = anim:getValue()
+                
+                local _p = (pos + vel * (dt + 0.01)):toScreen()
+                local _pv = (pos + vel * (dt + 0.21)):toScreen()
+                
+                local lineTestEnd = getPoint(x, y, _p.x, _p.y, 200)
+                local lineDist = math.sqrt((_p.x - lineTestEnd.x)^2 + (_p.y - lineTestEnd.y)^2)
+                local distance = (60 - math.clamp(lineDist, 0, 60))
+                local lineLength = 25 - distance
+                
+                if dt > 4 then color(Color(0, 0, 0, timer.curtime() * 400 % 200))
+                else color(outlineColor) end
+                spacedLine(_p.x, _p.y, _pv.x, _pv.y, 10, 0, 3)
+                local lineEnd = getPoint(x, y, _p.x, _p.y, 175 + lineLength)
+                spacedLine(x, y, lineEnd.x, lineEnd.y, 175, 0, 4)
+                line(_p.x-20*progress, _p.y-8.5, _p.x-20*progress, _p.y+8.5, 4)
+                line(_p.x+20*progress, _p.y-8.5, _p.x+20*progress, _p.y+8.5, 4)
+                
+                if dt > 4 then color(Color(255, 255, 255, timer.curtime() * 400 % 200))
+                else color(mainColor) end
+                spacedLine(_p.x, _p.y, _pv.x, _pv.y, 10, 0)
+                local lineEnd = getPoint(x, y, _p.x, _p.y, 174 + lineLength)
+                spacedLine(x, y, lineEnd.x, lineEnd.y, 176, 0, 2)
+                line(_p.x-20*progress, _p.y-7.5, _p.x-20*progress, _p.y+7.5, 2)
+                line(_p.x+20*progress, _p.y-7.5, _p.x+20*progress, _p.y+7.5, 2)
+                text(_p.x, _p.y + 15, name .. " *" .. id, TEXT_ALIGN.CENTER)
             end
         end
 
@@ -359,7 +197,7 @@ if CLIENT then
         if hasEngineInfo then
             local engX, engY = x - 105, y * 2 - 60
             
-            color(backgroundColor)
+            color(outlineColor)
             --centerRectOutline(engX, engY, 55, 55, 3)
             --rectOutline(engX + 35, engY - 55 / 2, 195, 55, 3)
             drawPlus(engX + 25, engY + 25, 10, 0, 10, 0, 3)
@@ -390,13 +228,13 @@ if CLIENT then
             m:translate(Vector(engX, engY, 0 ))
             m:rotate(Angle(0, aimDir:getAngle().y - input_base:getAngles().y, 0 ))
             render.pushMatrix(m)
-                color(backgroundColor)
+                color(outlineColor)
                 centerRectOutline(0, 0, 27, 42, 3)
                 color(mainColor)
                 centerRectOutline(0, 0, 25, 40, 1)
             render.popMatrix()
             m = Matrix()
-            m:translate(Vector(engX+1, engY, 0 ))
+            m:translate(Vector(engX, engY, 0 ))
             m:rotate(Angle(0, aimDir:getAngle().y - input_mainGun:getAngles().y, 0 ))
             render.pushMatrix(m)
                 drawCenterRT(0, 0, tankIcon)
@@ -423,7 +261,7 @@ if CLIENT then
             drawCenterRT(headX - 512 + 1024 * (heading / 360), headY, headingRT)
         render.disableScissorRect()
         
-        color(backgroundColor)
+        color(outlineColor)
         line(headX + 10, headY - 35, headX, headY - 25, 3)
         line(headX - 10, headY - 35, headX, headY - 25, 3)
         centerRect(headX - 25, headY + 17.5, 3, 15)
@@ -441,6 +279,7 @@ if CLIENT then
         render.pushMatrix(m)
             drawCenterRT(0, 0, headingBracket)
         render.popMatrix()
+        font(FONT_MAIN)
         text(headX, headY + 40, math.round(90 / player():getFOV(), 2) .. "x ZOOM", TEXT_ALIGN.CENTER)
         
         --centerRectOutline(headX, headY - 10, 1028, 28, 1)
@@ -463,13 +302,13 @@ if CLIENT then
                     drawCenterRT(0, 0, gunInfoBracket)
                 render.popMatrix()
                 
-                color(v.ready and mainColor or backgroundColor)
+                color(v.ready and mainColor or outlineColor)
                 drawCenterRT(gunInfoX - 350 - 70 * smokes, gunInfoY, smokeIcon)
                 color(mainColor)
                 font(FONT_MAIN)
                 text(gunInfoX - 325 - 70 * smokes, gunInfoY, "x" .. v.totalRounds, TEXT_ALIGN.RIGHT)
 
-                subtract = subtract + 1
+                --subtract = subtract + 1
                 smokes = smokes + 1
                 continue
             end
@@ -489,12 +328,12 @@ if CLIENT then
             text(gunInfoX - 60, curPosY - 7.5 - 7.5, " // " .. v.totalRounds, TEXT_ALIGN.LEFT)
             text(gunInfoX - 60, curPosY - 7.5 + 7.5, v.caliber .. "MM " .. v.ammoType, TEXT_ALIGN.RIGHT)
             
-            color(v.ready and mainColor or backgroundColor)
+            color(v.ready and mainColor or outlineColor)
             font(v.ready and FONT_MAIN or FONT_MAIN_NOOUTLINE)
             text(gunInfoX - 60, curPosY - 7.5 + 7.5, " READY", TEXT_ALIGN.LEFT)
             
             font(FONT_BIG)
-            color(mainColor)
+            --color(mainColor)
             if v.type == "Cannon" or v.type == "Smooth-Bore Cannon" then
                 drawCenterRT(gunInfoX - 220, curPosY, cannonIcon)
             elseif v.type == "Machinegun" then
@@ -508,8 +347,6 @@ if CLIENT then
         drawCenterRT(x, y, crosshairRT)
     end
 
-    if 
-
     local function doStaticElements()
         local x, y = 512, 512
         -- Grouped elements that need updates go here
@@ -519,24 +356,25 @@ if CLIENT then
         selectClearRT(targetBoxGen)
             local m = Matrix()
             m:translate(Vector(x, y, 0 ))
-            m:rotate(Angle(0, 45, 0 ))
             render.pushMatrix(m)
-                color(backgroundColor)
-                centerRectOutline(0, 0, 23, 23, 2)
+                color(outlineColor)
+                line(-20, -8.5, -20, 8.5, 4)
+                line(20, -8.5, 20, 8.5, 4)
                 
                 color(mainColor)
-                centerRectOutline(0, 0, 20, 20)
+                line(-20, -7.5, -20, 7.5, 2)
+                line(20, -7.5, 20, 7.5, 2)
             render.popMatrix()
 
         selectClearRT(targetBoxMain)
-            color(backgroundColor)
+            color(outlineColor)
             centerRectOutline(x, y, 23, 23, 3)
             
             color(mainColor)
             centerRectOutline(x, y, 20, 20) 
 
         selectClearRT(tankIcon)
-            color(backgroundColor)
+            color(outlineColor)
             line(x + 10, y - 5, x + 10, y + 15, 3)
             line(x + 10, y - 5, x, y - 15, 3)
             line(x, y - 15, x - 10, y - 5, 3)
@@ -553,40 +391,47 @@ if CLIENT then
             line(x, y, x, y-25, 1)
 
         selectClearRT(crosshairRT)
-            -- Plus, Circle, Dot
             if crosshairType == 1 then
-                color(backgroundColor)
-                drawPlus(x, y, 15, 3)
+                color(outlineColor)
+                drawPlus(x, y, 15, 4)
                 color(mainColor)
-                drawPlus(x, y, 14, 1)
+                drawPlus(x, y, 14, 2)
+                
             elseif crosshairType == 2 then 
-                color(backgroundColor)
-                circle(x, y, 15)
+                color(outlineColor)
+                circle(x, y, 15, 2)
+                circle(x, y, 11, 2)
                 color(mainColor)
-                circle(x, y, 14)
+                circle(x, y, 13, 2)
+                
             elseif crosshairType == 3 then 
-                color(backgroundColor)
+                color(outlineColor)
                 render.drawFilledCircle(x, y, 3)
                 color(mainColor)
                 render.drawFilledCircle(x, y, 2)
+                
             elseif crosshairType == 4 then
-                color(backgroundColor)
-                line(x, y, x + 10, y + 10, 3)
-                line(x, y, x - 10, y + 10, 3)
-                line(x, y, x, y + 25, 3)
-                line(x - 10, y + 25, x + 10, y + 25, 3)
-                line(x + 5, y, x + 15, y, 3)
-                line(x - 5, y, x - 15, y, 3)
+                color(outlineColor)
+                line(x, y, x + 15.5, y + 20.75, 4.5)
+                line(x, y, x - 15.5, y + 20.75, 4.5)
+                line(x, y + 9, x, y + 60, 4)
+                centerRect(x, y + 60, 62, 4)
+                line(x + 14, y, x + 31, y, 4)
+                line(x - 14, y, x - 31, y, 4)
+                line(x, y - 14, x, y - 31, 4)
+                
                 color(mainColor)
-                line(x, y, x + 10, y + 10, 1)
-                line(x, y, x - 10, y + 10, 1)
-                line(x, y, x, y + 25, 1)
-                line(x - 10, y + 25, x + 10, y + 25, 1)
-                line(x + 5, y, x + 15, y, 1)
-                line(x - 5, y, x - 15, y, 1)
+                line(x, y, x + 15, y + 20, 2)
+                line(x, y, x - 15, y + 20, 2)
+                line(x, y + 10, x, y + 60, 2)
+                centerRect(x, y + 60, 60, 2)
+                line(x + 15, y, x + 30, y, 2)
+                line(x - 15, y, x - 30, y, 2)
+                line(x, y - 15, x, y - 30, 2)
+                
             elseif crosshairType == 5 then
-                color(backgroundColor)
-                render.drawFilledCircle(x, y, 2)
+                color(outlineColor)
+                render.drawFilledCircle(x, y, 2.5)
                 line(x, y + 4, x, y + 11, 4)
                 line(x, y - 4, x, y - 11, 4)
                 line(x + 4, y, x + 16, y, 4)
@@ -630,7 +475,7 @@ if CLIENT then
                     text(i * (1012/12)+5, y-22.5, txt, TEXT_ALIGN.CENTER)
                 else 
                     font(FONT_MAIN)
-                    color(backgroundColor)
+                    color(outlineColor)
                     line(i * (1012/12)+5, y - 12.5, i * (1012/12)+5, y - 2.5, 3)
                     color(mainColor)
                     line(i * (1012/12)+5, y - 12.5, i * (1012/12)+5, y - 2.5, 1) 
@@ -638,14 +483,14 @@ if CLIENT then
             end
             for i = 0, 12 do
                 local lineX = i * (1012/12)+5 + (1012/12) / 2
-                color(backgroundColor)
+                color(outlineColor)
                 line(lineX, y - 12.5, lineX, y - 2.5, 3)
                 color(mainColor)
                 line(lineX, y - 12.5, lineX, y - 2.5, 1)
             end
 
         selectClearRT(headingBracket)
-            color(backgroundColor)
+            color(outlineColor)
             centerRect(x, y - 7.5, 3, 25)
             centerRect(x + 6, y - 7.5 - 12.5, 12, 3)
             centerRect(x + 6, y + 7.5 - 2.5, 12, 3)
@@ -655,22 +500,24 @@ if CLIENT then
             centerRect(x + 6, y + 7.5 - 2.5, 12, 1)
             
         selectClearRT(gunReticle)
-            color(backgroundColor)
-            drawPlus(x, y, 6, 6, 6, 6, 3)
+            color(outlineColor)
+            line(x-6, y, x+6, y, 4)
+            line(x, y-6, x, y+6, 4)
             --circle(x, y, 9, 3)
             
             color(mainColor)
-            drawPlus(x, y, 5, 5, 5, 5, 1)
+            line(x-5, y, x+5, y, 2)
+            line(x, y-5, x, y+5, 2)
             --circle(x, y, 10)
         
         selectClearRT(gunCircleRT)
-                color(backgroundColor)
-                circle(x, y, 9, 3)
+                color(outlineColor)
+                circle(x, y, 18, 6)
                 color(mainColor)
-                circle(x, y, 10, 1)
+                circle(x, y, 20, 2)
         
         selectClearRT(cannonIcon)
-            color(backgroundColor)
+            color(outlineColor)
             drawCenterRect(x, y, 48, 23)
             drawCenterRect(x + 35, y, 18, 23)
             render.drawTriangle(x - 22.5, y + 11.5, x - 67, y, x - 22.5, y - 11.5)
@@ -681,7 +528,7 @@ if CLIENT then
             render.drawTriangle(x - 22.5, y + 10, x - 65, y, x - 22.5, y - 10)
             
         selectClearRT(mgIcon)
-            color(backgroundColor)
+            color(outlineColor)
             drawCenterRect(x, y + 12, 47, 10.5)
             drawCenterRect(x, y, 47, 10.5)
             drawCenterRect(x, y - 12, 47, 10.5)
@@ -704,7 +551,7 @@ if CLIENT then
             render.drawTriangle(x - 27.5, y - 12 + 3.25, x - 50, y - 12, x - 27.5, y - 12 - 3.25)
             
         selectClearRT(gunInfoBracket)
-            color(backgroundColor)
+            color(outlineColor)
             drawCenterRect(x, y, 3, 35)
             drawCenterRect(x-5, y-17.5, 10, 3)
             drawCenterRect(x-5, y+17.5, 10, 3)
@@ -718,8 +565,8 @@ if CLIENT then
             m:translate(Vector(x, y, 0))
             m:rotate(Angle(0, 45, 0))
             render.pushMatrix(m)
-                color(backgroundColor)
-                drawCenterRect(0, 0, 10, 25)
+                color(outlineColor)
+                drawCenterRect(0, 0, 10, 23)
                 drawCenterRect(0, -15, 10, 5)
                 
                 color(mainColor)
@@ -745,7 +592,11 @@ if CLIENT then
 
             for i = 1, count do
                 if input_position[i] ~= new_positions[i] then
-                    internal_times[new_ids[i]] = timer.curtime()
+                    internal_times[new_ids[i]] = {}
+                    internal_times[new_ids[i]].pos = new_positions[i]
+                    internal_times[new_ids[i]].vel = new_velocities[i]
+                    internal_times[new_ids[i]].owner = new_owners[i]
+                    internal_times[new_ids[i]].time = timer.curtime()
                 end
             end
             
@@ -766,7 +617,7 @@ if CLIENT then
         
         speed = net.readFloat()
         
-        if hasMainGun then
+        if hasMainGun and input_mainGun ~= chip() and input_mainGun ~= nil then
             mainGunReady = net.readBool()
             mainGunRound = net.readString()
             mainGunStatus = string.upper(net.readString())
@@ -808,8 +659,9 @@ if CLIENT then
         showsRadarData = net.readBool()
         showsTargetTrack = net.readBool()
         crosshairType = net.readInt(16)
+        detectsAmmoTypes = net.readBool()
         mainColor = net.readColor()
-        backgroundColor = net.readColor()
+        outlineColor = net.readColor()
         staticDrawn = false
     end
     
@@ -823,4 +675,193 @@ if CLIENT then
     net.receive("MHB - Fast Send", processFastSend)
     net.receive("MHB - Slow Send", processSlowSend)
     net.receive("MHB - Static Send", processStaticSend)
+elseif SERVER then
+    -- Variable Declaration and Wire Initialization
+    local input_base, input_turret, input_engine = chip(), chip(), chip()
+    local input_mainGun, input_guns = chip(), {}
+    local gearbox_gear, engine_fuel = 0, 0
+
+    local input_position, input_velocity, input_ids, input_owner, input_time = {}, {}, {}, {}, {}
+    local input_targetPos, input_targetVel, input_targetID, input_targetName = {}, {}, {}, {}
+    local input_leadPos = Vector()
+    
+    local lastSlowSend, lastStaticSend = 0, 0
+    local inputs = {DATA = "TABLE"}
+    local outputs = {}
+    if #wire.getInputs(chip()) == 0 then
+        wire.adjustPorts(inputs, outputs)
+    end
+    
+    local hasMultipleGuns, hasMainGun, hasEngineInfo = false, false, false
+    local maxElevation, maxDepression = 0, 0
+    local showsRadarData, showsTargetTrack = false, false
+    local crosshairType, mainColor, outlineColor = 0, Color(255, 255, 255), Color(0, 0, 0)
+    local hasLeadPos, detectsAmmoTypes = false, false
+    
+    -- Function for defining the chip's initial values and inputs and handling wire inputs
+    local function doWire(name, value)
+        if value == nil or value == entity(-1) then return end
+
+        if name == "DATA" then 
+            if table.count(value) == 0 then return end
+
+            if value["HasMultipleGuns"] == 1 then
+                inputs["Guns"] = "Array"
+                hasMultipleGuns = true
+            end
+            if value["HasMainGun"] == 1 then
+                hasMainGun = true
+                if not hasMultipleGuns then
+                    inputs["MainGun"] = "Entity"
+                end
+            end
+            if value["HasEngineInfo"] == 1 then
+                inputs["Engine"] = "Entity"
+                inputs["Fuel"] = "Number"
+                inputs["Gear"] = "Number"
+                hasEngineInfo = true
+            end
+            if value["ShowRadarData"] == 1 then
+                inputs["Position"] = "Array"
+                inputs["Velocity"] = "Array"
+                inputs["IDs"] = "Array"
+                inputs["Owner"] = "Array"
+                inputs["Time"] = "Array"
+                showsRadarData = true
+            end
+            if value["ShowTargetTrack"] == 1 then
+                inputs["TargetName"] = "String"
+                inputs["TargetPos"] = "Vector"
+                inputs["TargetVel"] = "Vector"
+                inputs["TargetID"] = "Number"
+                showsTargetTrack = true
+            end
+            if value["ShowLeadPosition"] == 1 then
+                inputs["LeadPos"] = "Vector"
+                hasLeadPos = true
+            end
+            crosshairType = value["CrosshairType"]
+            maxElevation = value["Elevation"]
+            maxDepression = value["Depression"]
+            detectsAmmoTypes = value["DetectAmmoTypes"] == 1
+            local cT = value["MainColor"]
+            mainColor = Color(cT[1], cT[2], cT[3], cT[4])
+            local bT = value["OutlineColor"]
+            outlineColor = Color(bT[1], bT[2], bT[3], bT[4])
+            print(outlineColor)
+            inputs["Base"] = "Entity"
+            inputs["Turret"] = "Entity"
+            
+            wire.adjustPorts(inputs, outputs)
+        elseif name == "Base" then input_base = value
+        elseif name == "Turret" then input_turret = value
+        elseif name == "Engine" then input_engine = value
+        elseif name == "Guns" then input_guns = value; input_mainGun = input_guns[1]
+        elseif name == "MainGun" then input_mainGun = value; input_guns[1] = input_mainGun
+        
+        elseif name == "Gear" then gearbox_gear = value
+        elseif name == "Fuel" then engine_fuel = value
+        
+        elseif name == "Position" then input_position = value
+        elseif name == "Velocity" then input_velocity = value
+        elseif name == "IDs" then input_ids = value
+        elseif name == "Owner" then input_owner = value
+        elseif name == "Time" then input_time = value
+        
+        elseif name == "TargetPos" then input_targetPos = value
+        elseif name == "TargetVel" then input_targetVel = value
+        elseif name == "TargetID" then input_targetID = value
+        elseif name == "TargetName" then input_targetName = value
+
+        elseif name == "LeadPos" then input_leadPos = value
+        end
+    end
+    
+    -- Function for interfacing all of the data with the client at the various speeds, works in 0.1s intervals
+    local function doClientSends()
+        local theTime = curtime()
+        
+        net.start("MHB - Fast Send")
+            if showsRadarData then
+                net.writeInt(#input_position, 16)
+                for i = 1, #input_position do
+                    net.writeVector(input_position[i])
+                    net.writeVector(input_velocity[i])
+                    net.writeString(input_owner[i])
+                    net.writeInt(input_ids[i], 16)
+                end
+            end
+
+            if showsTargetTrack then
+                net.writeVector(input_targetPos)
+                net.writeVector(input_targetVel)
+                net.writeInt(input_targetID, 32)
+                net.writeString(input_targetName)
+            end
+
+            if showLeadPos then
+                net.writeVector(input_leadPos)
+            end
+            
+            net.writeFloat(input_base:getVelocity():getLength() / 17.6)
+            
+            if hasMainGun and input_mainGun ~= chip() and input_mainGun ~= nil then
+                net.writeBool(input_mainGun:acfReady())
+                net.writeString(input_mainGun:acfAmmoType())
+                net.writeString(input_mainGun:acfState())
+                net.writeFloat(input_mainGun:acfReloadTime())
+                net.writeFloat(input_mainGun:acfReloadProgress())
+            end
+        net.send(owner(), true)
+        
+        if (theTime - lastSlowSend) > 0.3 then
+            net.start("MHB - Slow Send")
+                if hasEngineInfo then
+                    net.writeInt(input_engine ~= chip() and isValid(input_engine) and input_engine:acfRPM() or 0, 32)
+                    net.writeInt(gearbox_gear, 16)
+                    net.writeInt(engine_fuel, 16)
+                end
+                if hasMultipleGuns then
+                    for i = 1, #input_guns do
+                        local gun = input_guns[i]
+                        net.writeString(gun:acfType())
+                        net.writeInt(gun:acfCaliber(), 16)
+                        net.writeString(gun:acfAmmoType())
+                        net.writeInt(gun:acfMagRounds(), 16)
+                        net.writeInt(gun:acfTotalAmmoCount(), 16)
+                        net.writeBool(gun:acfReady())
+                        net.writeInt(i - 1, 16)
+                    end    
+                end
+            net.send(owner())
+            lastSlowSend = theTime
+        end 
+        
+        if (theTime - lastStaticSend) > 2 then
+            net.start("MHB - Static Send")
+                net.writeBool(hasMultipleGuns)
+                net.writeBool(hasMainGun)
+                net.writeInt(maxElevation, 16)
+                net.writeInt(maxDepression, 16)
+                net.writeBool(hasEngineInfo)
+                net.writeEntity(input_base)
+                net.writeEntity(input_turret)
+                if hasMultipleGuns then net.writeTable(input_guns) end
+                if hasMainGun then 
+                    if isValid(input_mainGun) then net.writeEntity(input_mainGun) 
+                    else net.writeEntity(chip()) end
+                end
+                net.writeBool(showsRadarData)
+                net.writeBool(showsTargetTrack)
+                net.writeInt(crosshairType, 16)
+                net.writeBool(detectsAmmoTypes)
+                net.writeColor(mainColor)
+                net.writeColor(outlineColor)
+            net.send(owner())
+            lastStaticSend = theTime
+        end
+    end
+
+    hook.add("input", "MHB - Wire Updates", doWire)
+    timer.create("MHB - Interface", 0.05, 0, doClientSends)
 end
