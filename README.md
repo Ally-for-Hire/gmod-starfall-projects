@@ -22,15 +22,13 @@ A curated portfolio of Starfall Lua systems built for Garry's Mod. The projects 
 - 2024_cam_controller_and_hud.txt — Camera controller + HUD utilities.
 - 2024_physical_gun_controller.txt — Physical gun controller utilities.
 - acf3_rws_controller.txt — ACF 3 remote weapon system controller.
-- information_systems/universal4_serverlink.txt — Universal Serverlink (server).
-- information_systems/universal4_serverlink_client-end.txt — Universal Serverlink (client).
-- information_systems/universal5_itk.txt — Universal 5 ITK (server).
-- information_systems/universal5_itk_client.txt — Universal 5 ITK (client).
+- information_systems/universal1_datalink_node.txt — Universal1: Datalink Node
+- information_systems/universal1_datalink_root.txt — Universal1: Datalink Root
 
 For more, browse these folders for reusable libs and examples:
 - allylib — helper libraries (ballistics, animations, HUD helpers, algorithms, projectiles).
 - examples — small focused demos and render tests.
-- information_systems — universal data link/server link toolset (v1–v5).
+- information_systems — universal data link/server link toolset.
 - misc — standalone QoL utilities and experimental tools.
 - defunct — archived prototypes kept for reference.
 
@@ -49,7 +47,7 @@ I am happy to walk through setup, customization, or broader workflow questions, 
 ## Links
 - GitHub: https://github.com/Ally-for-Hire
 - Google Drive (legacy releases): https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
-- YouTube (demos & tutorials): https://www.youtube.com/@allyforhire
+- YouTube: https://www.youtube.com/@allyforhire
 - Steam: https://steamcommunity.com/id/alliedmerydian/
 - Discord: @allyfh
 
