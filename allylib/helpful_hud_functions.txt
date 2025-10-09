@@ -146,15 +146,13 @@ if CLIENT then
     function drawPlus(x, y, up, down, left, right, thickness)
         -- If given (x, y, size, thickness)
         if left == nil then
-            thickness = down
             down = up
             left = up 
             right = up 
+            thickness = down
         end
-        drawThickLine(x, y, x, y - up, thickness)
-        drawThickLine(x, y, x, y + down, thickness)
-        drawThickLine(x, y, x - left, y, thickness)
-        drawThickLine(x, y, x + right, y, thickness)
+        drawCenterRect(x, y - down / 2 + up / 2, up + down, thickness)
+        drawCenterRect(x - left / 2 + right / 2, y, thickness, left + right)
     end
 
     function drawCenterRT (x, y, rtname)
