@@ -5,7 +5,7 @@
 --@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@shared
 
---- Version 0.8.3
+--- Version 0.8.4
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/modern_hud_beta.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-starfall-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -668,10 +668,6 @@ if CLIENT then
     -- Hooks and Net Receives
     hook.add("drawhud", "MHB - Drawhud", doHud)
     hook.add("renderoffscreen", "MHB - Renderoffscreen", doStaticElements)
-    hook.add("HUDShouldDraw", "Hide HUD", function(name) 
-    if not (name == "CHudHealth" or name == "CHudBattery") then return end
-        return false
-    end)
     net.receive("MHB - Fast Send", processFastSend)
     net.receive("MHB - Slow Send", processSlowSend)
     net.receive("MHB - Static Send", processStaticSend)

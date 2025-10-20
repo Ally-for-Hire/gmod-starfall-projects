@@ -547,7 +547,7 @@ elseif SERVER then
     end
     
     -- Second pass sorting aforementioned crates belonging to said owner by name and caliber
-    local sortedAmmoTypes = {} // Sorts by caliber
+    local sortedAmmoTypes = {} -- Sorts by caliber
     while table.count(unsortedAmmoTypes) > 0 do
         local keys = table.getKeys(unsortedAmmoTypes) 
         local maxValue = 99999 -- actually minValue

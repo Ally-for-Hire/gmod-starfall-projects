@@ -42,7 +42,6 @@ if CLIENT then
     _drawTexturedRect = render.drawTexturedRect
     _drawCircle = render.drawCircle
     _drawFilledCircle = render.drawFilledCircle
-    _drawPoly = render.drawPoly
     _drawLine = render.drawLine
     
     -- Text
@@ -95,7 +94,7 @@ if CLIENT then
         local perpX = perpDir[1]
         local perpY = perpDir[2]
     
-        _drawPoly({
+        render.drawPoly({
             { x = x1 + perpX, y = y1 + perpY },
             { x = x2 + perpX, y = y2 + perpY },
             { x = x2 - perpX, y = y2 - perpY },
@@ -144,16 +143,17 @@ if CLIENT then
     -- left, right: the length for the left and right prongs
     -- thickness: thickness of the prongs
     function drawPlus(x, y, up, down, left, right, thickness)
-        -- If given (x, y, size, thickness)
         if left == nil then
             down = up
-            left = up 
-            right = up 
+            left = up
+            right = up
             thickness = down
         end
-        drawCenterRect(x, y - down / 2 + up / 2, up + down, thickness)
-        drawCenterRect(x - left / 2 + right / 2, y, thickness, left + right)
+    
+        drawCenterRect(x, y + (down - up) / 2, thickness, up + down)
+        drawCenterRect(x + (right - left) / 2, y, left + right, thickness)
     end
+
 
     function drawCenterRT (x, y, rtname)
         _setRTTexture(rtname)

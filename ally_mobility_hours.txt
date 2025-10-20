@@ -42,10 +42,10 @@ local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
 --- Customizable Variables
 -- Gearing and Braking Setup
 local gearingType = 2 -- 1:RPM, 2:Speed, 3:Hybrid
-local maxBrakePower = 15 -- Maximum brake power
+local maxBrakePower = 75 -- Maximum brake power
 local brakeScaling = false -- True if you want the brake strength to scale with speed
-local wheelSize = 36 -- Diameter of wheels (Required for type 2 or 3 gearing)
-local finalRatio = 2*0.1 -- Ratio of all gearboxes final drives (Required for type 2 or 3 gearing)
+local wheelSize = 30 -- Diameter of wheels (Required for type 2 or 3 gearing)
+local finalRatio = (1/1.8)*(0.75) -- Ratio of all gearboxes final drives (Required for type 2 or 3 gearing)
 
 -- Vehicle Setup 
 local hasWheels = false -- True if the vehicle has wheels instead of tracks
@@ -55,7 +55,7 @@ local inlineTransfers = true -- True if the transfers are inline (will error if 
 
 -- Countersteering Setup
 local yawDeadzone = 15 -- Yaw velocity deadzone for countersteering
-local counterSteerStrength = 2 -- How strong the countersteering will be (1 is normal strength)
+local counterSteerStrength = 1 -- How strong the countersteering will be (1 is normal strength)
 
 -- Misc
 local showDebug = false -- True will print debug information
