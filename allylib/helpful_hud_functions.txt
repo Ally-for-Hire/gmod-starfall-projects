@@ -62,6 +62,7 @@ if CLIENT then
     COL_BLUE = Color(0, 0, 255)
     
     -- Specific Colors
+    COL_ORANGE = Color(255, 100, 0)
     COL_PURPLE = Color(255, 0, 255)
     COL_GOLD = Color(255, 200, 0)
     

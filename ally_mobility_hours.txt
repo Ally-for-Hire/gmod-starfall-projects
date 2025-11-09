@@ -1,6 +1,5 @@
 --@name Ally Mobility Hours
 --@author Ally for Hire / Merydian9
---@model models/sprops/rectangles_thin/size_1/rect_3x3x1_5.mdl
 --@server
 
 --- Version 0.9.2
@@ -41,8 +40,8 @@ local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
 
 --- Customizable Variables
 -- Gearing and Braking Setup
-local gearingType = 2 -- 1:RPM, 2:Speed, 3:Hybrid
-local maxBrakePower = 75 -- Maximum brake power
+local gearingType = 1 -- 1:RPM, 2:Speed, 3:Hybrid
+local maxBrakePower = 100 -- Maximum brake power
 local brakeScaling = false -- True if you want the brake strength to scale with speed
 local wheelSize = 30 -- Diameter of wheels (Required for type 2 or 3 gearing)
 local finalRatio = (1/1.8)*(0.75) -- Ratio of all gearboxes final drives (Required for type 2 or 3 gearing)
@@ -54,7 +53,7 @@ local invertedTransfers = -1 -- 1 if they face their respective sides, -1 if the
 local inlineTransfers = true -- True if the transfers are inline (will error if this is set to the wrong value)
 
 -- Countersteering Setup
-local yawDeadzone = 15 -- Yaw velocity deadzone for countersteering
+local yawDeadzone = 20 -- Yaw velocity deadzone for countersteering
 local counterSteerStrength = 1 -- How strong the countersteering will be (1 is normal strength)
 
 -- Misc
@@ -209,7 +208,7 @@ local function think()
         local clutchRelease = 1 -math.clamp((RPM - biteRPM) / (releaseRPM - biteRPM), 0, 1)  
         applyBrakeClutch(0, 0, clutchRelease, clutchRelease)
     else
-        output_throttle = 10
+        output_throttle = 30
     end
     
     --- Gear Handling Logic
