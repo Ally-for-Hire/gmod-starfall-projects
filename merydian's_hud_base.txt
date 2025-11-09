@@ -1,0 +1,94 @@
+--@name Merydian's HUD Base
+--@author Ally for Hire / Merydian9
+--@shared
+
+INPUTS = {}
+SHARED = {}
+
+INPUTS.Chair = nil
+SHARED.Driver = nil
+SHARED.O = owner()
+SHARED.P = player()
+SHARED.ENTID = chip():entIndex()
+
+if SERVER then
+    wire.adjustInputs({"Chair"}, {"Entity"}, {"Vehicle Chair"})
+    
+    local function enteredVehicleHandler(ply, vehicle, num)
+        if vehicle ~= INPUTS.Chair then return end
+        
+        SHARED.Driver = ply
+        net.start(SHARED.ENTID .. " Driver Update")
+            net.writeEntity(ply)
+        net.send()
+    end
+    
+    local function leftVehicleHandler(ply, vehicle)
+        if vehicle ~= INPUTS.Chair then return end
+        
+        net.start(SHARED.ENTID .. " Driver Update")
+            net.writeEntity(SHARED.Driver)
+        net.send()
+        SHARED.Driver = nil
+    end
+    
+    local function wireHandler(name, value)
+        if value == nil then return end
+        
+        if name == "Chair" and isValid(value) then 
+            INPUTS.Chair = value 
+        end
+    end
+    
+    hook.add("PlayerEnteredVehicle", SHARED.ENTID .. " PlayerEnteredVehicle", enteredVehicleHandler)
+    hook.add("PlayerLeaveVehicle", SHARED.ENTID .. " PlayerLeaveVehicle", leftVehicleHandler)
+    hook.add("Input", SHARED.ENTID .. " Input", wireHandler)
+end
+
+if CLIENT then
+    resx, resy = 0, 0
+    x, y = 0, 0
+    staticDrawn = false
+    
+    local function drawHudHandler()
+        if SHARED.P ~= SHARED.Driver then return end
+        if resx == 0 then
+            resx, resy = render.getResolution()
+            x, y = resx / 2, resy / 2
+        end
+
+        -- Drawing stuff goes here, I wouldn't recommend doing much here
+    end
+    
+    local function drawOffscreenHandler()
+        -- Draw active elements here, this is where I'd recommend you do logic
+        
+        if staticDrawn then  return end
+        -- Draw static elements here
+        
+        staticDrawn = true
+    end
+    
+    local function driverUpdateHandler()
+        if SHARED.P ~= SHARED.Driver and SHARED.Driver ~= nil then return end
+            
+        local newDriver = net.readEntity()
+        if newDriver == SHARED.Driver then
+            enableHud(SHARED.Driver, false)
+            SHARED.Driver = nil
+            return
+        end
+        
+        SHARED.Driver = newDriver
+        enableHud(SHARED.Driver, true)
+    end
+
+    local function wireHandler()
+        local name = net.readString()
+
+    end
+        
+    hook.add("drawhud", SHARED.ENTID .. " DrawHud", drawHudHandler)
+    net.receive(SHARED.ENTID .. " Driver Update", driverUpdateHandler) 
+    net.receive(SHARED.ENTID .. " Wire Update", wireHandler)
+end
