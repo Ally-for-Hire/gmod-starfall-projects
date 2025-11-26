@@ -1,0 +1,459 @@
+--@name Curve-Fitting Ballistics Algorithm
+--@author Ally for Hire / Merydian9
+--@server
+
+if I == nil then I = {} end
+I.Gun = nil
+
+-- Vers 1.0.0
+
+------------------------------------------------------------
+-- Constants / state
+------------------------------------------------------------
+
+G  = physenv.getGravity()           -- world gravity (GU/s^2)
+U  = 39.3701                        -- m -> GU
+
+local G2D       = Vector2(0, G[3])  -- vertical accel in 2D
+local TIME_STEP = game.getTickInterval()  -- finer dt for accuracy
+local VALIDGUN  = false
+
+local muzzleVelocity = 0            -- m/s from ACF
+local dragCoef       = 0            -- ACF-exported drag coefficient (scaled later)
+local MUZZLE_DIST    = 0            -- GU, origin -> muzzle
+
+local DATASET    = {}               -- { {distance = D, time = T}, ... }
+local COEFFS     = nil              -- {a0, a1, a2, a3} for T(x), x = D / D_SCALE
+local TIME_SCALE = 1                -- global scale on T(x)
+
+local GEN_ANGLE        = 0          -- degrees
+local GEN_STEP_DEFAULT = 0.01      -- degrees
+local GEN_STEP         = GEN_STEP_DEFAULT
+local GEN_MAX_DISTANCE = 0
+local GEN_DONE         = false
+
+local D_MIN   = 0
+local D_MAX   = 0
+local D_SCALE = 1
+
+local MAX_TIME = 6                  -- s, safety cap
+
+local DEBUG_ENABLED = false
+
+------------------------------------------------------------
+-- Debug helpers
+------------------------------------------------------------
+
+local function logStatus(...)
+    print(Color(0, 255, 255), "[C-FBA]: ", Color(255, 255, 255), ...)
+end
+
+local function dprint(...)
+    if not DEBUG_ENABLED then return end
+    logStatus(...)
+end
+
+------------------------------------------------------------
+-- Core sim (fixed version of your 2027-style sim)
+------------------------------------------------------------
+
+local function simulateImpact(angleDeg, muzzleVelUnits, dragCoefUnits, muzzleDistUnits)
+    local dt       = TIME_STEP
+    local angleRad = math.rad(angleDeg)
+    local dir      = Vector2(math.cos(angleRad), math.sin(angleRad))
+
+    -- start at the muzzle
+    local pos      = dir * muzzleDistUnits
+    local vel      = dir * muzzleVelUnits
+    local time     = 0
+    local prevPos  = pos
+    local prevTime = time
+
+    while time < MAX_TIME and pos[2] > 0 do
+        prevPos  = pos
+        prevTime = time
+
+        local speed = vel:getLength()
+        if speed <= 0 then break end
+
+        -- dragNum = (dragCoef * |v|^2) / 40
+        -- then scaled by dt, clamped like acf_ballistics_lib
+        local dragNum = (dragCoefUnits * speed * speed) / 40
+        local clamp   = speed * 0.9
+        dragNum       = math.min(dragNum * dt, clamp)
+        local dragVec = vel:getNormalized() * dragNum
+
+        pos  = pos + vel * dt
+        vel  = vel + (G2D * dt - dragVec)
+        time = time + dt
+    end
+
+    -- interpolate when we cross back to muzzle height (y = 0)
+    if pos[2] <= 0 and prevPos[2] > 0 then
+        local denom = prevPos[2] - pos[2]
+        if math.abs(denom) > 1e-6 then
+            local frac      = prevPos[2] / denom
+            local impactPos = prevPos + (pos - prevPos) * frac
+            local impactT   = prevTime + (time - prevTime) * frac
+            return impactT, impactPos[1]
+        end
+    end
+
+    return nil, nil
+end
+
+------------------------------------------------------------
+-- 4x4 solver
+------------------------------------------------------------
+
+local function solve4(A, b)
+    local n = 4
+
+    for i = 1, n do
+        local maxRow, maxVal = i, math.abs(A[i][i])
+        for k = i + 1, n do
+            local v = math.abs(A[k][i])
+            if v > maxVal then
+                maxVal = v
+                maxRow = k
+            end
+        end
+
+        if maxVal < 1e-12 then return nil end
+
+        if maxRow ~= i then
+            A[i], A[maxRow] = A[maxRow], A[i]
+            b[i], b[maxRow] = b[maxRow], b[i]
+        end
+
+        local pivot = A[i][i]
+        for j = i, n do
+            A[i][j] = A[i][j] / pivot
+        end
+        b[i] = b[i] / pivot
+
+        for k = i + 1, n do
+            local factor = A[k][i]
+            if factor ~= 0 then
+                for j = i, n do
+                    A[k][j] = A[k][j] - factor * A[i][j]
+                end
+                b[k] = b[k] - factor * b[i]
+            end
+        end
+    end
+
+    local x = {}
+    for i = n, 1, -1 do
+        local sum = 0
+        for j = i + 1, n do
+            sum = sum + A[i][j] * x[j]
+        end
+        x[i] = b[i] - sum
+    end
+
+    return x
+end
+
+------------------------------------------------------------
+-- Fitting (normalized distances)
+------------------------------------------------------------
+
+local function evalCubic(c, x)
+    return c[1] + x * (c[2] + x * (c[3] + x * c[4]))
+end
+
+local function fitCurve()
+    local n = #DATASET
+    if n < 4 then
+        COEFFS     = nil
+        TIME_SCALE = 1
+        dprint("Not enough points to fit (have ", n, ")")
+        return
+    end
+
+    -- find distance range
+    D_MIN = math.huge
+    D_MAX = 0
+    for i = 1, n do
+        local D = DATASET[i].distance
+        if D < D_MIN then D_MIN = D end
+        if D > D_MAX then D_MAX = D end
+    end
+
+    if D_MAX <= 0 or D_MIN == math.huge then
+        COEFFS     = nil
+        TIME_SCALE = 1
+        dprint("fitCurve: invalid distance range")
+        return
+    end
+
+    D_SCALE = D_MAX    -- normalize so x in [0,1]
+
+    -- S[p] = sum(x^p), p = 0..6
+    local S = {}
+    for p = 0, 6 do S[p] = 0 end
+
+    -- ST[i] = sum(T * x^i), i = 0..3
+    local ST = {}
+    for i = 0, 3 do ST[i] = 0 end
+
+    for i = 1, n do
+        local D = DATASET[i].distance
+        local T = DATASET[i].time
+        local x = D / D_SCALE   -- normalized distance
+
+        local xp = 1
+        for p = 0, 6 do
+            S[p] = S[p] + xp
+            xp = xp * x
+        end
+
+        local xpT = 1
+        for k = 0, 3 do
+            ST[k] = ST[k] + T * xpT
+            xpT = xpT * x
+        end
+    end
+
+    local A = {
+        {0,0,0,0},
+        {0,0,0,0},
+        {0,0,0,0},
+        {0,0,0,0}
+    }
+    local b = {0,0,0,0}
+
+    for i = 0, 3 do
+        for j = 0, 3 do
+            A[i+1][j+1] = S[i+j]
+        end
+        b[i+1] = ST[i]
+    end
+
+    local coeffs = solve4(A, b)
+    if not coeffs then
+        COEFFS     = nil
+        TIME_SCALE = 1
+        dprint("Fit failed (singular)")
+        return
+    end
+
+    COEFFS = coeffs
+
+    -- rescale TIME_SCALE in normalized space
+    local sumTF, sumFF = 0, 0
+    for i = 1, n do
+        local D  = DATASET[i].distance
+        local T  = DATASET[i].time
+        local x  = D / D_SCALE
+        local Tf = evalCubic(coeffs, x)
+        sumTF = sumTF + T * Tf
+        sumFF = sumFF + Tf * Tf
+    end
+
+    TIME_SCALE = (sumFF > 0) and (sumTF / sumFF) or 1
+    dprint("Fit done: points=", n,
+           " D_MIN=", D_MIN, " D_MAX=", D_MAX,
+           " TIME_SCALE=", TIME_SCALE)
+    logStatus("Data Generation finished for " .. I.Gun:acfAmmoType())
+end
+
+------------------------------------------------------------
+-- Dataset generation
+------------------------------------------------------------
+
+local function finishDataset()
+    GEN_DONE = true
+
+    if not VALIDGUN or not isValid(I.Gun) then
+        dprint("finishDataset: gun invalid or not valid")
+        return DATASET
+    end
+
+    -- Anchor the curve at the origin so T(0) = 0
+    if #DATASET > 0 then
+        table.insert(DATASET, 1, { distance = 0, time = 0 })
+    end
+
+    dprint("Dataset done for ", I.Gun:acfName(),
+           " ammo=", I.Gun:acfAmmoType(),
+           " pts=", #DATASET,
+           " maxD=", math.floor(GEN_MAX_DISTANCE))
+
+    fitCurve()
+    return DATASET
+end
+
+
+local function stepDatasetGeneration()
+    if GEN_DONE or not VALIDGUN or not isValid(I.Gun) then return end
+
+    local mv = muzzleVelocity * U
+    local dc = dragCoef        -- already scaled (acfDragCoef * U)
+    local md = MUZZLE_DIST
+    if mv <= 0 or md <= 0 then GEN_DONE = true return end
+
+    local stepsThisTick, maxSteps = 0, 3
+
+    while stepsThisTick < maxSteps and not GEN_DONE do
+        if GEN_ANGLE > 89 then
+            GEN_DONE = true
+            break
+        end
+
+        local t, d = simulateImpact(GEN_ANGLE, mv, dc, md)
+
+        if t and d then
+            DATASET[#DATASET + 1] = { distance = d, time = t }
+            if d > GEN_MAX_DISTANCE then GEN_MAX_DISTANCE = d end
+            if d > 50000 then GEN_DONE = true break end
+        end
+
+        GEN_ANGLE = GEN_ANGLE + GEN_STEP
+        -- bound step growth so we still have samples at long range
+        GEN_STEP  = math.min(GEN_STEP * 2, 0.5)
+        stepsThisTick = stepsThisTick + 1
+    end
+
+    if GEN_DONE then
+        finishDataset()
+    else
+        timer.simple(0.1, stepDatasetGeneration)
+    end
+end
+
+local function generateDataset()
+    if not VALIDGUN or not isValid(I.Gun) then
+        dprint("generateDataset: no valid gun")
+        return
+    end
+
+    DATASET          = {}
+    COEFFS           = nil
+    TIME_SCALE       = 1
+    GEN_ANGLE        = 0
+    GEN_STEP         = GEN_STEP_DEFAULT
+    GEN_MAX_DISTANCE = 0
+    GEN_DONE         = false
+    D_MIN            = 0
+    D_MAX            = 0
+    D_SCALE          = 1
+
+    dprint("Starting dataset for ", I.Gun:acfName(),
+           " ammo=", I.Gun:acfAmmoType())
+
+    stepDatasetGeneration()
+end
+
+------------------------------------------------------------
+-- Gun update (library-style)
+------------------------------------------------------------
+
+function updateValues()
+    if not VALIDGUN then return end
+
+    local gun = I.Gun
+    if not isValid(gun) then
+        VALIDGUN = false
+        dprint("updateValues: gun invalid")
+        return
+    end
+
+    local newMV = gun:acfMuzzleVel() or 0
+    if newMV ~= muzzleVelocity then
+        muzzleVelocity = newMV
+        -- Important: match acf_ballistics style: dragCoef * UNITS
+        dragCoef       = (gun:acfDragCoef() or 0) * U
+
+        -- muzzle distance in GU (mass center -> muzzle)
+        local idx = gun:lookupAttachment("muzzle")
+        if idx and idx > 0 then
+            local md = gun:getAttachment(idx)
+            if md then
+                local muzzlePos   = Vector(md[1], md[2], md[3])
+                local massCenterW = gun:getMassCenterW()
+                if massCenterW then
+                    MUZZLE_DIST = massCenterW:getDistance(muzzlePos)
+                else
+                    MUZZLE_DIST = gun:localToWorld(Vector()):getDistance(muzzlePos)
+                end
+            else
+                MUZZLE_DIST = 0
+            end
+        else
+            MUZZLE_DIST = 0
+        end
+
+        dprint("updateValues: MV=", muzzleVelocity,
+               " DragCoef=", dragCoef,
+               " MuzzleDist=", MUZZLE_DIST)
+
+        generateDataset()
+    end
+
+    timer.simple(0.5, updateValues)
+end
+
+------------------------------------------------------------
+-- Public API: library-style integration
+------------------------------------------------------------
+
+local function initGun(value)
+    VALIDGUN = false
+    if not isValid(value) then
+        dprint("initGun: value not valid")
+        return
+    end
+    if value:getClass() ~= "acf_gun" then
+        dprint("initGun: class is not acf_gun (got ", value:getClass(), ")")
+        return
+    end
+
+    VALIDGUN = true
+    I.Gun    = value
+    dprint("initGun: gun set, class=", value:getClass())
+    updateValues()
+end
+
+-- used by your controller (@include + require)
+function CFBA_SetGun(value)
+    initGun(value)
+end
+
+function CFBA_SetDebug(on)
+    DEBUG_ENABLED = (on and true) or false
+    dprint("CFBA_SetDebug: DEBUG_ENABLED=", DEBUG_ENABLED)
+end
+
+------------------------------------------------------------
+-- Public API: time / drop
+------------------------------------------------------------
+
+function ballisticTime(D)
+    if not COEFFS or not D or D <= 0 then
+        return 0
+    end
+    if D_MAX <= 0 then
+        return 0
+    end
+
+    -- clamp distance into fitted domain
+    if D < D_MIN then D = D_MIN end
+    if D > D_MAX then D = D_MAX end
+
+    local x = D / D_SCALE   -- normalize to [0,1]
+    if x < 0 then x = 0 end
+    if x > 1 then x = 1 end
+
+    local t = evalCubic(COEFFS, x) * TIME_SCALE
+    if t < 0 then t = 0 end
+
+    dprint("ballisticTime: D=", D, " (x=", x, ") -> t=", t)
+    return t
+end
+
+function ballisticDropScale(t)
+    -- still just base gravity, no extra shaping for now
+    return 1
+end

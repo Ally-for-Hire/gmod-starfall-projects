@@ -1,0 +1,168 @@
+--@name Simple Server-Side Wire Helper
+--@author Ally for Hire / Merydian9
+
+--[[
+Small utility that turns human-readable wire I/O strings into actual ports and
+provides helper tables (`Inputs`, `Outputs`, `InputValues`) for quick access.
+Credit to Codex for comments and filling in functions.
+]]--
+
+-- Version 1.0.0
+
+--[[
+Usage:
+    updateInputs("Base:ENTITY Fire:NORMAL")
+    updateOutputs("Ready:NORMAL Aim:VECTOR")
+    Inputs.Fire:addTrigger(function(val) if val > 0 then Outputs.Ready:update(1) end end)
+    Outputs.Aim:update(Vector())
+    local baseEnt = InputValues.Base
+]]--
+
+Inputs, Outputs, InputValues = {}, {}, {}
+local InputTriggers = {}
+
+-- Input helper prototype
+local inputProto = {}
+inputProto.__index = inputProto
+
+--[[
+inputProto:get
+    Returns the latest cached value for the input.
+]]--
+function inputProto:get()
+    return InputValues[self.name]
+end
+
+--[[
+inputProto:addTrigger
+    Registers a callback to run whenever this input updates.
+]]--
+function inputProto:addTrigger(fn)
+    if type(fn) ~= "function" then return end
+    local list = InputTriggers[self.name]
+    if list == nil then
+        list = {}
+        InputTriggers[self.name] = list
+    end
+    list[#list + 1] = fn
+end
+
+-- Output helper prototype
+local outputProto = {}
+outputProto.__index = outputProto
+
+--[[
+outputProto:update
+    Convenience wrapper around wire.ports for this output.
+]]--
+function outputProto:update(value)
+    wire.ports[self.name] = value
+end
+
+-- Parse helpers -----------------------------------------------------------
+--[[
+tokenizePorts
+    Breaks the helper string into tokens separated by whitespace/commas.
+]]--
+local function tokenizePorts(str)
+    local tokens = {}
+    if type(str) ~= "string" then return tokens end
+    for token in str:gmatch("[^,%s]+") do
+        tokens[#tokens + 1] = token
+    end
+    return tokens
+end
+
+--[[
+splitPortString
+    Converts helper strings into parallel name/type arrays.
+]]--
+local function splitPortString(portString)
+    local names, types = {}, {}
+    local tokens = tokenizePorts(portString)
+
+    for i = 1, #tokens do
+        local token = tokens[i]
+        local name, portType = token:match("([^:]+):?(.*)")
+        if name then
+            names[#names + 1] = name
+            if portType ~= nil and portType ~= "" then
+                types[#types + 1] = portType
+            else
+                types[#types + 1] = "number"
+            end
+        end
+    end
+
+    return names, types
+end
+
+-- Internal wire input hook ------------------------------------------------
+--[[
+doWireInput
+    Core hook that caches new values and fires triggers.
+]]--
+local function doWireInput(name, value)
+    if value == nil then return end
+    InputValues[name] = value
+
+    local triggers = InputTriggers[name]
+    if triggers then
+        for i = 1, #triggers do
+            triggers[i](value)
+        end
+    end
+end
+
+-- Public API --------------------------------------------------------------
+--[[
+updateInputs
+    Registers inputs from helper string syntax and rebuilds the helper tables.
+]]--
+function updateInputs(str)
+    local names, types = splitPortString(str)
+    local keep = {}
+    for i = 1, #names do
+        keep[names[i]] = true
+    end
+    for key in pairs(InputTriggers) do
+        if not keep[key] then InputTriggers[key] = nil end
+    end
+    for key in pairs(InputValues) do
+        if not keep[key] then InputValues[key] = nil end
+    end
+    for key in pairs(Inputs) do Inputs[key] = nil end
+    for i = 1, #names do
+        local name = names[i]
+        Inputs[name] = setmetatable({name = name}, inputProto)
+    end
+    wire.adjustInputs(names, types)
+    return names, types, Inputs
+end
+
+--[[
+updateOutputs
+    Registers outputs from helper string syntax and rebuilds helper tables.
+]]--
+function updateOutputs(str)
+    local names, types = splitPortString(str)
+    for key in pairs(Outputs) do Outputs[key] = nil end
+    for i = 1, #names do
+        local name = names[i]
+        Outputs[name] = setmetatable({name = name}, outputProto)
+    end
+    wire.adjustOutputs(names, types)
+    return names, types, Outputs
+end
+
+--[[
+addInputTrigger
+    Helper to attach a trigger using the Inputs table.
+]]--
+function addInputTrigger(name, fn)
+    local inputObj = Inputs[name]
+    if not inputObj then return end
+    inputObj:addTrigger(fn)
+end
+
+hook.add("input", "SS-SWH_input", doWireInput)

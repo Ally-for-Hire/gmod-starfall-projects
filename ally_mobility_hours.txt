@@ -2,7 +2,7 @@
 --@author Ally for Hire / Merydian9
 --@server
 
---- Version 0.9.2
+--- Version 0.10.1
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-starfall-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -36,40 +36,44 @@ Need a hand tailoring it to a particular rig? Ping @allyfh and I'll walk you thr
 */
 
 --- Constants
-local SPEEDCONV = 1/17.6 -- 1/17.6 = KMH (good)
+local SPEEDCONV = 1/17.6
 
 --- Customizable Variables
 -- Gearing and Braking Setup
-local gearingType = 1 -- 1:RPM, 2:Speed, 3:Hybrid
-local maxBrakePower = 100 -- Maximum brake power
-local brakeScaling = false -- True if you want the brake strength to scale with speed
-local wheelSize = 30 -- Diameter of wheels (Required for type 2 or 3 gearing)
-local finalRatio = (1/1.8)*(0.75) -- Ratio of all gearboxes final drives (Required for type 2 or 3 gearing)
+local gearingType         = 1
+local maxBrakePower       = 100
+local brakeScaling        = false
+local wheelSize           = 30
+local finalRatio          = (1/1.8)*(0.75)
+local idleThrottle        = 20
+local disableNeutralSteer = true
 
 -- Vehicle Setup 
-local hasWheels = false -- True if the vehicle has wheels instead of tracks
-local dualClutch = true -- True if the gearbox is dual clutch. Only matters if we aren't using transfers.
-local invertedTransfers = -1 -- 1 if they face their respective sides, -1 if they face the other
-local inlineTransfers = true -- True if the transfers are inline (will error if this is set to the wrong value)
+local hasWheels = false
+local dualClutch = true
+local invertedTransfers = 1
+local inlineTransfers = true
 
 -- Countersteering Setup
-local yawDeadzone = 20 -- Yaw velocity deadzone for countersteering
-local counterSteerStrength = 1 -- How strong the countersteering will be (1 is normal strength)
+local yawDeadzone = 25
+local counterSteerStrength = 1.25
 
 -- Misc
-local showDebug = false -- True will print debug information
-local clutchStart = 0.8 -- RPM the gearboxes start working, don't touch this, 0.8 is good.
+local showDebug = false
+local clutchStart = 0.8
+local fancyClutchBullshit = true
 
 --- Internal Variables
--- Don't touch below this unless you understand what you are doing
 local clutchTurn = 1
 local clutchBrake = 1
 local minClutch = 0
 local remainderClutch = 0
 local gearCount = 0
 local gearUpBuffer = 1.05
-local gearDownBuffer = 0.95 
+local gearDownBuffer = 0.95
 local biteRPM, releaseRPM = 0, 0
+local powerMin, powerMax = 0, 0
+local upshiftRPM, downshiftRPM = 0, 0
 
 local input_engine = nil
 local input_mainGearbox = nil
@@ -79,7 +83,6 @@ local input_pod = nil
 local gears = {}
 local gearLinks = {}
 local gearSpeeds = {}
-local gearCount = 0
 local reverseGears = 0
 local isAutogearing = false
 local canNeutralSteer = false
@@ -96,22 +99,35 @@ local outputRightBrake = maxBrakePower
 local outputLeftBrake = maxBrakePower
 local leftTransfer = nil
 local rightTransfer = nil
-local lastUpdate = timer.curtime()
+
+local lastGear, lastThrottle = nil, nil
+local lastLBrake, lastRBrake = nil, nil
+local lastLClutch, lastRClutch = nil, nil
+local lastLGear, lastRGear = nil, nil
+local lastLWeld, lastRWeld = nil, nil
 
 --- Functions
 local function applyBrakeClutch(LBrake, RBrake, LClutch, RClutch)
     outputRightClutch = RClutch
     outputLeftClutch = LClutch
     outputRightBrake = RBrake
-    outputLeftBrake = LBrake    
+    outputLeftBrake = LBrake
 end
+
 local function updateEngineVariables()
-    biteRPM = input_engine:acfPowerbandMin() * clutchStart
-    releaseRPM = input_engine:acfPowerbandMin()
+    powerMin = input_engine:acfPowerbandMin()
+    powerMax = input_engine:acfPowerbandMax()
+
+    biteRPM = powerMin * clutchStart
+    releaseRPM = powerMin
     minClutch = 1 - (input_engine:acfMaxTorque() / input_mainGearbox:acfTorqueRating())
     remainderClutch = 1 - minClutch
 
+    upshiftRPM = powerMax * 0.95
+    downshiftRPM = powerMin * 0.85
+
     gearCount = input_mainGearbox:acfNumGears()
+    reverseGears = 0
     for i = 1, gearCount do
         local ratio = input_mainGearbox:acfGearRatio(i)
         gears[i] = ratio
@@ -120,125 +136,160 @@ local function updateEngineVariables()
         end
     end
     gearCount = gearCount - reverseGears
-    
     isAutogearing = gearCount > 2
-    
+
     acf3GearRatios = math.abs(input_mainGearbox:acfGearRatio(1)) > 1
-    local commonVal = (input_engine:acfPowerbandMax() * finalRatio / 60) * wheelSize * math.pi
-    
+    local commonVal = (powerMax * finalRatio / 60) * wheelSize * math.pi
+
     if isAutogearing then
-        if (showDebug) then print("Gear Speeds:") end
+        if showDebug then print("Gear Speeds:") end
         if acf3GearRatios then
             for i = 1, gearCount + reverseGears do
                 gearSpeeds[i] = math.abs(commonVal * (1 / input_mainGearbox:acfGearRatio(i)) * SPEEDCONV)
-                if (showDebug) then print("    " .. i .. " .. " .. gearSpeeds[i]) end
+                if showDebug then print("    " .. i .. " .. " .. gearSpeeds[i]) end
             end
         else
             for i = 1, gearCount + reverseGears do
                 gearSpeeds[i] = math.abs(commonVal * (input_mainGearbox:acfGearRatio(i)) * SPEEDCONV)
-                if (showDebug) then print("    " .. i .. " .. " .. gearSpeeds[i]) end
+                if showDebug then print("    " .. i .. " .. " .. gearSpeeds[i]) end
             end
         end
     end
-    
+
     gearLinks = input_mainGearbox:acfLinks()
-    
+
     local transfers = 0
     for i = 1, #gearLinks do
         if gearLinks[i]:getClass() == "prop_physics" then continue end
-        local type = gearLinks[i]:acfType()  
-        if type == "Transfer Case" or type == "Transfer" then 
+        local type = gearLinks[i]:acfType()
+        if type == "Transfer Case" or type == "Transfer" then
             transfers = transfers + 1
-            local y = input_base:worldToLocal(gearLinks[i]:getPos()).y
+            local y = input_mainGearbox:worldToLocal(gearLinks[i]:getPos()).y
             if y * invertedTransfers < 0 then rightTransfer = gearLinks[i] end
             if y * invertedTransfers > 0 then leftTransfer = gearLinks[i] end
-         end
+        end
     end
-    
+
     if transfers >= 2 then canNeutralSteer = true end
-    
+
     if showDebug then
-        if acf3GearRatios and isAutogearing then print("This Vehicle Uses ACF3 Gears") elseif isAutogearing then print("This vehicle Uses ACE Gears") end  
+        if acf3GearRatios and isAutogearing then print("This Vehicle Uses ACF3 Gears") elseif isAutogearing then print("This vehicle Uses ACE Gears") end
         print("Detected Forward Gears .. " .. gearCount)
         print("Detected Reverse Gears .. " .. reverseGears)
         print("Detected Transfers .. " .. transfers)
-        if isAutogearing then  print("Autogearing Enabled") else print("Autogearing Disabled") end
-        if canNeutralSteer then  print("The Vehicle Can Neutral Steer") else print("The Vehicle Cannot Neutral Steer") end     
+        if isAutogearing then print("Autogearing Enabled") else print("Autogearing Disabled") end
+        if canNeutralSteer then print("The Vehicle Can Neutral Steer") else print("The Vehicle Cannot Neutral Steer") end
     end
 end
 
 local function handleWire(name, value)
     if value == nil then return end
-
-    if name == "Engine" then input_engine = value
-    elseif name == "MainGearbox" then input_mainGearbox = value
-    elseif name == "Base" then input_base = value
-    elseif name == "Pod" then input_pod = value end
+    if name == "Engine" then
+        input_engine = value
+    elseif name == "MainGearbox" then
+        input_mainGearbox = value
+    elseif name == "Base" then
+        input_base = value
+    elseif name == "Pod" then
+        input_pod = value
+    end
 end
 
 local function think()
-    if input_engine == nil or input_mainGearbox == nil or input_base == nil or input_pod == nil then return end
-    if biteRPM == 0 then
-        updateEngineVariables()
-    end
-    
-    --- Variable Management
-    local speed = input_base:getVelocity():getLength() * SPEEDCONV
+    if not input_engine or not input_mainGearbox or not input_base or not input_pod then return end
+    if biteRPM == 0 then updateEngineVariables() end
+
+    local vel = input_base:getVelocity()
+    local speed = vel:getLength() * SPEEDCONV
     local rpm = input_engine:acfRPM()
     local W = input_pod["W"]
     local A = input_pod["A"]
     local S = input_pod["S"]
     local D = input_pod["D"]
+    local hasInput = (W == 1 or A == 1 or S == 1 or D == 1)
+
     outputLeftGear = 1
     outputRightGear = 1
-    
-    brakePower = maxBrakePower
-    if isAutogearing and brakeScaling then
-        brakePower = maxBrakePower * math.min(gearSpeeds[gearCount] / 2 / speed, 1)
-    elseif brakeScaling then
-        brakePower = maxBrakePower * math.min(30 / speed, 1)
+
+    if not hasInput and speed < 1 and rpm < biteRPM then
+        if output_throttle ~= idleThrottle then
+            output_throttle = idleThrottle
+        end
+
+        local gbxWL = input_mainGearbox:getWirelink()
+
+        if lastGear ~= output_gear then
+            gbxWL["Gear"] = output_gear
+            lastGear = output_gear
+        end
+
+        if lastThrottle ~= output_throttle then
+            wire.ports.Throttle = output_throttle
+            lastThrottle = output_throttle
+        end
+
+        local lweld = outputLeftBrake > 0 and 1 or 0
+        local rweld = outputRightBrake > 0 and 1 or 0
+
+        if lastLWeld ~= lweld then
+            wire.ports.LeftWeldLatch = lweld
+            lastLWeld = lweld
+        end
+        if lastRWeld ~= rweld then
+            wire.ports.RightWeldLatch = rweld
+            lastRWeld = rweld
+        end
+
+        return
     end
-     
-    
-    --- Output Resetting
-    applyBrakeClutch(maxBrakePower, maxBrakePower, clutchBrake, clutchBrake)
-    if (W == 1 || A == 1 || S == 1 || D == 1) then
+
+    local brakePower = maxBrakePower
+    if brakeScaling then
+        if isAutogearing and gearSpeeds[gearCount] and speed > 1 then
+            brakePower = maxBrakePower * math.min(gearSpeeds[gearCount] / 2 / speed, 1)
+        elseif speed > 1 then
+            brakePower = maxBrakePower * math.min(30 / speed, 1)
+        end
+    end
+
+    applyBrakeClutch(brakePower, brakePower, clutchBrake, clutchBrake)
+
+    if hasInput then
         output_throttle = 100
-        local RPM = input_engine:acfRPM()
-        local clutchRelease = 1 -math.clamp((RPM - biteRPM) / (releaseRPM - biteRPM), 0, 1)  
+        local clutchRelease = 1 - math.clamp((rpm - biteRPM) / (releaseRPM - biteRPM), 0, 1)
         applyBrakeClutch(0, 0, clutchRelease, clutchRelease)
     else
-        output_throttle = 30
+        output_throttle = idleThrottle
     end
-    
-    --- Gear Handling Logic
+
     if isAutogearing then
         local usableGears = gearCount
         local min_gear = 1
+
         if S == 1 and not canNeutralSteer then
             usableGears = gearCount + reverseGears
             min_gear = gearCount + 1
             output_gear = gearCount + 1
         end
-        
+
         if gearingType == 1 then
-            if rpm > input_engine:acfPowerbandMax() * 0.95 and output_gear < usableGears then
+            if rpm > upshiftRPM and output_gear < usableGears then
                 output_gear = output_gear + 1
-            elseif rpm < input_engine:acfPowerbandMin() * 0.85 and output_gear > 1 then
+            elseif rpm < downshiftRPM and output_gear > min_gear then
                 output_gear = output_gear - 1
             end
 
         elseif gearingType == 2 then
             if output_gear < usableGears and speed > gearSpeeds[output_gear] * gearUpBuffer then
                 output_gear = output_gear + 1
-            elseif output_gear > 1 and speed < gearSpeeds[output_gear - 1] * gearDownBuffer then
+            elseif output_gear > min_gear and speed < gearSpeeds[output_gear - 1] * gearDownBuffer then
                 output_gear = output_gear - 1
             end
 
         elseif gearingType == 3 then
-            if output_gear < usableGears and ((speed > gearSpeeds[output_gear] * gearUpBuffer) or (rpm > input_engine:acfPowerbandMax() * 0.95)) then
+            if output_gear < usableGears and (speed > gearSpeeds[output_gear] * gearUpBuffer or rpm > upshiftRPM) then
                 output_gear = output_gear + 1
-            elseif output_gear > min_gear and ((speed < gearSpeeds[output_gear - 1] * gearDownBuffer) and (rpm < input_engine:acfPowerbandMin())) then
+            elseif output_gear > min_gear and (speed < gearSpeeds[output_gear - 1] * gearDownBuffer and rpm < powerMin) then
                 output_gear = output_gear - 1
             end
         end
@@ -249,8 +300,7 @@ local function think()
             output_gear = 1 + S
         end
     end
-    
-    --- Neutral Steering and Brake Turning Logic Here
+
     if canNeutralSteer and not hasWheels then
         if W == 0 and S == 0 then
             if A == 1 then
@@ -263,79 +313,136 @@ local function think()
         elseif W == 0 and S == 1 then
             outputLeftGear = 2
             outputRightGear = 2
-            if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
-            elseif D == 1 then applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn) 
+            if A == 1 then
+                applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
+            elseif D == 1 then
+                applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)
             end
         elseif W == 1 and S == 0 then
-            if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
-            elseif D == 1 then applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)
+            if A == 1 then
+                applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
+            elseif D == 1 then
+                applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)
             end
         end
-    else
-        if A == 1 then applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
-        elseif D == 1 then applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)      
-        end
     end
-    
-    --- Oversteer Handling
-    local angVel = input_base:getAngleVelocity()
-    local yawRate = angVel.z 
-    if A == 0 and D == 0 and (W == 1 or S == 1) and math.abs(yawRate) > yawDeadzone and not hasWheels then
-        local counterSteerWeight = math.min(yawRate / 240 * counterSteerStrength, maxCountersteerBrake) * brakePower
-        local direction = 1
-        if S == 1 then
-            direction = -1
-        end
-        
-        -- Negative = Right
-        if counterSteerWeight * direction < 0 then
-            outputLeftBrake = math.abs(counterSteerWeight)
-        else
-            outputRightBrake = math.abs(counterSteerWeight)
+
+    if not hasWheels and (W == 1 or S == 1) and A == 0 and D == 0 then
+        local yawRate = input_base:getAngleVelocity().z
+        if math.abs(yawRate) > yawDeadzone then
+            local counterSteerWeight = math.min(yawRate / 240 * counterSteerStrength, maxCountersteerBrake) * brakePower
+            local direction = (S == 1) and -1 or 1
+            if counterSteerWeight * direction < 0 then
+                outputLeftBrake = math.abs(counterSteerWeight)
+            else
+                outputRightBrake = math.abs(counterSteerWeight)
+            end
         end
     end
 
-    
-    --- Final Wirelink Updating
-    input_mainGearbox:getWirelink()["Gear"] = output_gear
-    wire.ports.Throttle = output_throttle
-    
-    if canNeutralSteer then -- If we have transfers rather.
-        leftTransfer:getWirelink()["Left Brake"] = outputLeftBrake
-        leftTransfer:getWirelink()["Right Brake"] = outputLeftBrake
-        rightTransfer:getWirelink()["Left Brake"] = outputRightBrake
-        rightTransfer:getWirelink()["Right Brake"] = outputRightBrake
-        
-        leftTransfer:getWirelink()["Left Clutch"] = outputLeftClutch
-        leftTransfer:getWirelink()["Right Clutch"] = outputLeftClutch
-        rightTransfer:getWirelink()["Left Clutch"] = outputRightClutch
-        rightTransfer:getWirelink()["Right Clutch"] = outputRightClutch
+    local gbxWL = input_mainGearbox:getWirelink()
+
+    if lastGear ~= output_gear then
+        gbxWL["Gear"] = output_gear
+        lastGear = output_gear
+    end
+
+    if lastThrottle ~= output_throttle then
+        wire.ports.Throttle = output_throttle
+        lastThrottle = output_throttle
+    end
+
+    local lweld = outputLeftBrake > 0 and 1 or 0
+    local rweld = outputRightBrake > 0 and 1 or 0
+
+    if lastLWeld ~= lweld then
+        wire.ports.LeftWeldLatch = lweld
+        lastLWeld = lweld
+    end
+    if lastRWeld ~= rweld then
+        wire.ports.RightWeldLatch = rweld
+        lastRWeld = rweld
+    end
+
+    if canNeutralSteer then
+        local lWL = leftTransfer:getWirelink()
+        local rWL = rightTransfer:getWirelink()
+
+        if lastLBrake ~= outputLeftBrake then
+            lWL["Left Brake"] = outputLeftBrake
+            lWL["Right Brake"] = outputLeftBrake
+            lastLBrake = outputLeftBrake
+        end
+        if lastRBrake ~= outputRightBrake then
+            rWL["Left Brake"] = outputRightBrake
+            rWL["Right Brake"] = outputRightBrake
+            lastRBrake = outputRightBrake
+        end
+
+        if lastLClutch ~= outputLeftClutch then
+            lWL["Left Clutch"] = outputLeftClutch
+            lWL["Right Clutch"] = outputLeftClutch
+            lastLClutch = outputLeftClutch
+        end
+        if lastRClutch ~= outputRightClutch then
+            rWL["Left Clutch"] = outputRightClutch
+            rWL["Right Clutch"] = outputRightClutch
+            lastRClutch = outputRightClutch
+        end
 
         if inlineTransfers then
-            leftTransfer:getWirelink()["Gear"] = outputLeftGear
-            rightTransfer:getWirelink()["Gear"] = outputRightGear
+            if lastLGear ~= outputLeftGear then
+                lWL["Gear"] = outputLeftGear
+                lastLGear = outputLeftGear
+            end
+            if lastRGear ~= outputRightGear then
+                rWL["Gear"] = outputRightGear
+                lastRGear = outputRightGear
+            end
         else
-            leftTransfer:getWirelink()["Left Gear"] = outputLeftGear
-            leftTransfer:getWirelink()["Right Gear"] = outputLeftGear
-            rightTransfer:getWirelink()["Left Gear"] = outputRightGear
-            rightTransfer:getWirelink()["Right Gear"] = outputRightGear
+            if lastLGear ~= outputLeftGear then
+                lWL["Left Gear"] = outputLeftGear
+                lWL["Right Gear"] = outputLeftGear
+                lastLGear = outputLeftGear
+            end
+            if lastRGear ~= outputRightGear then
+                rWL["Left Gear"] = outputRightGear
+                rWL["Right Gear"] = outputRightGear
+                lastRGear = outputRightGear
+            end
         end
+
     elseif dualClutch then
-        input_mainGearbox:getWirelink()["Left Brake"] = outputLeftBrake
-        input_mainGearbox:getWirelink()["Right Brake"] = outputRightBrake
-        input_mainGearbox:getWirelink()["Left Clutch"] = outputLeftClutch
-        input_mainGearbox:getWirelink()["Right Clutch"] = outputRightClutch
+        if lastLBrake ~= outputLeftBrake or lastRBrake ~= outputRightBrake then
+            gbxWL["Left Brake"] = outputLeftBrake
+            gbxWL["Right Brake"] = outputRightBrake
+            lastLBrake = outputLeftBrake
+            lastRBrake = outputRightBrake
+        end
+
+        if lastLClutch ~= outputLeftClutch or lastRClutch ~= outputRightClutch then
+            gbxWL["Left Clutch"] = outputLeftClutch
+            gbxWL["Right Clutch"] = outputRightClutch
+            lastLClutch = outputLeftClutch
+            lastRClutch = outputRightClutch
+        end
+    else
+        if lastLBrake ~= outputLeftBrake then
+            gbxWL["Brake"] = outputLeftBrake
+            lastLBrake = outputLeftBrake
+        end
+
+        if lastLClutch ~= outputLeftClutch then
+            gbxWL["Clutch"] = outputLeftClutch
+            lastLClutch = outputLeftClutch
+        end
     end
-
-    wire.ports.LeftWeldLatch = outputLeftBrake > 0 and 1 or 0
-    wire.ports.RightWeldLatch = outputRightBrake > 0 and 1 or 0
-
-    -- Uh, if you don't have a dual clutch gearbox, and you can't neutral steer,
-    -- there's no built-in way to turn without doing some really strange setups
-    -- lol.
 end
 
 --- Hooks
-wire.adjustPorts({Engine = "entity", MainGearbox = "entity", Base = "entity", Pod = "wirelink"}, {Throttle = "number", LeftWeldLatch = "number", RightWeldLatch = "number"})
+wire.adjustPorts(
+    {Engine = "entity", MainGearbox = "entity", Base = "entity", Pod = "wirelink"},
+    {Throttle = "number", LeftWeldLatch = "number", RightWeldLatch = "number"}
+)
 hook.add("input", "Wire Inputs Updated", handleWire)
-timer.create("Main Logic Loop", 0.15, 0, think)
+timer.create("Main Logic Loop", 0.05, 0, think)
