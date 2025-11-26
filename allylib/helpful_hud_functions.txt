@@ -155,7 +155,6 @@ if CLIENT then
         drawCenterRect(x + (right - left) / 2, y, left + right, thickness)
     end
 
-
     function drawCenterRT (x, y, rtname)
         _setRTTexture(rtname)
         _drawTexturedRect(x - 512, y - 512, 1024, 1024)    
