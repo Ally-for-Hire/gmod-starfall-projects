@@ -41,12 +41,12 @@ local SPEEDCONV = 1/17.6
 --- Customizable Variables
 -- Gearing and Braking Setup
 local gearingType         = 1
-local maxBrakePower       = 100
+local maxBrakePower       = 125
 local brakeScaling        = false
 local wheelSize           = 30
 local finalRatio          = (1/1.8)*(0.75)
 local idleThrottle        = 20
-local disableNeutralSteer = true
+local disableNeutralSteer = false
 
 -- Vehicle Setup 
 local hasWheels = false
@@ -55,8 +55,8 @@ local invertedTransfers = 1
 local inlineTransfers = true
 
 -- Countersteering Setup
-local yawDeadzone = 25
-local counterSteerStrength = 1.25
+local yawDeadzone = 15
+local counterSteerStrength = 1.5
 
 -- Misc
 local showDebug = false
