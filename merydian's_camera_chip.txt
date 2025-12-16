@@ -32,7 +32,7 @@ SETTINGS.CamDist2      = 0
 
 -- This will be relative to TertiaryParent
 SETTINGS.CamWorldPos3  = Vector(0, 0, 0)
-SETTINGS.CamRelPos3    = Vector(22, 0, 12)
+SETTINGS.CamRelPos3    = Vector(250, 0, 0)
 SETTINGS.CamDist3      = 0
 
 if SERVER then
@@ -244,7 +244,7 @@ if CLIENT then
         origin = origin - camAng:getForward() * camDist
         
         if nextSend < timer.curtime() then
-            nextSend = timer.curtime() + 0.05 -- 20ms delay.. i know... horrible..
+            nextSend = timer.curtime() + 0.05 -- 50ms delay.. i know... horrible..
             local sendTable = {}
             local hitPos = Vector()
             
@@ -315,7 +315,7 @@ if CLIENT then
         if not active() or (timer.curtime() - lastScroll) < 0.01 then return end
         
         if not bPressed then 
-            camFOV = math.clamp(camFOV / 2^delta, 1, 100)
+            camFOV = math.clamp(camFOV / 4^delta, 1, 100)
             panMul = camFOV / 100
         end
         lastScroll = timer.curtime()
