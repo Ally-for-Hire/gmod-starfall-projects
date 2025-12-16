@@ -1,5 +1,5 @@
 --@name Jet Gunsight Test
---@author Ally
+--@author March / Ally
 --@include lib/modular_wire_helper.txt
 
 if SERVER then
