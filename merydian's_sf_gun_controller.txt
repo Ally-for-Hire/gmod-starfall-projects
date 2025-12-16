@@ -7,7 +7,7 @@ local curtime = timer.curtime
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/curve-fitting_ballistics_algorithm.txt")
 
-interval   = 0.1
+interval   = 0.05
 nextThink  = 0
 unlocked   = false
 lastGun    = nil
