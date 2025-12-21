@@ -8,6 +8,7 @@ require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/curve-fitting_ballistics_algorithm.txt")
 
 interval   = 0.05
+Gz         = 600
 nextThink  = 0
 unlocked   = false
 lastGun    = nil
@@ -50,7 +51,6 @@ local function main()
             local vel  = base:getVelocity()
             local drag = -vel * tta
 
-            local Gz   = 600
             local drop = Vector(0, 0, 0.5 * Gz * (tta ^ 2))
             aimPos = hit + drag + drop
         else
