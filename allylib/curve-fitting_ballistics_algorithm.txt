@@ -5,7 +5,8 @@
 if I == nil then I = {} end
 I.Gun = nil
 
--- Vers 1.0.0
+-- Vers 1.0.1
+-- Vers 1.0.2
 
 ------------------------------------------------------------
 -- Constants / state
@@ -18,9 +19,23 @@ local G2D       = Vector2(0, G[3])  -- vertical accel in 2D
 local TIME_STEP = game.getTickInterval()  -- finer dt for accuracy
 local VALIDGUN  = false
 
+local QUOTA_RATIO_MAX    = 0.85     -- throttle generation if near quota
+local STEP_INTERVAL      = 0.1      -- seconds between generation slices
+local MAX_STEPS_PER_TICK = 3
+local MAX_DISTANCE_GU    = 50000
+local MAX_DATASET_POINTS = 512
+
+local EPS_MV_ABS     = 0.01
+local EPS_MV_REL     = 1e-6
+local EPS_DRAG_ABS   = 1e-6
+local EPS_DRAG_REL   = 1e-4
+local EPS_MUZZLE_ABS = 0.01
+local EPS_MUZZLE_REL = 1e-6
+
 local muzzleVelocity = 0            -- m/s from ACF
 local dragCoef       = 0            -- ACF-exported drag coefficient (scaled later)
 local MUZZLE_DIST    = 0            -- GU, origin -> muzzle
+local ammoType       = ""
 
 local DATASET    = {}               -- { {distance = D, time = T}, ... }
 local COEFFS     = nil              -- {a0, a1, a2, a3} for T(x), x = D / D_SCALE
@@ -31,6 +46,7 @@ local GEN_STEP_DEFAULT = 0.01      -- degrees
 local GEN_STEP         = GEN_STEP_DEFAULT
 local GEN_MAX_DISTANCE = 0
 local GEN_DONE         = false
+local GEN_TOKEN        = 0
 
 local D_MIN   = 0
 local D_MAX   = 0
@@ -51,6 +67,15 @@ end
 local function dprint(...)
     if not DEBUG_ENABLED then return end
     logStatus(...)
+end
+
+local function nearlyEqual(a, b, absEps, relEps)
+    if a == b then return true end
+    local diff = math.abs(a - b)
+    if diff <= absEps then return true end
+    local maxAbs = math.max(math.abs(a), math.abs(b))
+    if maxAbs <= 0 then return diff <= absEps end
+    return diff <= maxAbs * relEps
 end
 
 ------------------------------------------------------------
@@ -285,18 +310,29 @@ local function finishDataset()
     return DATASET
 end
 
+local function isOverBudget()
+    local maxQuota = chip():getQuotaMax()
+    if maxQuota <= 0 then return false end
+    return (chip():getQuotaUsed() / maxQuota) > QUOTA_RATIO_MAX
+end
 
-local function stepDatasetGeneration()
+local function stepDatasetGeneration(token)
+    if token ~= GEN_TOKEN then return end
     if GEN_DONE or not VALIDGUN or not isValid(I.Gun) then return end
 
     local mv = muzzleVelocity * U
     local dc = dragCoef        -- already scaled (acfDragCoef * U)
     local md = MUZZLE_DIST
-    if mv <= 0 or md <= 0 then GEN_DONE = true return end
+    if mv <= 0 then GEN_DONE = true return end
 
-    local stepsThisTick, maxSteps = 0, 3
+    local stepsThisTick, maxSteps = 0, MAX_STEPS_PER_TICK
 
     while stepsThisTick < maxSteps and not GEN_DONE do
+        if isOverBudget() then break end
+        if #DATASET >= MAX_DATASET_POINTS then
+            GEN_DONE = true
+            break
+        end
         if GEN_ANGLE > 89 then
             GEN_DONE = true
             break
@@ -307,7 +343,7 @@ local function stepDatasetGeneration()
         if t and d then
             DATASET[#DATASET + 1] = { distance = d, time = t }
             if d > GEN_MAX_DISTANCE then GEN_MAX_DISTANCE = d end
-            if d > 50000 then GEN_DONE = true break end
+            if d > MAX_DISTANCE_GU then GEN_DONE = true break end
         end
 
         GEN_ANGLE = GEN_ANGLE + GEN_STEP
@@ -319,7 +355,7 @@ local function stepDatasetGeneration()
     if GEN_DONE then
         finishDataset()
     else
-        timer.simple(0.1, stepDatasetGeneration)
+        timer.simple(STEP_INTERVAL, function() stepDatasetGeneration(token) end)
     end
 end
 
@@ -343,12 +379,30 @@ local function generateDataset()
     dprint("Starting dataset for ", I.Gun:acfName(),
            " ammo=", I.Gun:acfAmmoType())
 
-    stepDatasetGeneration()
+    GEN_TOKEN = GEN_TOKEN + 1
+    local token = GEN_TOKEN
+    stepDatasetGeneration(token)
 end
 
 ------------------------------------------------------------
 -- Gun update (library-style)
 ------------------------------------------------------------
+
+local function computeMuzzleDistance(gun)
+    local idx = gun:lookupAttachment("muzzle")
+    if idx and idx > 0 then
+        local md = gun:getAttachment(idx)
+        if md then
+            local muzzlePos   = Vector(md[1], md[2], md[3])
+            local massCenterW = gun:getMassCenterW()
+            if massCenterW then
+                return massCenterW:getDistance(muzzlePos)
+            end
+            return gun:localToWorld(Vector()):getDistance(muzzlePos)
+        end
+    end
+    return 0
+end
 
 function updateValues()
     if not VALIDGUN then return end
@@ -361,33 +415,29 @@ function updateValues()
     end
 
     local newMV = gun:acfMuzzleVel() or 0
-    if newMV ~= muzzleVelocity then
-        muzzleVelocity = newMV
-        -- Important: match acf_ballistics style: dragCoef * UNITS
-        dragCoef       = (gun:acfDragCoef() or 0) * U
+    local newDrag = (gun:acfDragCoef() or 0) * U
+    local newAmmoType = gun:acfAmmoType() or ""
+    local newMuzzleDist = computeMuzzleDistance(gun)
 
-        -- muzzle distance in GU (mass center -> muzzle)
-        local idx = gun:lookupAttachment("muzzle")
-        if idx and idx > 0 then
-            local md = gun:getAttachment(idx)
-            if md then
-                local muzzlePos   = Vector(md[1], md[2], md[3])
-                local massCenterW = gun:getMassCenterW()
-                if massCenterW then
-                    MUZZLE_DIST = massCenterW:getDistance(muzzlePos)
-                else
-                    MUZZLE_DIST = gun:localToWorld(Vector()):getDistance(muzzlePos)
-                end
-            else
-                MUZZLE_DIST = 0
-            end
-        else
-            MUZZLE_DIST = 0
-        end
+    local mvChanged = not nearlyEqual(newMV, muzzleVelocity, EPS_MV_ABS, EPS_MV_REL)
+    local dragChanged = not nearlyEqual(newDrag, dragCoef, EPS_DRAG_ABS, EPS_DRAG_REL)
+    local muzzleChanged = not nearlyEqual(newMuzzleDist, MUZZLE_DIST, EPS_MUZZLE_ABS, EPS_MUZZLE_REL)
+
+    local changed = mvChanged
+        or dragChanged
+        or (newAmmoType ~= ammoType)
+        or muzzleChanged
+
+    if changed then
+        muzzleVelocity = newMV
+        dragCoef       = newDrag
+        ammoType       = newAmmoType
+        MUZZLE_DIST    = newMuzzleDist
 
         dprint("updateValues: MV=", muzzleVelocity,
                " DragCoef=", dragCoef,
-               " MuzzleDist=", MUZZLE_DIST)
+               " MuzzleDist=", MUZZLE_DIST,
+               " AmmoType=", ammoType)
 
         generateDataset()
     end
