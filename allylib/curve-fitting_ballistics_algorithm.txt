@@ -78,10 +78,6 @@ local function nearlyEqual(a, b, absEps, relEps)
     return diff <= maxAbs * relEps
 end
 
-------------------------------------------------------------
--- Core sim (fixed version of your 2027-style sim)
-------------------------------------------------------------
-
 local function simulateImpact(angleDeg, muzzleVelUnits, dragCoefUnits, muzzleDistUnits)
     local dt       = TIME_STEP
     local angleRad = math.rad(angleDeg)
@@ -501,6 +497,38 @@ function ballisticTime(D)
 
     dprint("ballisticTime: D=", D, " (x=", x, ") -> t=", t)
     return t
+end
+
+function ballisticDistance(T)
+    if not COEFFS or not T or T <= 0 then
+        return 0
+    end
+    if D_MAX <= 0 then
+        return 0
+    end
+
+    local low = D_MIN
+    local high = D_MAX
+    local tMax = evalCubic(COEFFS, high / D_SCALE) * TIME_SCALE
+    if T >= tMax then
+        return D_MAX
+    end
+
+    local iter = 0
+    while (high - low) > 0.5 and iter < 32 do
+        local mid = (low + high) / 2
+        local tMid = evalCubic(COEFFS, mid / D_SCALE) * TIME_SCALE
+        if tMid < T then
+            low = mid
+        else
+            high = mid
+        end
+        iter = iter + 1
+    end
+
+    local dist = (low + high) / 2
+    dprint("ballisticDistance: T=", T, " -> D=", dist)
+    return dist
 end
 
 function ballisticDropScale(t)
