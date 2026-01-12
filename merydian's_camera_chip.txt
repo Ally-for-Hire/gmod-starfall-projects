@@ -1,5 +1,6 @@
 --@name Merydian's Camera Chip
 --@author Ally for Hire / Merydian9
+--@model models/jaanus/wiretool/wiretool_range.mdl
 --@shared
 
 -- Version 1.1.0
@@ -22,8 +23,8 @@ SHARED.ENTID           = chip():entIndex()
 
 -- This will be relative to MainParent
 SETTINGS.CamWorldPos1  = Vector(0, 0, 120)
-SETTINGS.CamRelPos1    = Vector(-50, 0, 0) 
-SETTINGS.CamDist1      = 220
+SETTINGS.CamRelPos1    = Vector(0, 0, 0) 
+SETTINGS.CamDist1      = 300
 
 -- This will be relative to SecondaryParent
 SETTINGS.CamWorldPos2  = Vector(0, 0, 0)
@@ -271,6 +272,8 @@ if CLIENT then
         if not active() then return end
         
         if button == 79 then
+            if INPUTS.TertiaryParent == chip() then return end
+            
             if camState != 3 then
                 prevCamState = camState
                 camState = 3
