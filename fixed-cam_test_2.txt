@@ -1,0 +1,422 @@
+--@name Fixed-Cam Test 2
+--@author Ally for Hire / Merydian9
+--@include public_release_projects/allylib/simple_server-side_wire_helper.txt
+--@shared
+
+require("public_release_projects/allylib/simple_server-side_wire_helper.txt")
+
+local INPUTS   = {}
+local USER     = player()
+local CHIP     = chip()
+local NET_GUN    = "[F-CT2] Gun Network"
+local NET_CAM    = "[F-CT2] Cam Network"
+local NET_ANG    = "[F-CT2] Ang Network"
+local NET_ACTIVE = "[F-CT2] Active"
+local HOOK_ID    = "[F-CT2]_" .. CHIP:entIndex()
+
+------------------------------------------------------------
+-- SERVER
+------------------------------------------------------------
+if SERVER then
+    updateInputs("Gun:ENTITY Camera:ENTITY Active:NORMAL")
+    updateOutputs("HitAng:ANGLE")
+
+    local MODE_SIM      = 0
+    local MODE_JOYSTICK = 2
+    local JOY_MAX_OFF   = 200
+    local JOY_SPEED     = 80
+    local DEFAULT_FOV   = 90
+    local serverActive  = false
+    local lastInput = {
+        mode = MODE_SIM,
+        aimAng = Angle(),
+        joyOffX = 0,
+        joyOffY = 0,
+        camFOV = DEFAULT_FOV
+    }
+
+    local function norm(a)
+        if a.pitch > 180 then a.pitch = a.pitch - 360 elseif a.pitch < -180 then a.pitch = a.pitch + 360 end
+        if a.yaw   > 180 then a.yaw   = a.yaw   - 360 elseif a.yaw   < -180 then a.yaw   = a.yaw   + 360 end
+        if a.roll  > 180 then a.roll  = a.roll  - 360 elseif a.roll  < -180 then a.roll  = a.roll  + 360 end
+        return a
+    end
+
+    local function gunAng()
+        local ent = Inputs.Gun:get()
+        if not isValid(ent) then ent = CHIP end
+        return norm(ent:getAngles())
+    end
+
+    local function sendGun(ent, ply)
+        ent = (ent and isValid(ent)) and ent or CHIP
+        net.start(NET_GUN) net.writeEntity(ent)
+        if ply then net.send(ply) else net.send() end
+    end
+
+    local function sendCam(ent, ply)
+        ent = (ent and isValid(ent)) and ent or CHIP
+        net.start(NET_CAM) net.writeEntity(ent)
+        if ply then net.send(ply) else net.send() end
+    end
+
+    Inputs.Gun:addTrigger(function(ent) sendGun(ent) end)
+    Inputs.Camera:addTrigger(function(ent) sendCam(ent) end)
+    Inputs.Active:addTrigger(function(v)
+        local on = tonumber(v) or 0
+        serverActive = (on ~= 0)
+        net.start(NET_ACTIVE) net.writeBool(on ~= 0) net.send()
+    end)
+    net.receive(NET_ANG, function()
+        lastInput.mode = net.readUInt(2)
+        lastInput.aimAng = net.readAngle()
+        lastInput.joyOffX = net.readFloat()
+        lastInput.joyOffY = net.readFloat()
+        lastInput.camFOV = net.readFloat()
+    end)
+    hook.add("Tick", HOOK_ID .. "_Tick", function()
+        if not serverActive then return end
+        local dt = game.getTickInterval()
+        local outAng
+        if lastInput.mode == MODE_JOYSTICK then
+            local baseAng = gunAng()
+            local pitchOff = (lastInput.joyOffY / JOY_MAX_OFF) * JOY_SPEED * dt
+            local yawOff   = (lastInput.joyOffX / JOY_MAX_OFF) * JOY_SPEED * dt
+            if math.abs(pitchOff) < 0.001 then pitchOff = 0 end
+            if math.abs(yawOff) < 0.001 then yawOff = 0 end
+            outAng = baseAng + Angle(pitchOff, -yawOff, 0)
+        else
+            outAng = lastInput.aimAng
+        end
+        Outputs.HitAng:update(outAng)
+    end)
+    hook.add("ClientInitialized", HOOK_ID .. "_Init", function(ply)
+        sendGun(Inputs.Gun:get(), ply)
+        sendCam(Inputs.Camera:get(), ply)
+    end)
+end
+
+------------------------------------------------------------
+-- CLIENT
+------------------------------------------------------------
+if CLIENT then
+    enableHud(USER, true)
+    INPUTS.Gun = CHIP
+    INPUTS.Camera = CHIP
+
+    local enabled = false
+    local stabilizeAimer      = false
+    local attemptedAng, origin = Angle(), Vector()
+    local targetPos            = nil
+    local lastSend, mouseScale = timer.curtime(), 1
+    local lastScroll           = timer.curtime()
+    local camFOV               = 90
+    local x, y, resx, resy     = 0, 0, 0, 0
+
+    local VIEW_OFFSET   = Vector(0, 5, 15)
+    local SEND_INTERVAL = 0.05 -- 20 Hz cap
+    local MAX_PITCH     = 89
+    local MIN_FOV       = 5
+    local MAX_FOV       = 90
+    local DEFAULT_FOV   = 90
+    local ZOOM_FOV      = 20
+    local ZOOM_STEPS    = 4 -- number of evenly spaced zoom levels between min/max
+    local zoomLevels    = {}
+    local zoomIdx       = 1
+    local MODE_SIM      = 0
+    local MODE_ARCADE   = 1
+    local MODE_JOYSTICK = 2
+
+    local mode          = MODE_SIM
+    local joyOffX, joyOffY = 0, 0
+    local JOY_MAX_OFF   = 200
+    local JOY_DEADZONE  = 10
+    local JOY_SPEED     = 80 
+
+    local function norm(a)
+        if a.pitch > 180 then a.pitch = a.pitch - 360 elseif a.pitch < -180 then a.pitch = a.pitch + 360 end
+        if a.yaw   > 180 then a.yaw   = a.yaw   - 360 elseif a.yaw   < -180 then a.yaw   = a.yaw   + 360 end
+        if a.roll  > 180 then a.roll  = a.roll  - 360 elseif a.roll  < -180 then a.roll  = a.roll  + 360 end
+        return a
+    end
+
+    local function gunAng()
+        return norm(isValid(INPUTS.Gun) and INPUTS.Gun:getAngles() or Angle())
+    end
+
+    local function aimPointFrom(originPos, ang)
+        local dir = ang:getForward()
+        local tr = trace.line(originPos, originPos + dir * 100000, function(ent) return ent:getOwner() ~= USER end)
+        return tr.HitPos or (originPos + dir * 100000)
+    end
+
+    local function buildZoomLevels()
+        zoomLevels = {}
+        local steps = math.max(2, math.floor(ZOOM_STEPS))
+        local stepSize = (MAX_FOV - MIN_FOV) / (steps - 1)
+        for i = 0, steps - 1 do
+            zoomLevels[#zoomLevels + 1] = MIN_FOV + stepSize * i
+        end
+        zoomIdx = #zoomLevels
+        camFOV = zoomLevels[zoomIdx]
+        mouseScale = camFOV / DEFAULT_FOV
+    end
+    buildZoomLevels()
+
+    local function setFov(newFov)
+        -- Allow the explicit zoom FOV; otherwise snap to the current index value.
+        if math.abs(newFov - ZOOM_FOV) < 0.001 then
+            camFOV = ZOOM_FOV
+        else
+            camFOV = zoomLevels[zoomIdx] or DEFAULT_FOV
+        end
+        mouseScale = camFOV / DEFAULT_FOV
+    end
+
+    local function zeroRoll(ang)
+        ang.roll = 0
+        return ang
+    end
+
+    local function currentOrigin()
+        local camEnt = INPUTS.Camera
+        if not isValid(camEnt) then camEnt = INPUTS.Gun end
+        if isValid(camEnt) then
+            return camEnt:localToWorld(VIEW_OFFSET)
+        end
+        return origin ~= Vector() and origin or CHIP:getPos()
+    end
+
+    local function seedTarget(fromAng)
+        if not stabilizeAimer then return end
+        local start = currentOrigin()
+        targetPos = aimPointFrom(start, fromAng or attemptedAng)
+    end
+
+    local function refreshAimFromGun()
+        origin       = currentOrigin()
+        attemptedAng = gunAng()
+        seedTarget(attemptedAng)
+        joyOffX, joyOffY = 0, 0
+    end
+
+    local function sendAngles()
+        net.start(NET_ANG)
+        net.writeUInt(mode, 2)
+        net.writeAngle(attemptedAng)
+        local rateScale = camFOV / DEFAULT_FOV
+        local dz = JOY_DEADZONE
+        local ox = (math.abs(joyOffX) < dz) and 0.000000000001 or joyOffX
+        local oy = (math.abs(joyOffY) < dz) and 0.000000000001 or joyOffY
+        net.writeFloat(ox * rateScale)
+        net.writeFloat(oy * rateScale)
+        net.writeFloat(camFOV)
+        net.send()
+    end
+
+    local function calcViewHandler()
+        if not enabled or not isValid(INPUTS.Gun) then return end
+        origin = currentOrigin()
+
+        if stabilizeAimer and mode == MODE_SIM then
+            if not targetPos then seedTarget(attemptedAng) end
+            if targetPos then
+                attemptedAng = norm((targetPos - origin):getAngle())
+            end
+        end
+
+        -- Sim/joystick view stays on gun, arcade uses free-look.
+        local baseAng = gunAng()
+        local viewAng = (mode == MODE_ARCADE) and attemptedAng or baseAng
+        return { origin = origin, angles = viewAng, fov = camFOV }
+    end
+
+    local function mouseMovedHandler(x, y)
+        if not enabled then return end
+        if mode == MODE_JOYSTICK then
+            joyOffX = math.clamp(joyOffX + x, -JOY_MAX_OFF, JOY_MAX_OFF)
+            joyOffY = math.clamp(joyOffY + y, -JOY_MAX_OFF, JOY_MAX_OFF)
+            return
+        end
+        local scale = mouseScale
+        attemptedAng.pitch = math.clamp(attemptedAng.pitch + (y / 40) * scale, -MAX_PITCH, MAX_PITCH)
+        attemptedAng.yaw   = attemptedAng.yaw - (x / 40) * scale
+        attemptedAng.roll  = 0
+        attemptedAng = norm(attemptedAng)
+        seedTarget(attemptedAng)
+    end
+
+    local function mouseWheeledHandler(delta)
+        if not enabled or zooming then return end
+        if timer.curtime() - lastScroll < 0.1 then return end
+        lastScroll = timer.curtime()
+
+        -- Step through predefined zoom levels.
+        if delta > 0 then
+            zoomIdx = math.max(1, zoomIdx - 1)
+        elseif delta < 0 then
+            zoomIdx = math.min(#zoomLevels, zoomIdx + 1)
+        end
+
+        setFov(zoomLevels[zoomIdx] or camFOV)
+        notification.addLegacy("[F-CT2] Aimer " .. math.round(90 / camFOV, 1) .. "x Zoom", NOTIFY.GENERIC, 1)
+        --ound.emitSound("buttons/lever7.wav", USER:getPos(), 65, 95)
+    end
+
+    local function thinkHandler()
+        if not enabled or not isValid(INPUTS.Gun) then return end
+        origin = currentOrigin()
+        if stabilizeAimer then
+            if not targetPos then seedTarget(attemptedAng) end
+            if mode == MODE_SIM and targetPos then
+                attemptedAng = norm((targetPos - origin):getAngle())
+            end
+        end
+        if mode == MODE_JOYSTICK then
+            local baseAng = gunAng()
+            local rateScale = camFOV / DEFAULT_FOV
+            local pitchOff = (joyOffY / JOY_MAX_OFF) * JOY_SPEED * rateScale
+            local yawOff   = (joyOffX / JOY_MAX_OFF) * JOY_SPEED * rateScale
+            local desired = Angle(baseAng.pitch + pitchOff, baseAng.yaw - yawOff, 0)
+            desired.pitch = math.clamp(desired.pitch, -MAX_PITCH, MAX_PITCH)
+            attemptedAng = norm(desired)
+        end
+
+        local interval = SEND_INTERVAL
+        if timer.curtime() - lastSend >= interval then
+            sendAngles()
+            lastSend = timer.curtime()
+        end
+    end
+
+    local function inputPressedHandler(key)
+        if key == 32 and enabled then
+            mode = (mode + 1) % 3
+            if mode == MODE_ARCADE then
+                attemptedAng = zeroRoll(gunAng())
+            else
+                refreshAimFromGun()
+            end
+            joyOffX, joyOffY = 0, 0
+            origin = currentOrigin()
+            seedTarget(attemptedAng)
+            sendAngles()
+            local modeMsg = (mode == MODE_SIM) and "Gun sight aim (sim/locked)" or (mode == MODE_ARCADE) and "Arcade aim (free look)" or "Joystick aim (hold offset for speed)"
+            notification.addLegacy("[F-CT2] " .. modeMsg, NOTIFY.GENERIC, 3)
+        elseif key == 16 and enabled and mode == MODE_SIM then
+            stabilizeAimer = not stabilizeAimer
+            if stabilizeAimer then
+                origin = currentOrigin()
+                seedTarget(attemptedAng)
+            end
+            notification.addLegacy("[F-CT2] Aimer " .. (stabilizeAimer and "stabilized" or "free"), NOTIFY.GENERIC, 3)
+        elseif key == 12 and enabled then
+            zooming = true
+            setFov(ZOOM_FOV)
+        end
+    end
+
+    local function inputReleasedHandler(key)
+        if key == 12 and enabled then
+            zooming = false
+            setFov(DEFAULT_FOV)
+        end
+    end
+
+    local function drawHUDHandler()
+        if not enabled then return end
+        
+        if resx == 0 then
+            resx, resy = render.getResolution()
+            x, y = resx / 2, resy / 2     
+        end
+
+        local start  = currentOrigin()
+        local scr
+        if mode == MODE_JOYSTICK then
+            local sx = x + joyOffX
+            local sy = y + joyOffY
+            if resx > 0 then
+                sx = math.clamp(sx, 5, resx - 5)
+                sy = math.clamp(sy, 5, resy - 5)
+            end
+            scr = { x = sx, y = sy }
+        else
+            local aimPos
+            if mode == MODE_ARCADE then
+                aimPos = aimPointFrom(start, zeroRoll(attemptedAng))
+            else
+                aimPos = (stabilizeAimer and targetPos) and targetPos or aimPointFrom(start, attemptedAng)
+            end
+            scr = aimPos:toScreen()
+        end
+
+        -- Also show where the turret is actually aiming so hull rotation correction is visible.
+        local actualScr = aimPointFrom(start, gunAng()):toScreen()
+        
+        render.setColor(Color(0, 0, 0))
+        render.drawRect(scr.x - 6, scr.y - 1, 12, 2)
+        render.drawRect(scr.x - 1, scr.y - 6, 2, 12)
+        
+        render.setColor(Color(255, 255, 255))
+        render.drawLine(scr.x - 5, scr.y, scr.x + 5, scr.y)
+        render.drawLine(scr.x, scr.y - 5, scr.x, scr.y + 5)
+        
+        render.setColor(Color(255, 255, 255, 100))
+        render.drawLine(x, y, scr.x, scr.y)
+
+        -- Actual gun aim indicator (small red cross).
+        render.setColor(Color(255, 80, 80))
+        render.drawLine(actualScr.x - 4, actualScr.y, actualScr.x + 4, actualScr.y)
+        render.drawLine(actualScr.x, actualScr.y - 4, actualScr.x, actualScr.y + 4)
+    end
+
+    hook.add("InputPressed", HOOK_ID .. "_Input", inputPressedHandler)
+    hook.add("InputReleased", HOOK_ID .. "_InputRel", inputReleasedHandler)
+    hook.add("CalcView",     HOOK_ID .. "_View",  calcViewHandler)
+    hook.add("Think",        HOOK_ID .. "_Think", thinkHandler)
+    hook.add("MouseMoved",   HOOK_ID .. "_Mouse", mouseMovedHandler)
+    hook.add("MouseWheeled", HOOK_ID .. "_Wheel", mouseWheeledHandler)
+    hook.add("DrawHUD",      HOOK_ID .. "_HUD",   drawHUDHandler)
+
+    net.receive(NET_GUN, function()
+        INPUTS.Gun = net.readEntity() or CHIP
+        if enabled then
+            attemptedAng = gunAng()
+            seedTarget(attemptedAng)
+            sendAngles()
+        end
+    end)
+
+    net.receive(NET_CAM, function()
+        INPUTS.Camera = net.readEntity() or CHIP
+        if enabled then
+            origin = currentOrigin()
+            if stabilizeAimer then seedTarget(attemptedAng) end
+        end
+    end)
+
+    net.receive(NET_ACTIVE, function()
+        enabled = net.readBool()
+        if enabled then
+            mode = MODE_SIM
+            stabilizeAimer = false
+            zooming = false
+            zoomIdx = #zoomLevels
+            setFov(DEFAULT_FOV)
+            refreshAimFromGun()
+            sendAngles()
+            notification.addLegacy("[F-CT2] Active ON", NOTIFY.GENERIC, 3)
+        else
+            mode = MODE_SIM
+            stabilizeAimer = false
+            zoomIdx = #zoomLevels
+            setFov(DEFAULT_FOV)
+            attemptedAng = Angle()
+            targetPos = nil
+            joyOffX, joyOffY = 0, 0
+            zooming = false
+            notification.addLegacy("[F-CT2] Active OFF", NOTIFY.GENERIC, 3)
+        end
+    end)
+end
