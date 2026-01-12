@@ -1,57 +1,91 @@
 # Starfall Projects Portfolio
 
-A curated portfolio of Starfall Lua systems built for Garry's Mod. The projects in this repository highlight how I approach real-time scripting challenges, plus interface, automation, and simulation work, inside a constrained game environment. Each folder captures a different slice of my development practice, from UX-heavy HUDs to combat logic, control theory, and reusable utility libraries.
+A portfolio of Starfall Lua systems for Garry's Mod. This repository mirrors the
+`garrysmod/data/starfall/` layout and collects production scripts, shared
+libraries, and demonstrations used for in-game automation, UI, and simulation.
 
 ## Highlights
-- Demonstrated ability to design, document, and ship production-ready Starfall components
-- Experience translating gameplay requirements into modular Lua architectures
-- Focus on clarity, maintainability, and in-game performance under sandbox constraints
-- Proven track record supporting multiplayer teams with reliable tooling and automation
+- Production-ready Starfall chips with a focus on performance in the sandboxed runtime
+- Modular Lua architecture with shared libraries in `allylib/`
+- HUD/UI, data visualization, and control logic for ACF and Wire setups
+- Multiplayer-friendly tooling with documented configuration and wiring guidance
 
-## Skills in Practice
-- **Systems design:** event-driven scripting, state machines, robust error handling
-- **Gameplay programming:** targeting logic, ballistics approximations, vehicle control
-- **Interface design:** responsive HUDs, data visualization, workflow-focused UI
-- **Simulation & analytics:** telemetry logging, diagnostics overlays, decision support
-- **Collaboration:** consistent naming, inline docs, and versioned releases for teammates
+## Repository Layout
+- `allylib/` - Shared libraries used across projects
+- `examples/` - Focused demos, render tests, and HUD experiments
+- `information_systems/` - Universal datalink and server/client link components
+- `misc/` - Standalone utilities and prototypes
+- `defunct/` - Archived or superseded scripts kept for reference
+- Root files - Primary chips and controllers
 
 ## Project Index
-- ally_mobility_hours.txt — Plug-and-play mobility brain for tracked/wheeled ACF vehicles.
-- merydian's_sf_gun_controller.txt — Server-side ACF gun controller powered by curve-fit ballistics and Wire I/O helpers.
-- modern_hud_beta.txt — Shared HUD framework; uses `allylib/animation_class.txt` and `allylib/helpful_hud_functions.txt`.
-- modern_hud_beta_varlib.txt — Variables and presets for the modern HUD.
-- merydian's_camera_chip.txt — Camera management with built-in filtering for HUD pipelines.
-- 2024_cam_controller_and_hud.txt — Camera controller + HUD utilities.
-- 2024_physical_gun_controller.txt — Physical gun controller utilities.
-- acf3_rws_controller.txt — ACF 3 remote weapon system controller.
-- information_systems/universal1_datalink_node.txt — Universal1: Datalink Node.
-- information_systems/universal1_datalink_root.txt — Universal1: Datalink Root.
+### Root Scripts
+- `2024_physical_gun_controller.txt` - Physical gun controller utilities.
+- `ally_mobility_hours.txt` - Mobility brain for tracked and wheeled ACF vehicles.
+- `merydian's_camera_chip.txt` - Camera management with filtering for HUD pipelines.
+- `merydian's_sf_gun_controller.txt` - Server-side ACF gun controller with curve-fit
+  ballistics and Wire I/O helpers.
 
-### Libraries (allylib/)
-- curve-fitting_ballistics_algorithm.txt — Curve-fit solver for ACF guns; feeds time-to-impact for fire control.
-- simple_server-side_wire_helper.txt — Declarative Wire I/O helper with cached values and triggers.
-- helpful_hud_functions.txt — HUD drawing helpers (shapes, text, RT wrappers, draw utilities).
-- animation_class.txt — Lightweight animation helper for HUDs.
-- acf_ballistics_lib.txt — Ballistics utilities for ACF.
-- projectile_library.txt — Projectile helper routines.
-- general_algorithms.txt — Miscellaneous reusable algorithms.
+### Information Systems (`information_systems/`)
+- `universal1_datalink_node.txt` - Universal1 datalink node.
+- `universal1_datalink_root.txt` - Universal1 datalink root.
+- `universal2_datalink_combo.txt` - Universal2 datalink combo.
+- `universal3_datalink_combo_version_2.txt` - Universal3 datalink combo v2.
+- `universal4_serverlink.txt` - Universal4 server link.
+- `universal4_serverlink_client-end.txt` - Universal4 client-side link.
+- `universal5_itk.txt` - Universal5 ITK server component.
+- `universal5_itk_client.txt` - Universal5 ITK client component.
 
-### Examples and misc
-- examples/ — Focused demos and render tests (e.g., render_target_example.txt).
-- misc/ — Standalone QoL utilities and experimental tools.
-- defunct/ — Archived prototypes kept for reference.
+### Libraries (`allylib/`)
+- `acf_ballistics_lib.txt` - Ballistics utilities for ACF.
+- `animation_class.txt` - Lightweight animation helper for HUDs.
+- `curve-fitting_ballistics_algorithm.txt` - Curve-fit solver for ACF guns and
+  time-to-impact estimates.
+- `general_algorithms.txt` - Miscellaneous reusable algorithms.
+- `helpful_hud_functions.txt` - HUD drawing helpers and render-target utilities.
+- `projectile_library.txt` - Projectile helper routines.
+- `simple_server-side_wire_helper.txt` - Declarative Wire I/O helper with cached
+  values and triggers.
 
-## Working with the Projects
-1. Place the desired `.txt` file inside `garrysmod/data/starfall/` (already mirrored in this repository).
-2. Load it through a Starfall chip in-game and tweak any exposed variables or config tables.
-3. Review in-file documentation for wiring diagrams, dependencies, or suggested component pairings.
+### Examples (`examples/`)
+- `bounding_box_relative_to_camera_render.txt` - Render bounding boxes relative to
+  camera space.
+- `fixed-cam_test_2.txt` - Fixed camera test.
+- `jet_gunsight_test.txt` - Jet gunsight test.
+- `jet_gunsight_test2.txt` - Jet gunsight test variant.
+- `merydian's_hud_base.txt` - Base HUD example.
+- `radar_data_visualizer.txt` - Radar data visualization example.
+- `render_target_example.txt` - Render target example.
+- `renderview_test.txt` - RenderView test.
 
-I am happy to walk through setup, customization, or broader workflow questions, just reach out.
+### Misc (`misc/`)
+- `all_wheels_unhittable.txt` - Utility to toggle wheel hittability.
+- `handheld_rpg.txt` - Handheld RPG utility.
+- `prop_to_starfall_hologram.txt` - Convert props to Starfall holograms.
+- `quadratic_target_model_generator.txt` - Quadratic target model generator.
 
-## Includes & Dependencies
-- Many scripts `--@include` files from `allylib/`. Keep folder names and relative paths intact.
-- When copying a single script that references `allylib`, also copy the required library files.
-- Some systems ship as server/client pairs. Install and link both sides as documented at the top of each file.
+### Defunct (`defunct/`)
+Archived or superseded scripts retained for reference.
+- `2024_cam_controller_and_hud.txt`
+- `2027_projectile_aimbot_computer.txt`
+- `2028_projectile_aimbot_computer.txt`
+- `acf3_rws_controller.txt`
+- `acf_ballistics_livesim_calculator.txt`
+- `modern_hud_beta.txt`
+- `modern_hud_beta_varlib.txt`
+
+## Using the Projects
+1. Copy the desired `.txt` file into `garrysmod/data/starfall/` and keep the
+   relative folder structure.
+2. Load it in-game through a Starfall chip.
+3. Review the header comments for configuration, wiring, and dependencies.
+
+## Includes and Dependencies
+- Many scripts use `--@include` from `allylib/`; keep folder names and paths intact.
+- If you copy a single script that references `allylib`, also copy the required
+  library files.
+- Some systems have server/client pairs; install and link both sides as documented
+  at the top of each file.
 
 ## Links
 - GitHub: https://github.com/Ally-for-Hire
@@ -60,5 +94,6 @@ I am happy to walk through setup, customization, or broader workflow questions, 
 - Steam: https://steamcommunity.com/id/alliedmerydian/
 - Discord: @allyfh
 
-## Let's Connect
-I am always open to feedback, collaboration, or commissions. If you are exploring Starfall, building GMod tooling, or hiring for scripting roles, I would love to talk.
+## Contact
+Open to feedback, collaboration, and commissions. If you are exploring Starfall,
+building GMod tooling, or hiring for scripting roles, feel free to reach out.
