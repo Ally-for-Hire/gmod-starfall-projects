@@ -1,0 +1,40 @@
+--@name Renderview Test
+--@author Merydian9
+--@client
+
+if(player() != owner()) then return end
+enableHud(owner(), true)
+
+Player = owner()
+fps = 10
+last = timer.curtime()
+
+render.createRenderTarget("rt")
+local mat = material.create("gmodscreenspace")
+mat:setTextureRenderTarget("$basetexture", "rt")
+
+hook.add("renderscene", "scene",function()
+    local dt = (timer.curtime()-last)
+    if dt<(1/fps) then return end
+
+    render.selectRenderTarget("rt")
+    render.renderView({
+        origin = chip():getPos() + Vector(0, 0, 10),
+        angles = Angle(),
+        x = 0,
+        y = 0,
+        drawhud = true
+    })
+    
+    last = timer.curtime()
+end)
+
+
+hook.add("drawhud", "hud", function()
+    local x, y = render.getResolution()
+    local x, y = x / 2, y / 2
+    
+    render.setMaterial(mat)
+    render.setColor(Color(255, 255, 255, 255))
+    render.drawTexturedRect(x + 256, y - 256, 512, 512)
+end)
