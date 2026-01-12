@@ -2,7 +2,7 @@
 --@author Ally for Hire / Merydian9
 --@server
 
---- Version 0.10.1
+--- Version 0.11.0
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-starfall-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -36,15 +36,17 @@ Need a hand tailoring it to a particular rig? Ping @allyfh and I'll walk you thr
 */
 
 --- Constants
-local SPEEDCONV = 1/17.6
+local SPEEDCONV = 1 / 17.6
+local MAX_YAW_RATE = 240
+local BRAKE_SPEED_GATE = 30
 
 --- Customizable Variables
 -- Gearing and Braking Setup
-local gearingType         = 1
-local maxBrakePower       = 125
+local gearingType         = 3
+local maxBrakePower       = 25
 local brakeScaling        = false
-local wheelSize           = 30
-local finalRatio          = (1/1.8)*(0.75)
+local wheelSize           = 28
+local finalRatio          = 0.18
 local idleThrottle        = 20
 local disableNeutralSteer = false
 
@@ -58,16 +60,17 @@ local inlineTransfers = true
 local yawDeadzone = 15
 local counterSteerStrength = 1.5
 
+-- Steering Setup
+local invertSteer = false
+local invertReverseSteer = false
+
 -- Misc
 local showDebug = false
 local clutchStart = 0.8
-local fancyClutchBullshit = true
 
 --- Internal Variables
 local clutchTurn = 1
 local clutchBrake = 1
-local minClutch = 0
-local remainderClutch = 0
 local gearCount = 0
 local gearUpBuffer = 1.05
 local gearDownBuffer = 0.95
@@ -80,6 +83,11 @@ local input_mainGearbox = nil
 local input_base = nil
 local input_pod = nil
 
+local mainWL = nil
+local leftWL = nil
+local rightWL = nil
+local engineReady = false
+
 local gears = {}
 local gearLinks = {}
 local gearSpeeds = {}
@@ -87,7 +95,6 @@ local reverseGears = 0
 local isAutogearing = false
 local canNeutralSteer = false
 local acf3GearRatios = true
-local maxCountersteerBrake = 1
 
 local output_gear = 1
 local output_throttle = 0
@@ -114,14 +121,131 @@ local function applyBrakeClutch(LBrake, RBrake, LClutch, RClutch)
     outputLeftBrake = LBrake
 end
 
+local function writeWireIfChanged(wl, key, value, lastValue)
+    if not wl then return lastValue end
+    if lastValue ~= value then
+        wl[key] = value
+        return value
+    end
+    return lastValue
+end
+
+local function writeWirePairIfChanged(wl, keyA, keyB, value, lastValue)
+    if not wl then return lastValue end
+    if lastValue ~= value then
+        wl[keyA] = value
+        wl[keyB] = value
+        return value
+    end
+    return lastValue
+end
+
+local function writePortIfChanged(key, value, lastValue)
+    if lastValue ~= value then
+        wire.ports[key] = value
+        return value
+    end
+    return lastValue
+end
+
+local function selectGear(rpm, speed, driveDir, neutralSteerEnabled)
+    if not isAutogearing then
+        if neutralSteerEnabled then
+            return 1
+        end
+        if driveDir < 0 and reverseGears > 0 then
+            return gearCount + 1
+        end
+        return 1
+    end
+
+    local minGear = 1
+    local maxGear = gearCount
+
+    if driveDir < 0 and not neutralSteerEnabled and reverseGears > 0 then
+        minGear = gearCount + 1
+        maxGear = gearCount + reverseGears
+    end
+
+    local newGear = output_gear
+    if newGear < minGear or newGear > maxGear then
+        newGear = minGear
+    end
+
+    if gearingType == 1 then
+        if rpm > upshiftRPM and newGear < maxGear then
+            newGear = newGear + 1
+        elseif rpm < downshiftRPM and newGear > minGear then
+            newGear = newGear - 1
+        end
+    elseif gearingType == 2 then
+        if newGear < maxGear and speed > gearSpeeds[newGear] * gearUpBuffer then
+            newGear = newGear + 1
+        elseif newGear > minGear and speed < gearSpeeds[newGear - 1] * gearDownBuffer then
+            newGear = newGear - 1
+        end
+    elseif gearingType == 3 then
+        if newGear < maxGear and (speed > gearSpeeds[newGear] * gearUpBuffer or rpm > upshiftRPM) then
+            newGear = newGear + 1
+        elseif newGear > minGear and (speed < gearSpeeds[newGear - 1] * gearDownBuffer and rpm < powerMin) then
+            newGear = newGear - 1
+        end
+    end
+
+    return newGear
+end
+
+local function applyOutputs()
+    if not mainWL then return end
+
+    lastGear = writeWireIfChanged(mainWL, "Gear", output_gear, lastGear)
+    lastThrottle = writePortIfChanged("Throttle", output_throttle, lastThrottle)
+
+    local lweld = outputLeftBrake > 0 and 1 or 0
+    local rweld = outputRightBrake > 0 and 1 or 0
+
+    lastLWeld = writePortIfChanged("LeftWeldLatch", lweld, lastLWeld)
+    lastRWeld = writePortIfChanged("RightWeldLatch", rweld, lastRWeld)
+
+    if canNeutralSteer then
+        if not leftWL or not rightWL then return end
+
+        lastLBrake = writeWirePairIfChanged(leftWL, "Left Brake", "Right Brake", outputLeftBrake, lastLBrake)
+        lastRBrake = writeWirePairIfChanged(rightWL, "Left Brake", "Right Brake", outputRightBrake, lastRBrake)
+
+        lastLClutch = writeWirePairIfChanged(leftWL, "Left Clutch", "Right Clutch", outputLeftClutch, lastLClutch)
+        lastRClutch = writeWirePairIfChanged(rightWL, "Left Clutch", "Right Clutch", outputRightClutch, lastRClutch)
+
+        if inlineTransfers then
+            lastLGear = writeWireIfChanged(leftWL, "Gear", outputLeftGear, lastLGear)
+            lastRGear = writeWireIfChanged(rightWL, "Gear", outputRightGear, lastRGear)
+        else
+            lastLGear = writeWirePairIfChanged(leftWL, "Left Gear", "Right Gear", outputLeftGear, lastLGear)
+            lastRGear = writeWirePairIfChanged(rightWL, "Left Gear", "Right Gear", outputRightGear, lastRGear)
+        end
+    elseif dualClutch then
+        lastLBrake = writeWireIfChanged(mainWL, "Left Brake", outputLeftBrake, lastLBrake)
+        lastRBrake = writeWireIfChanged(mainWL, "Right Brake", outputRightBrake, lastRBrake)
+
+        lastLClutch = writeWireIfChanged(mainWL, "Left Clutch", outputLeftClutch, lastLClutch)
+        lastRClutch = writeWireIfChanged(mainWL, "Right Clutch", outputRightClutch, lastRClutch)
+    else
+        lastLBrake = writeWireIfChanged(mainWL, "Brake", outputLeftBrake, lastLBrake)
+        lastLClutch = writeWireIfChanged(mainWL, "Clutch", outputLeftClutch, lastLClutch)
+    end
+end
+
 local function updateEngineVariables()
+    if not isValid(input_engine) or not isValid(input_mainGearbox) then
+        engineReady = false
+        return
+    end
+
     powerMin = input_engine:acfPowerbandMin()
     powerMax = input_engine:acfPowerbandMax()
 
     biteRPM = powerMin * clutchStart
     releaseRPM = powerMin
-    minClutch = 1 - (input_engine:acfMaxTorque() / input_mainGearbox:acfTorqueRating())
-    remainderClutch = 1 - minClutch
 
     upshiftRPM = powerMax * 0.95
     downshiftRPM = powerMin * 0.85
@@ -157,6 +281,11 @@ local function updateEngineVariables()
     end
 
     gearLinks = input_mainGearbox:acfLinks()
+    leftTransfer = nil
+    rightTransfer = nil
+    leftWL = nil
+    rightWL = nil
+    canNeutralSteer = false
 
     local transfers = 0
     for i = 1, #gearLinks do
@@ -171,6 +300,14 @@ local function updateEngineVariables()
     end
 
     if transfers >= 2 then canNeutralSteer = true end
+    mainWL = input_mainGearbox:getWirelink()
+    if isValid(leftTransfer) then
+        leftWL = leftTransfer:getWirelink()
+    end
+    if isValid(rightTransfer) then
+        rightWL = rightTransfer:getWirelink()
+    end
+    engineReady = mainWL ~= nil
 
     if showDebug then
         if acf3GearRatios and isAutogearing then print("This Vehicle Uses ACF3 Gears") elseif isAutogearing then print("This vehicle Uses ACE Gears") end
@@ -193,53 +330,46 @@ local function handleWire(name, value)
     elseif name == "Pod" then
         input_pod = value
     end
+
+    if name == "Engine" or name == "MainGearbox" then
+        updateEngineVariables()
+    end
 end
 
 local function think()
     if not input_engine or not input_mainGearbox or not input_base or not input_pod then return end
-    if biteRPM == 0 then updateEngineVariables() end
+    if not isValid(input_engine) or not isValid(input_mainGearbox) or not isValid(input_base) then return end
+    if not engineReady then return end
 
     local vel = input_base:getVelocity()
     local speed = vel:getLength() * SPEEDCONV
     local rpm = input_engine:acfRPM()
-    local W = input_pod["W"]
-    local A = input_pod["A"]
-    local S = input_pod["S"]
-    local D = input_pod["D"]
-    local hasInput = (W == 1 or A == 1 or S == 1 or D == 1)
+    local W = input_pod["W"] or 0
+    local A = input_pod["A"] or 0
+    local S = input_pod["S"] or 0
+    local D = input_pod["D"] or 0
+    local driveDir = W - S
+    local steerDir = D - A
+    if invertSteer then
+        steerDir = -steerDir
+    end
+    local neutralSteerEnabled = canNeutralSteer and not hasWheels and not disableNeutralSteer
+    local nonNeutralSteerEnabled = not hasWheels and not neutralSteerEnabled
+    local hasDriveInput = driveDir ~= 0
+    local hasSteerInput = steerDir ~= 0
+    local steerOnlyDrive = nonNeutralSteerEnabled and not hasDriveInput and hasSteerInput
+    if steerOnlyDrive then
+        driveDir = 1
+    end
+    local hasInput = hasDriveInput or (neutralSteerEnabled and hasSteerInput) or steerOnlyDrive
 
     outputLeftGear = 1
     outputRightGear = 1
 
     if not hasInput and speed < 1 and rpm < biteRPM then
-        if output_throttle ~= idleThrottle then
-            output_throttle = idleThrottle
-        end
-
-        local gbxWL = input_mainGearbox:getWirelink()
-
-        if lastGear ~= output_gear then
-            gbxWL["Gear"] = output_gear
-            lastGear = output_gear
-        end
-
-        if lastThrottle ~= output_throttle then
-            wire.ports.Throttle = output_throttle
-            lastThrottle = output_throttle
-        end
-
-        local lweld = outputLeftBrake > 0 and 1 or 0
-        local rweld = outputRightBrake > 0 and 1 or 0
-
-        if lastLWeld ~= lweld then
-            wire.ports.LeftWeldLatch = lweld
-            lastLWeld = lweld
-        end
-        if lastRWeld ~= rweld then
-            wire.ports.RightWeldLatch = rweld
-            lastRWeld = rweld
-        end
-
+        output_throttle = idleThrottle
+        applyBrakeClutch(maxBrakePower, maxBrakePower, clutchBrake, clutchBrake)
+        applyOutputs()
         return
     end
 
@@ -248,7 +378,7 @@ local function think()
         if isAutogearing and gearSpeeds[gearCount] and speed > 1 then
             brakePower = maxBrakePower * math.min(gearSpeeds[gearCount] / 2 / speed, 1)
         elseif speed > 1 then
-            brakePower = maxBrakePower * math.min(30 / speed, 1)
+            brakePower = maxBrakePower * math.min(BRAKE_SPEED_GATE / speed, 1)
         end
     end
 
@@ -262,181 +392,82 @@ local function think()
         output_throttle = idleThrottle
     end
 
-    if isAutogearing then
-        local usableGears = gearCount
-        local min_gear = 1
-
-        if S == 1 and not canNeutralSteer then
-            usableGears = gearCount + reverseGears
-            min_gear = gearCount + 1
-            output_gear = gearCount + 1
-        end
-
-        if gearingType == 1 then
-            if rpm > upshiftRPM and output_gear < usableGears then
-                output_gear = output_gear + 1
-            elseif rpm < downshiftRPM and output_gear > min_gear then
-                output_gear = output_gear - 1
-            end
-
-        elseif gearingType == 2 then
-            if output_gear < usableGears and speed > gearSpeeds[output_gear] * gearUpBuffer then
-                output_gear = output_gear + 1
-            elseif output_gear > min_gear and speed < gearSpeeds[output_gear - 1] * gearDownBuffer then
-                output_gear = output_gear - 1
-            end
-
-        elseif gearingType == 3 then
-            if output_gear < usableGears and (speed > gearSpeeds[output_gear] * gearUpBuffer or rpm > upshiftRPM) then
-                output_gear = output_gear + 1
-            elseif output_gear > min_gear and (speed < gearSpeeds[output_gear - 1] * gearDownBuffer and rpm < powerMin) then
-                output_gear = output_gear - 1
-            end
-        end
-    else
-        if canNeutralSteer then
-            output_gear = 1
+    if driveDir == 0 then
+        if output_gear > gearCount then
+            driveDir = -1
         else
-            output_gear = 1 + S
+            driveDir = 1
         end
     end
 
-    if canNeutralSteer and not hasWheels then
-        if W == 0 and S == 0 then
-            if A == 1 then
+    output_gear = selectGear(rpm, speed, driveDir, neutralSteerEnabled)
+
+    if neutralSteerEnabled then
+        if not hasDriveInput and hasSteerInput then
+            if steerDir < 0 then
                 outputLeftGear = 2
                 outputRightGear = 1
-            elseif D == 1 then
+            else
                 outputLeftGear = 1
                 outputRightGear = 2
             end
-        elseif W == 0 and S == 1 then
+        else
+            if driveDir < 0 then
+                outputLeftGear = 2
+                outputRightGear = 2
+            end
+
+            if steerDir < 0 then
+                applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
+            elseif steerDir > 0 then
+                applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)
+            end
+        end
+    elseif nonNeutralSteerEnabled then
+        if canNeutralSteer and driveDir < 0 and reverseGears == 0 then
             outputLeftGear = 2
             outputRightGear = 2
-            if A == 1 then
-                applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
-            elseif D == 1 then
-                applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)
+        end
+
+        if hasSteerInput and (hasDriveInput or speed > 1 or steerOnlyDrive) and (canNeutralSteer or dualClutch) then
+            local turnDir = steerDir
+            if driveDir < 0 and invertReverseSteer then
+                turnDir = -turnDir
             end
-        elseif W == 1 and S == 0 then
-            if A == 1 then
-                applyBrakeClutch(brakePower, 0, clutchTurn, outputRightClutch)
-            elseif D == 1 then
-                applyBrakeClutch(0, brakePower, outputLeftClutch, clutchTurn)
+
+            if turnDir > 0 then
+                outputRightBrake = math.max(outputRightBrake, brakePower)
+                outputRightClutch = math.max(outputRightClutch, clutchTurn)
+            else
+                outputLeftBrake = math.max(outputLeftBrake, brakePower)
+                outputLeftClutch = math.max(outputLeftClutch, clutchTurn)
             end
         end
     end
 
-    if not hasWheels and (W == 1 or S == 1) and A == 0 and D == 0 then
+    if not hasWheels and hasDriveInput and not hasSteerInput then
         local yawRate = input_base:getAngleVelocity().z
         if math.abs(yawRate) > yawDeadzone then
-            local counterSteerWeight = math.min(yawRate / 240 * counterSteerStrength, maxCountersteerBrake) * brakePower
-            local direction = (S == 1) and -1 or 1
-            if counterSteerWeight * direction < 0 then
-                outputLeftBrake = math.abs(counterSteerWeight)
+            local counterSteerWeight = math.min(
+                math.abs(yawRate) / MAX_YAW_RATE * counterSteerStrength,
+                1
+            ) * brakePower
+            local direction = driveDir ~= 0 and driveDir or 1
+            if invertSteer then
+                direction = -direction
+            end
+
+            if yawRate * direction < 0 then
+                outputLeftBrake = math.max(outputLeftBrake, counterSteerWeight)
+                outputLeftClutch = math.max(outputLeftClutch, clutchTurn)
             else
-                outputRightBrake = math.abs(counterSteerWeight)
+                outputRightBrake = math.max(outputRightBrake, counterSteerWeight)
+                outputRightClutch = math.max(outputRightClutch, clutchTurn)
             end
         end
     end
 
-    local gbxWL = input_mainGearbox:getWirelink()
-
-    if lastGear ~= output_gear then
-        gbxWL["Gear"] = output_gear
-        lastGear = output_gear
-    end
-
-    if lastThrottle ~= output_throttle then
-        wire.ports.Throttle = output_throttle
-        lastThrottle = output_throttle
-    end
-
-    local lweld = outputLeftBrake > 0 and 1 or 0
-    local rweld = outputRightBrake > 0 and 1 or 0
-
-    if lastLWeld ~= lweld then
-        wire.ports.LeftWeldLatch = lweld
-        lastLWeld = lweld
-    end
-    if lastRWeld ~= rweld then
-        wire.ports.RightWeldLatch = rweld
-        lastRWeld = rweld
-    end
-
-    if canNeutralSteer then
-        local lWL = leftTransfer:getWirelink()
-        local rWL = rightTransfer:getWirelink()
-
-        if lastLBrake ~= outputLeftBrake then
-            lWL["Left Brake"] = outputLeftBrake
-            lWL["Right Brake"] = outputLeftBrake
-            lastLBrake = outputLeftBrake
-        end
-        if lastRBrake ~= outputRightBrake then
-            rWL["Left Brake"] = outputRightBrake
-            rWL["Right Brake"] = outputRightBrake
-            lastRBrake = outputRightBrake
-        end
-
-        if lastLClutch ~= outputLeftClutch then
-            lWL["Left Clutch"] = outputLeftClutch
-            lWL["Right Clutch"] = outputLeftClutch
-            lastLClutch = outputLeftClutch
-        end
-        if lastRClutch ~= outputRightClutch then
-            rWL["Left Clutch"] = outputRightClutch
-            rWL["Right Clutch"] = outputRightClutch
-            lastRClutch = outputRightClutch
-        end
-
-        if inlineTransfers then
-            if lastLGear ~= outputLeftGear then
-                lWL["Gear"] = outputLeftGear
-                lastLGear = outputLeftGear
-            end
-            if lastRGear ~= outputRightGear then
-                rWL["Gear"] = outputRightGear
-                lastRGear = outputRightGear
-            end
-        else
-            if lastLGear ~= outputLeftGear then
-                lWL["Left Gear"] = outputLeftGear
-                lWL["Right Gear"] = outputLeftGear
-                lastLGear = outputLeftGear
-            end
-            if lastRGear ~= outputRightGear then
-                rWL["Left Gear"] = outputRightGear
-                rWL["Right Gear"] = outputRightGear
-                lastRGear = outputRightGear
-            end
-        end
-
-    elseif dualClutch then
-        if lastLBrake ~= outputLeftBrake or lastRBrake ~= outputRightBrake then
-            gbxWL["Left Brake"] = outputLeftBrake
-            gbxWL["Right Brake"] = outputRightBrake
-            lastLBrake = outputLeftBrake
-            lastRBrake = outputRightBrake
-        end
-
-        if lastLClutch ~= outputLeftClutch or lastRClutch ~= outputRightClutch then
-            gbxWL["Left Clutch"] = outputLeftClutch
-            gbxWL["Right Clutch"] = outputRightClutch
-            lastLClutch = outputLeftClutch
-            lastRClutch = outputRightClutch
-        end
-    else
-        if lastLBrake ~= outputLeftBrake then
-            gbxWL["Brake"] = outputLeftBrake
-            lastLBrake = outputLeftBrake
-        end
-
-        if lastLClutch ~= outputLeftClutch then
-            gbxWL["Clutch"] = outputLeftClutch
-            lastLClutch = outputLeftClutch
-        end
-    end
+    applyOutputs()
 end
 
 --- Hooks
