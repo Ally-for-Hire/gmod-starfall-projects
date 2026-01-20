@@ -1,4 +1,5 @@
 --@name Merydian's SF Gun Controller
+--@author Ally for Hire / Merydian9
 --@include allylib/simple_server-side_wire_helper.txt
 --@include allylib/curve-fitting_ballistics_algorithm.txt
 --@server
@@ -13,10 +14,35 @@ GZ         = 600
 NextThink  = 0
 Unlocked   = false
 LastGun    = nil
+LastTargetVel  = Vector()
+LastTargetTime = 0
+TargetAccel    = Vector()
+
+local function updateTargetAccel(tvel, now)
+    if LastTargetTime <= 0 then
+        LastTargetVel = tvel
+        LastTargetTime = now
+        TargetAccel = Vector()
+        return TargetAccel
+    end
+
+    local dt = now - LastTargetTime
+    if dt <= 0 then
+        TargetAccel = Vector()
+    else
+        TargetAccel = (tvel - LastTargetVel) / dt
+    end
+
+    LastTargetVel = tvel
+    LastTargetTime = now
+
+    return TargetAccel
+end
 
 local function main()
-    if curtime() < NextThink then return end
-    NextThink = curtime() + INTERVAL
+    local now = curtime()
+    if now < NextThink then return end
+    NextThink = now + INTERVAL
 
     local gun    = Inputs.Gun:get()    or I.Gun
     local base   = Inputs.Base:get()
@@ -31,7 +57,9 @@ local function main()
         LastGun = gun
     end
 
+    local tacc = updateTargetAccel(tvel, now)
     local tvelLen = tvel:getLength()
+    local taccLen = tacc:getLength()
     local basePos = hit
     if tpos:getLength() > 0 then
         basePos = tpos
@@ -49,7 +77,7 @@ local function main()
         local bvel  = base:getVelocity()
         local gpos  = gun:getMassCenterW() or gun:getPos()
 
-        if tvelLen == 0 then 
+        if tvelLen == 0 and taccLen == 0 then 
             tta = ballisticTime(dist) or 0
         else
             local low = 0
@@ -59,8 +87,10 @@ local function main()
             while high - low > 0.05 and ballisticDistance do
                 tta = (low + high) / 2
 
-                local drop = Vector(0, 0, 0.5 * GZ * (tta ^ 2))
-                local tlen = (basePos - gpos + tvel * tta + drop):getLength()
+                local ttaSq = tta * tta
+                local drop = Vector(0, 0, 0.5 * GZ * ttaSq)
+                local accel = tacc * (0.5 * ttaSq)
+                local tlen = (basePos - gpos + tvel * tta + accel + drop):getLength()
                 local slen = ballisticDistance(tta)
                 local diff = slen - tlen
 
@@ -70,31 +100,26 @@ local function main()
                     high = tta
                 end
 
-                tta = high + 0.1
+                tta = high
             end
         end
 
         local drag = -bvel * tta
-        local drop = Vector(0, 0, 0.5 * GZ * (tta ^ 2))
-        aimPos = basePos + tvel * tta + drag + drop
+        local ttaSq = tta * tta
+        local drop = Vector(0, 0, 0.5 * GZ * ttaSq)
+        local accel = tacc * (0.5 * ttaSq)
+        aimPos = basePos + tvel * tta + accel + drag + drop
     else
         aimPos = basePos
         tta    = 0
     end
 
-    --------------------------------------------------------
-    -- Outputs
-    --------------------------------------------------------
     Outputs.TurretActive:update(Unlocked and 1 or 0)
     Outputs.HAimPos:update(aimPos)
     Outputs.VAimPos:update(aimPos)
     Outputs.TTA:update(tta)
     Outputs.Elevation:update(0)
 end
-
-------------------------------------------------------------
--- Wiring
-------------------------------------------------------------
 
 updateInputs("Lock:NORMAL Active:NORMAL M2:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR TargetPos:VECTOR TargetVel:VECTOR")
 updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TTA:NORMAL Elevation:NORMAL")
