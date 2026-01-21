@@ -1,0 +1,749 @@
+--@name 2024 Cam Controller and Hud
+--@author Ally for Hire / Merydian9
+--@model models/jaanus/wiretool/wiretool_range.mdl
+--@include public_release_projects/allylib/simple_server-side_wire_helper.txt
+--@include public_release_projects/allylib/helpful_hud_functions.txt
+--@shared
+
+require( "public_release_projects/allylib/simple_server-side_wire_helper.txt" )
+require( "public_release_projects/allylib/helpful_hud_functions.txt" )
+
+if CLIENT then
+    -- If not running for the owner, quit early
+    if player() ~= owner() then return end
+
+    -- Customizable Settings
+    local REL_CAM_POS = Vector( 0, 0, 100 ) -- Camera position relative to the world around the base
+    local CAM_DISTANCE = 300 -- Distance relative to the cam position
+    local GUNSIGHT_REL_CAM_POS = Vector( 0, 0, -2 ) -- Camera position relative to the gunsight
+    local GUNSIGHT_SHAPE = 2 -- Shape of the gunsight outline, 1 = Circle, 2 = Square
+    local MAX_TRACE_DIST = 80000
+
+    -- CLIENT global variable initialization
+    local fov = 90
+    local camPos = Vector()
+    local camAng = Angle()
+    local hitPos = Vector()
+    local traceDist = 0
+    local aimTrace = nil
+    local speed = 0
+    local zoomMul = 1
+    local camPush = { fov = fov, znear = 1, zfar = 80000 }
+    local screenW = 0
+    local screenH = 0
+    local screenCX = 0
+    local screenCY = 0
+    local RT_SIZE = 1024
+    local RT_HALF = 512
+
+    -- Font and material initialization
+    local mainColor = Color( 255, 255, 255 ) -- Reticle core ( amber )
+    local warnColor = Color( 255, 0, 0 ) -- Warning/empty ( hot )
+    local accentColor = Color( 255, 191, 0 ) -- HUD accents ( amber )
+    local dimColor = Color( 200, 145, 0 ) -- Subtle labels ( amber dim )
+    local panelColor = Color( 8, 8, 6, 150 ) -- Panels
+    local alertColor = Color( 255, 225, 160 ) -- Status highlight
+    local outlineColor = Color( 0, 0, 0, 200 ) -- Shadow/outline
+    local clearColor = Color( 0, 0, 0, 0 )
+    local fontExtraBig = render.createFont( "Default", 35, 600, nil, nil, nil, true )
+    local fontBig = render.createFont( "Default", 26, 600, nil, nil, nil, true )
+    local fontMed = render.createFont( "Default", 22, 500, nil, nil, nil, true )
+    local fontSmall = render.createFont( "Default", 18, 400, nil, nil, nil, true )
+    local circMat = render.createMaterial( "egpextras/textures/tank/overlays/border_circular.png" )
+    local squareMat = render.createMaterial( "egpextras/textures/tank/overlays/border_rectangular02.png" )
+    local function isValidEnt( ent ) return ent ~= nil and ent:isValid() end
+    local ammoDisplay = {}
+    local ammoSmokes = {}
+    local ammoNonSmokeCount = 0
+
+    -- Variables from SERVER initilization
+    local active = false
+    local base = chip()
+    local gunsight = chip()
+    local gun = chip()
+    local filter = {}
+    local ready = false
+    local caliber = ""
+    local reloadTime = 0
+    local reloadProgress = 0
+    local smReloadTime = 0
+    local smReloadProgress = 0
+    local stateText = ""
+    local ammoTypes = {}
+    local currentAmmoType = ""
+    local aimHologram = chip()
+
+    -- Local overwrites
+    local _traceline = trace.line
+
+    local function updateResolution()
+        local w, h = render.getResolution()
+        if w ~= screenW or h ~= screenH then
+            screenW = w
+            screenH = h
+            screenCX = w / 2
+            screenCY = h / 2
+        end
+    end
+
+    -- Cleans up the filter global variables so it doesn't randomly crash the starfall
+    local function cleanFilter ()
+        for i = #filter, 1, -1 do
+            local value = filter[i]
+            if value == nil or not value:isValid() then
+                table.remove( filter, i )
+            end
+        end
+    end
+
+    local function rebuildAmmoDisplayCache()
+        ammoDisplay = {}
+        ammoSmokes = {}
+        for i = 1, #ammoTypes do
+            local entry = ammoTypes[i]
+            local name = entry["Name"] or ""
+            local parts = string.explode( " ", name )
+            local ammoCaliber = parts[1] or ""
+            local ammoType = parts[3] or ""
+            local label
+            if tonumber( string.sub( parts[2] or "", 1, 1 ) ) == nil then
+                label = parts[2] or name
+            else
+                label = ammoCaliber .. " " .. ammoType
+            end
+            local item = {
+                caliber = ammoCaliber,
+                ammoType = ammoType,
+                label = label,
+                info = entry["Info"],
+                name = name
+            }
+            if ammoType == "SM" then
+                table.insert( ammoSmokes, item )
+            else
+                table.insert( ammoDisplay, item )
+            end
+        end
+        ammoNonSmokeCount = #ammoDisplay
+    end
+
+    -- Render target variables
+    local centerChevron = "centerChevron"
+    local gunsightOutline = "gunsightOutline"
+
+    render.createRenderTarget( centerChevron )
+    render.createRenderTarget( gunsightOutline )
+
+    updateResolution()
+    timer.create( "HudResolutionUpdate", 0.5, 0, updateResolution )
+
+    hook.add( "renderoffscreen", "create_rendertargets", function()
+        -- Remove after, we only need to do this once
+        hook.remove( "renderoffscreen", "create_rendertargets" )
+
+        -- Center chevron
+        render.selectRenderTarget( centerChevron )
+        render.clear( clearColor )
+            local centerX, centerY = RT_HALF, RT_HALF
+            color( outlineColor )
+            drawThickLine( centerX + 10, centerY + 20, centerX, centerY, 4 )
+            drawThickLine( centerX - 10, centerY + 20, centerX, centerY, 4 )
+            color( mainColor )
+            drawThickLine( centerX + 10, centerY + 20, centerX, centerY, 2 )
+            drawThickLine( centerX - 10, centerY + 20, centerX, centerY, 2 )
+
+        -- Outline when in the gunsight, currently unused
+        render.selectRenderTarget( gunsightOutline )
+        render.clear( clearColor )
+            local rtCenterX, rtCenterY = RT_HALF, RT_HALF
+            if GUNSIGHT_SHAPE == 1 then
+                render.setMaterial( circMat )
+                local size = 512
+                render.drawTexturedRect( rtCenterX - size / 2, rtCenterY - size / 2, size, size )
+                color( Color( 255, 100, 0, 10 ) )
+                circle( rtCenterX, rtCenterY, 67 )
+                circle( rtCenterX, rtCenterY, 68 )
+                circle( rtCenterX, rtCenterY, 69 )
+            else
+                render.setMaterial( squareMat )
+                local size = 256
+                render.drawTexturedRect( rtCenterX - size / 2, rtCenterY - size / 2, size, size )
+                color( Color( 255, 100, 0, 10 ) )
+                local xSize = 140 * ( size / 256 )
+                local ySize = 107.5 * ( size / 256 )
+                render.drawRectOutline( rtCenterX - xSize / 2, rtCenterY - ySize / 2, xSize, ySize, 2 )
+            end
+    end )
+
+    -- Drawing and updating HUD values
+
+    -- Hook for when the player's hud gets drawn
+    hook.add( "drawhud", "draw_hud", function()
+
+        -- Important screen variables
+        if screenW == 0 then updateResolution() end
+        local screenResY = screenH
+        local centerX, centerY = screenCX, screenCY
+
+        -- Crosshair
+        local crosshair = hitPos:toScreen()
+        local crossx, crossy = crosshair.x, crosshair.y
+        if crosshair.visible then
+            -- Center chevron
+            color( COL_WHITE )
+            render.setRenderTargetTexture( centerChevron )
+            render.drawTexturedRect( crossx - RT_HALF, crossy - RT_HALF, RT_SIZE, RT_SIZE )
+            render.setRenderTargetTexture()
+
+            -- Color based on reload status
+            local reticleColor = ready and accentColor or warnColor
+            color( reticleColor )
+
+            -- Line details
+            color( outlineColor )
+            drawThickLine( crossx + 74, crossy, crossx + 251, crossy, 4 )
+            drawThickLine( crossx - 74, crossy, crossx - 251, crossy, 4 )
+            color( reticleColor )
+            drawThickLine( crossx + 75, crossy, crossx  + 250, crossy, 2 )
+            drawThickLine( crossx - 75, crossy, crossx  - 250, crossy, 2 )
+            -- drawThickLine( crossx - 101, crossy, crossx  - 101, crossy + 15, 2 )
+            -- drawThickLine( crossx + 101, crossy, crossx  + 101, crossy + 15, 2 )
+
+            color( outlineColor )
+            drawThickLine( crossx, crossy + 54, crossx, crossy + 76, 3 )
+            drawThickLine( crossx, crossy + 84, crossx, crossy + 106, 3 )
+            drawThickLine( crossx, crossy + 114, crossx, crossy + 139, 3 )
+            color( reticleColor )
+            drawThickLine( crossx, crossy + 55, crossx, crossy + 75, 1 )
+            drawThickLine( crossx, crossy + 85, crossx, crossy + 105, 1 )
+            drawThickLine( crossx, crossy + 115, crossx, crossy + 138, 1 )
+
+            -- Reload Indicator
+            if reloadProgress ~= 1 then
+                local pi = 3.14159
+                for i = 1, math.round( 32 * reloadProgress ) do
+                    local theta = i * ( pi / 16 )
+                    local radX = math.cos( theta - pi / 2 )
+                    local radY = math.sin( theta - pi / 2 )
+                    line( crossx + radX * 50, crossy + radY * 50, crossx + radX * 55, crossy + radY * 55 )
+                end
+            end
+
+            -- Text
+            font( fontBig )
+            textSimple( crossx + 58, crossy + 18, stateText, 0, 1 ) -- Gun status text
+            color( reticleColor )
+            textSimple( crossx - 58, crossy + 18, math.round( traceDist * 1 / 176 ) .. "m", 2, 1 ) -- Distance text
+            font( fontMed )
+            local reloadLeft = ( reloadProgress < 1 ) and reloadTime - ( reloadTime * reloadProgress ) or reloadTime
+            textSimple( crossx + 58, crossy + 42, math.round( reloadLeft, 2 ) .. "s", 0, 1 ) -- Reload progress text
+        end
+
+        -- Gun reticle
+        if isValidEnt( gun ) then
+            local gunTrace = _traceline( gun:getPos() + gun:getForward():getNormalized() * 350, gun:getPos() + gun:getForward():getNormalized() * MAX_TRACE_DIST, filter ) -- Trace to where the gun is aiming
+            local gunRet = gunTrace["HitPos"]:toScreen()
+            local gunx, guny = gunRet.x, gunRet.y
+            if gunRet.visible then
+                -- Color
+                local reticleColor = ready and accentColor or warnColor
+
+                -- Circle
+                color( outlineColor )
+                circle( gunx, guny, 11 )
+                circle( gunx, guny, 11.5 )
+                color( reticleColor )
+                circle( gunx, guny, 10 )
+
+                -- Center chevron
+                color( COL_WHITE )
+                render.setRenderTargetTexture( centerChevron )
+                render.drawTexturedRectFast( gunx - RT_HALF, guny - RT_HALF, RT_SIZE, RT_SIZE )
+                render.setRenderTargetTexture()
+           end
+        end
+
+        -- Circle where the server thinks we are aiming
+        if ( isValidEnt( aimHologram ) and aimHologram ~= chip() ) then
+            local aimScreen = aimHologram:getPos():toScreen()
+            local x, y = aimScreen.x, aimScreen.y
+            if aimScreen.visible then
+                -- Aforementioned circle and outline
+                color( outlineColor )
+                circle( x, y, 5 )
+                circle( x, y, 5.5 )
+                color( accentColor )
+                circle( x, y, 4 )
+            end
+        end
+
+        -- Gunsight Outline ( unused )
+        /*
+        if true then
+            local POSCOORDS = ( gunsight:getPos() + -gunsight:getUp() * 200 ):toScreen()
+            local RX, RY = POSCOORDS.x, POSCOORDS.y
+
+            render.setRenderTargetTexture( gunsightOutline )
+            local SIZE = SCREENRESX * ( 2 / zoomMul ) * 2
+            render.drawTexturedRectFast( RX - SIZE / 2, RY - SIZE / 2, SIZE, SIZE )
+            color( outlineColor )
+        end
+        */
+
+        -- Main Hud
+        color( accentColor )
+
+        -- Corner outline lines
+        if zoomMul ~= 1 then
+            color( outlineColor )
+            drawThickLine( centerX + 519, centerY + 280, centerX + 586, centerY + 280, 4 )
+            drawThickLine( centerX + 585, centerY + 281, centerX + 585, centerY + 254, 4 )
+            drawThickLine( centerX - 519, centerY + 280, centerX - 586, centerY + 280, 4 )
+            drawThickLine( centerX - 585, centerY + 281, centerX - 585, centerY + 254, 4 )
+
+            drawThickLine( centerX - 519, centerY - 280, centerX - 586, centerY - 280, 4 )
+            drawThickLine( centerX - 585, centerY - 281, centerX - 585, centerY - 254, 4 )
+            drawThickLine( centerX + 519, centerY - 280, centerX + 586, centerY - 280, 4 )
+            drawThickLine( centerX + 585, centerY - 281, centerX + 585, centerY - 254, 4 )
+
+            color( accentColor )
+            drawThickLine( centerX + 520, centerY + 280, centerX + 585, centerY + 280, 2 )
+            drawThickLine( centerX + 585, centerY + 280, centerX + 585, centerY + 255, 2 )
+            drawThickLine( centerX - 520, centerY + 280, centerX - 585, centerY + 280, 2 )
+            drawThickLine( centerX - 585, centerY + 280, centerX - 585, centerY + 255, 2 )
+
+            drawThickLine( centerX - 520, centerY - 280, centerX - 585, centerY - 280, 2 )
+            drawThickLine( centerX - 585, centerY - 280, centerX - 585, centerY - 255, 2 )
+            drawThickLine( centerX + 520, centerY - 280, centerX + 585, centerY - 280, 2 )
+            drawThickLine( centerX + 585, centerY - 280, centerX + 585, centerY - 255, 2 )
+        end
+
+        -- Side values ( clean, centered around reticle )
+        local sideOffset = 360
+        local sideNumY = centerY - 6
+        local sideLabelY = sideNumY + 20
+        local sideTickY = sideNumY + 20
+        color( outlineColor )
+        drawCenterRect( centerX - sideOffset + 14, sideTickY, 8, 8 )
+        drawCenterRect( centerX + sideOffset - 14, sideTickY, 8, 8 )
+        color( accentColor )
+        drawCenterRect( centerX - sideOffset + 14, sideTickY, 6, 6 )
+        drawCenterRect( centerX + sideOffset - 14, sideTickY, 6, 6 )
+        font( fontBig )
+        textSimple( centerX - sideOffset, sideNumY, speed, 2, 0 ) -- Speed
+        local zoomBase = 90 / fov
+        local zoomAmount = zoomBase % 1 > 0 and math.round( zoomBase, 1 ) or zoomBase .. ".0"
+        textSimple( centerX + sideOffset, sideNumY, "x" .. zoomAmount, 0, 0 ) -- Zoom
+        font( fontSmall )
+        color( dimColor )
+        textSimple( centerX - sideOffset, sideLabelY, "MI/H", 2, 0 )
+        textSimple( centerX + sideOffset, sideLabelY, "ZOOM", 0, 0 )
+        color( accentColor )
+
+
+        -- Bottom boxes, smoke information, main gun information, everything involving ammo
+        local count = ammoNonSmokeCount
+        local cardHeight, cardWidth, cardSpacing = 112, 120, 10
+        local stackStartX = centerX + ( cardWidth + cardSpacing ) * ( count + 1 ) / 2
+        local stackCenterY = screenResY - cardHeight / 2 - cardSpacing
+        local indicatorTopY = stackCenterY - cardHeight / 2 - 62
+        local indicatorLabelY = indicatorTopY
+        local indicatorTimeY = indicatorTopY + 12
+        local indicatorCountY = indicatorTopY + 26
+        local indicatorCountOffset = 72
+
+        -- Ammo text boxes
+        for i = 1, ( count ) do -- Main box
+            local entry = ammoDisplay[i]
+            local currentAmmoInfo = entry.info
+            if entry.ammoType == currentAmmoType and entry.caliber == caliber then
+                local indicatorColor = reloadProgress == 1 and accentColor or warnColor
+                color( indicatorColor )
+                local reloadLeft = ( reloadProgress < 1 ) and reloadTime - ( reloadTime * reloadProgress ) or reloadTime
+                local mainIndicatorX = centerX - 360
+                font( fontSmall )
+                color( indicatorColor )
+                textSimple( mainIndicatorX, indicatorTimeY, math.round( reloadLeft, 2 ) .. "s", 0, 0 )
+                textSimple( mainIndicatorX, indicatorLabelY, entry.label, 0, 0 )
+                font( fontBig )
+                color( indicatorColor )
+                textSimple( mainIndicatorX + indicatorCountOffset, indicatorCountY, "x" .. currentAmmoInfo.z, 0, 0 )
+            end
+
+            local cardX = stackStartX - i * ( cardWidth + cardSpacing )
+            local cardTop = stackCenterY - cardHeight / 2
+
+            -- Backing for boxes
+            color( panelColor )
+            rect( cardX - cardWidth / 2, cardTop, cardWidth, cardHeight, 3 )
+            -- Outline 
+            color( accentColor )
+            if entry.caliber == caliber and currentAmmoType ~= entry.ammoType then color( dimColor ) end -- If it's in use or not
+            rectOutline( cardX - cardWidth / 2, cardTop, cardWidth, cardHeight, 3 )
+
+            -- Texts
+            font( fontMed )
+            color( accentColor )
+            textSimple( cardX, cardTop + 17, entry.label, 1, 1 )
+            font( fontSmall )
+            color( dimColor )
+            textSimple( cardX, cardTop + 41, math.round( currentAmmoInfo.x ) .. " m/s", 1, 1 ) -- Ammo muzzle velocity text
+            textSimple( cardX, cardTop + 57, math.round( currentAmmoInfo.y ) .. " mm", 1, 1 ) -- Ammo penetration text
+            font( fontExtraBig )
+            color( accentColor )
+            textSimple( cardX, cardTop + 88, currentAmmoInfo.z, 1, 1 ) -- Ammo count text
+
+            -- Outline
+            color( outlineColor )
+            rectOutline( cardX - cardWidth / 2, cardTop, cardWidth, cardHeight, 2 )
+        end
+
+        -- Smoke info ( if present )
+        if #ammoSmokes > 0 then
+            local smoke = ammoSmokes[1]
+            local smokeColor = smReloadProgress == 1 and accentColor or warnColor
+            color( smokeColor )
+            font( fontSmall )
+            local reloadLeft = ( smReloadProgress < 1 ) and smReloadTime - ( smReloadTime * smReloadProgress ) or smReloadTime
+            local smokeIndicatorX = centerX + 260
+            font( fontSmall )
+            color( smokeColor )
+            textSimple( smokeIndicatorX, indicatorTimeY, math.round( reloadLeft, 2 ) .. "s", 0, 0 )
+            textSimple( smokeIndicatorX, indicatorLabelY, "SMOKES", 0, 0 )
+            font( fontBig )
+            color( smokeColor )
+            textSimple( smokeIndicatorX + indicatorCountOffset, indicatorCountY, "x" .. smoke.info.z, 0, 0 )
+        end
+    end )
+
+    -- Timer for updating hud variables slower on purpose so that they can be read
+    timer.create( "Update Speed and Distance", 0.1, 0, function()
+        -- If aimTrace isn't valid, quit early
+        if aimTrace == nil then return end
+        if not isValidEnt( base ) then return end
+
+        traceDist = aimTrace["Fraction"] * MAX_TRACE_DIST -- Updating Trace Distance
+
+        local velocity = math.round( base:getVelocity():getLength() * 1 / 17.6, 1 )
+        speed = velocity % 1 > 0 and math.round( velocity, 1 ) or velocity .. ".0" -- Updating Speed
+    end )
+
+    -- Manipulating the camera
+
+    -- Hook for when the player's camera is updated
+    hook.add( "calcview", "update_camera", function( _, _, _, _, _ )
+        -- If the starfall isn't in use, quit early
+        if not active then return end
+
+        camPos = base:getPos() + REL_CAM_POS - camAng:getForward() * CAM_DISTANCE -- this will give you distance around a point
+        if zoomMul ~= 1 then
+            camPos = gunsight:getPos() + gunsight:getForward() * GUNSIGHT_REL_CAM_POS.x + gunsight:getRight() * GUNSIGHT_REL_CAM_POS.y + gunsight:getUp() * GUNSIGHT_REL_CAM_POS.z
+        end
+
+        -- These are the calculations for the hitPos
+        local upMul = ( zoomMul == 1 ) and 1 or 0 -- If we are in third person, use this campos, otherwise use center of screen
+        local aimVector = ( camAng:getForward():getNormalized() * 25 ) + ( camAng:getUp():getNormalized() * 5 ) * upMul -- Where the position starts
+        local aimNormal = aimVector:getNormalized() -- This is for the angle
+
+        cleanFilter()
+
+        aimTrace  = _traceline( camPos + aimNormal * 100, camPos + aimNormal * MAX_TRACE_DIST, filter ) -- Trace to where we want to aim
+        hitPos = aimTrace["HitPos"]
+
+        camPush["origin"] = camPos
+        camPush["angles"] = camAng
+
+        return camPush
+    end )
+
+    -- Send hit position at a capped rate
+    timer.create( "SendHitPos", 0.02, 0, function()
+        net.start( "sendClientData" )
+            net.writeFloat( hitPos.x )
+            net.writeFloat( hitPos.y )
+            net.writeFloat( hitPos.z )
+        net.send( nil, true )
+    end )
+
+    -- Hook for when the player's mouse moves
+    hook.add( "mousemoved", "mouse_moved", function( x, y )
+        -- If the starfall isn't in use, quit early
+        if not active then return end
+
+        -- Stole this from one Polymorphic Turtle, sims the camera
+        camAng.pitch = math.clamp( camAng.pitch + ( y / 40 ), -89, 89 )
+        camAng.yaw = camAng.yaw - ( x / 40 )
+    end )
+
+    -- Hook for when the player scrolls
+    hook.add( "mouseWheeled", "scroll_wheel", function( delta )
+        -- If the starfall isn't in use, quit early
+        if not active then return end
+        if not isValidEnt( gunsight ) or not isValidEnt( base ) then return end
+
+        local newCamPos = camPos
+        local currentAimPos = hitPos
+        local newAimPos = hitPos
+        local angDiff = Angle()
+
+        local currentFov = fov
+        -- Zooming and moving camera to stay on target when you do
+        if ( delta > 0 ) then
+            if currentFov == 90  then
+                newCamPos = gunsight:getPos() + gunsight:getForward() * GUNSIGHT_REL_CAM_POS.x + gunsight:getRight() * GUNSIGHT_REL_CAM_POS.y + gunsight:getUp() * GUNSIGHT_REL_CAM_POS.z
+                newAimPos = _traceline( newCamPos + camAng:getForward():getNormalized() * 1000, newCamPos + camAng:getForward():getNormalized() * MAX_TRACE_DIST, filter )["HitPos"]
+
+                angDiff = ( newAimPos - newCamPos ):getNormalized():getAngle() - ( currentAimPos - newCamPos ):getNormalized():getAngle()
+                angDiff.pitch = angDiff.pitch % 90
+            end
+
+            fov = math.clamp( fov / 2, 2.8125, 90 )
+        else
+            fov = math.clamp( fov * 2, 2.8125, 90 )
+
+            if currentFov ~= 90 and fov == 90 then
+                local aimVector = ( camAng:getForward():getNormalized() * 25 ) + ( camAng:getUp():getNormalized() * 5 ) -- Where the position starts
+                local aimNormal = aimVector:getNormalized() -- This is for the angle
+
+                newCamPos = base:getPos() + REL_CAM_POS - camAng:getForward() * CAM_DISTANCE
+                newAimPos = _traceline( newCamPos + aimNormal * 1000, newCamPos + aimNormal * MAX_TRACE_DIST, filter )["HitPos"]
+
+                angDiff = ( newAimPos - newCamPos ):getNormalized():getAngle() - ( currentAimPos - newCamPos ):getNormalized():getAngle()
+                angDiff.pitch = angDiff.pitch % -90
+            end
+        end
+
+        camAng = camAng - angDiff
+        zoomMul = fov / 90
+        camPush["fov"] = fov
+    end )
+
+    -- Net exchange between CLIENT and SERVER
+
+    -- Request SERVER data when CLIENT loads
+    net.start( "requestGlobals" )
+    net.send()
+
+    -- Recieve SERVER globals, happens once
+    net.receive( "sendServerGlobals", function()
+        active = net.readBool()
+        base = net.readEntity()
+        gunsight = net.readEntity()
+        gun = net.readEntity()
+        filter = net.readTable()
+        aimHologram = net.readEntity()
+        ammoTypes = net.readTable()
+        caliber = net.readString()
+        rebuildAmmoDisplayCache()
+    end )
+
+    -- Update active variables from SERVER, happens when active updates
+    net.receive( "sendActive", function() active = net.readBool() end )
+
+    -- Recieve SERVER gun data, happens every 0.05s
+    net.receive( "sendGunData", function()
+        ready = net.readBool() -- Gun Ready
+        possibleReloadTime = net.readFloat()
+        reloadProgress = net.readFloat()
+
+        smReloadTime = net.readFloat()
+        smReloadProgress = net.readFloat()
+
+        stateText = net.readString()
+        currentAmmoType = net.readString()
+        local hasAmmoUpdate = net.readBool()
+        if hasAmmoUpdate then
+            ammoTypes = net.readTable()
+            rebuildAmmoDisplayCache()
+        end
+
+        if ready then
+            reloadTime = possibleReloadTime
+        end
+    end )
+
+    -- Clean filter when props are removed
+    hook.add( "EntityRemoved", "filter_cleanup", function( entity )
+        if entity == nil or entity:getOwner() ~= owner() or entity:getClass() == "class CLuaEffect" or entity:getClass() == "starfall_hologram" then return end
+
+        cleanFilter()
+    end )
+elseif SERVER then
+    -- SERVER global variable initialization
+    local hitPos = Vector()
+    local filter = {}
+    local aimHologram = hologram.create( Vector(), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl", Vector() )
+
+    -- Wire port setup ( prefer helper string syntax if included )
+    local useWireHelper = type( updateInputs ) == "function" and type( updateOutputs ) == "function"
+    if useWireHelper then
+        updateInputs( "Active:NORMAL Base:ENTITY Gun:ENTITY Gunsight:ENTITY Smokes:ENTITY" )
+        updateOutputs( "HitPos:VECTOR" )
+    else
+        wire.adjustPorts( {
+            Active = "number",
+            Base = "entity",
+            Gun = "entity",
+            Gunsight = "entity",
+            Smokes = "entity"
+        }, {
+            HitPos = "vector"
+        } )
+    end
+
+    local function getPort( name )
+        if InputValues ~= nil then
+            local value = InputValues[name]
+            if value ~= nil then return value end
+        end
+        return wire.ports[name]
+    end
+
+    -- Ammo categorization
+    local allCrates = find.byClass( "acf_ammo" )
+    local unsortedAmmoTypes = {}
+
+    -- First pass of every single crate belonging to the owner
+    local count = table.count( allCrates )
+    for i = 1, count do
+        local ammoTypeName = allCrates[i]:acfCaliber() .. " " .. allCrates[i]:acfName()
+
+        if allCrates[i]:getOwner() ~= owner() then continue end
+        if string.explode( " ", ammoTypeName )[3] == "Refill" then continue end
+
+        if unsortedAmmoTypes[ammoTypeName] == nil then
+            unsortedAmmoTypes[ammoTypeName] = { Info = Vector( allCrates[i]:acfMuzzleVel(), allCrates[i]:acfPenetration(), 0 ) }
+        end
+
+        unsortedAmmoTypes[ammoTypeName][table.count( unsortedAmmoTypes[ammoTypeName] )] = allCrates[i]
+    end
+
+    -- Second pass sorting aforementioned crates belonging to said owner by name and caliber
+    local sortedAmmoTypes = {} -- Sorts by caliber
+    while table.count( unsortedAmmoTypes ) > 0 do
+        local keys = table.getKeys( unsortedAmmoTypes )
+        local maxValue = 99999 -- actually minValue
+        local maxValueKey = ""
+
+        for index = 1, table.count( keys ) do
+            local value = keys[index]
+            local caliber = tonumber( string.explode( " ", value )[1] )
+
+            if caliber < maxValue then
+                maxValue = caliber
+                maxValueKey = value
+            end
+        end
+
+        unsortedAmmoTypes[maxValueKey]["Name"] = maxValueKey
+        table.insert( sortedAmmoTypes, unsortedAmmoTypes[maxValueKey] )
+        table.removeByValue( unsortedAmmoTypes, unsortedAmmoTypes[maxValueKey] )
+    end
+
+    -- Updating the variables
+    ammoTypes = sortedAmmoTypes
+
+    -- Creating the array for filter so our traces dont hit ourself
+    local allEnts = find.all()
+
+    for i = 1, table.count( allEnts ) do
+        local currentProp = allEnts[i]
+        if allEnts[i]:getOwner() ~= owner() then continue end
+
+        table.insert( filter, currentProp )
+    end
+
+    --print( table.count( ammoTypes ) .. " ammo types found" )
+    --printTable( sortedAmmoTypes )
+
+    -- Exchange between CLIENT and SERVER
+    -- Recieve CLIENT data and send SERVER initial data
+    net.receive( "requestGlobals", function( _, ply )
+        local base = getPort( "Base" )
+        local gunsight = getPort( "Gunsight" )
+        local gun = getPort( "Gun" )
+        -- Send SERVER data
+        net.start( "sendServerGlobals" )
+        net.writeBool( getPort( "Active" ) == 1 )
+        net.writeEntity( base )
+        net.writeEntity( gunsight )
+        net.writeEntity( gun )
+        net.writeTable( filter )
+        net.writeEntity( aimHologram )
+        net.writeTable( ammoTypes )
+        if gun ~= nil and gun:isValid() then
+            net.writeString( tostring( gun:acfCaliber() ) )
+        else
+            net.writeString( "" )
+        end
+        net.send( ply, false )
+    end )
+
+    -- Send SERVER gun data
+    local ammoTotals = {}
+    timer.create( "sendGunData", 0.1, 0, function()
+        local gunEnt = getPort( "Gun" )
+        if gunEnt == nil or not gunEnt:isValid() then return end
+
+        net.start( "sendGunData" )
+        net.writeBool( gunEnt:acfReady() )
+        net.writeFloat( gunEnt:acfReloadTime() )
+        net.writeFloat( gunEnt:acfReloadProgress() )
+        local smokesEnt = getPort( "Smokes" )
+        if smokesEnt ~= nil and smokesEnt:isValid() then
+            net.writeFloat( smokesEnt:acfReloadTime() )
+            net.writeFloat( smokesEnt:acfReloadProgress() )
+        else
+            net.writeFloat( 0 )
+            net.writeFloat( 0 )
+        end
+        net.writeString( gunEnt:acfState() )
+        net.writeString( gunEnt:acfAmmoType() )
+        local hasAmmoUpdate = false
+        for index, value in ipairs( ammoTypes ) do
+            local totalAmmo = 0
+            for i = 1, ( table.count( value ) - 1 ) do
+                if value[i] == nil or not value[i]:isValid() then continue end
+                totalAmmo = totalAmmo + value[i]:acfRounds()
+            end
+            if ammoTotals[index] ~= totalAmmo then
+                ammoTotals[index] = totalAmmo
+                value.Info.z = totalAmmo
+                hasAmmoUpdate = true
+            end
+        end
+
+        net.writeBool( hasAmmoUpdate )
+        if hasAmmoUpdate then
+            net.writeTable( ammoTypes )
+        end
+        net.send( owner(), false )
+    end )
+
+    -- Send active when it updates
+    local function pushActive()
+        net.start( "sendActive" )
+        net.writeBool( getPort( "Active" ) == 1 )
+        net.send()
+    end
+    if Inputs and Inputs.Active then
+        Inputs.Active:addTrigger( function() pushActive() end )
+    else
+        hook.add ( "input", "update_wire", function( inputName )
+            if inputName == "Active" then
+                pushActive()
+            end
+        end )
+    end
+
+    -- Recieve hitPos from CLIENT and update accordingly
+    net.receive( "sendClientData", function( _, _ )
+        hitPos = Vector( net.readFloat(), net.readFloat(), net.readFloat() )
+        aimHologram:setPos( hitPos )
+        if Outputs and Outputs.HitPos then
+            Outputs.HitPos:update( hitPos )
+        else
+            wire.ports.HitPos = hitPos
+        end
+    end )
+end
