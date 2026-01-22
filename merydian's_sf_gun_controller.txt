@@ -12,6 +12,7 @@ INTERVAL   = 0.05
 GZ         = 600
 LOAD_DIST  = 10000
 LOAD_PITCH = nil
+TARGET_LEAD_TIME = 0.00
 
 NextThink  = 0
 Unlocked   = false
@@ -20,20 +21,23 @@ LastTargetVel  = Vector()
 LastTargetTime = 0
 TargetAccel    = Vector()
 LastReady      = false
+LastTargetDt   = 0
+local zeroVec = Vector()
 
 local function updateTargetAccel(tvel, now)
     if LastTargetTime <= 0 then
         LastTargetVel = tvel
         LastTargetTime = now
-        TargetAccel = Vector()
+        TargetAccel = zeroVec
         return TargetAccel
     end
 
     local dt = now - LastTargetTime
     if dt <= 0 then
-        TargetAccel = Vector()
+        TargetAccel = zeroVec
     else
         TargetAccel = (tvel - LastTargetVel) / dt
+        LastTargetDt = dt
     end
 
     LastTargetVel = tvel
@@ -61,38 +65,68 @@ local function getLoadAimPos(gun, base, targetPos, loadAng)
     return origin + ang:getForward() * LOAD_DIST
 end
 
-local function getBallisticAimPos(gun, base, basePos, tvel, tacc, tvelLen, taccLen)
+local function getBallisticAimPos(gun, base, basePos, tvel, tacc)
     local gpos = gun:getMassCenterW() or gun:getPos()
     local dist = gpos:getDistance(basePos)
     local bvel  = base:getVelocity()
     local baseToGun = basePos - gpos
     local tta = 0
 
-    if tvelLen == 0 and taccLen == 0 then 
-        tta = ballisticTime(dist) or 0
-    else
-        local low = 0
-        local high = 6
-        tta = (low + high) / 2
+    local low = 0
+    local high = 6
+    local baseTime = ballisticTime and ballisticTime(dist) or 0
+    if baseTime > 0 then
+        high = baseTime * 1.5
+        if high < 0.5 then high = 0.5 end
+        if high > 6 then high = 6 end
+    end
+    local diffLow = nil
+    local diffHigh = nil
+    tta = (low + high) / 2
 
-        while high - low > 0.05 and ballisticDistance do
-            tta = (low + high) / 2
+    local function evalDiff(t)
+        local tSq = t * t
+        local drop = Vector(0, 0, 0.5 * GZ * tSq)
+        local accel = tacc * (0.5 * tSq)
+        local tlen = (baseToGun + tvel * t + accel + drop):getLength()
+        local slen = ballisticDistance(t)
+        return slen - tlen
+    end
 
-            local ttaSq = tta * tta
-            local drop = Vector(0, 0, 0.5 * GZ * ttaSq)
-            local accel = tacc * (0.5 * ttaSq)
-            local tlen = (baseToGun + tvel * tta + accel + drop):getLength()
-            local slen = ballisticDistance(tta)
-            local diff = slen - tlen
+    if not ballisticDistance then
+        return basePos, 0
+    end
 
-            if diff < 0 then
-                low = tta
-            else
-                high = tta
+    local slenHigh = ballisticDistance(high)
+    if slenHigh <= 0 then
+        return basePos, 0
+    end
+
+    diffLow = evalDiff(low)
+    diffHigh = evalDiff(high)
+
+    while high - low > 0.05 do
+        local nextT = nil
+        if diffLow and diffHigh and diffHigh ~= diffLow then
+            local secant = high - diffHigh * (high - low) / (diffHigh - diffLow)
+            if secant > low and secant < high then
+                nextT = secant
             end
-
-            tta = high
         end
+        if not nextT then
+            nextT = (low + high) / 2
+        end
+
+        local diff = evalDiff(nextT)
+        if diff < 0 then
+            low = nextT
+            diffLow = diff
+        else
+            high = nextT
+            diffHigh = diff
+        end
+
+        tta = (low + high) / 2
     end
 
     local drag = -bvel * tta
@@ -135,8 +169,29 @@ local function main()
         LastGun = gun
     end
 
-    local tacc = updateTargetAccel(tvel, now)
     local basePos = getBasePos(hit, tpos)
+    local tacc = updateTargetAccel(tvel, now)
+
+    local leadTime = LastTargetDt + TARGET_LEAD_TIME
+    local leadSq = leadTime * leadTime
+    local aimBasePos = basePos + tvel * leadTime + tacc * (0.5 * leadSq)
+    if gunValid and gun.acfMuzzleVel then
+        local mv = gun:acfMuzzleVel() or 0
+        if mv > 0 then
+            local mvGu = mv * 39.3701
+            local dist = (gun:getMassCenterW() or gun:getPos()):getDistance(basePos)
+            local estTta = ballisticTime(dist) or 0
+            if estTta > 0 then
+                local maxLead = mvGu * estTta
+                local offset = aimBasePos - basePos
+                local offLen = offset:getLength()
+                if offLen > maxLead then
+                    aimBasePos = basePos + offset * (maxLead / offLen)
+                end
+            end
+        end
+    end
+    local targetPredPos = aimBasePos
     local aimPos = basePos
     local tta    = 0
 
@@ -146,16 +201,15 @@ local function main()
         baseValid
 
     local loadActive = loadEnabled and Unlocked and not manual and not LastReady
+
     if loadActive then
-        local loadPos = getLoadAimPos(gun, base, basePos, loadAng)
+        local loadPos = getLoadAimPos(gun, base, targetPredPos, loadAng)
         if loadPos then
             aimPos = loadPos
         end
         tta = 0
     elseif activeControl then
-        local tvelLen = tvel:getLength()
-        local taccLen = tacc:getLength()
-        aimPos, tta = getBallisticAimPos(gun, base, basePos, tvel, tacc, tvelLen, taccLen)
+        aimPos, tta = getBallisticAimPos(gun, base, targetPredPos, tvel, tacc)
     else
         aimPos = basePos
         tta    = 0
@@ -164,12 +218,13 @@ local function main()
     Outputs.TurretActive:update((Unlocked or loadActive) and 1 or 0)
     Outputs.HAimPos:update(aimPos)
     Outputs.VAimPos:update(aimPos)
+    Outputs.TargetPredPos:update(targetPredPos)
     Outputs.TTA:update(tta)
     Outputs.Elevation:update(0)
 end
 
 updateInputs("Lock:NORMAL Active:NORMAL M2:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR TargetPos:VECTOR TargetVel:VECTOR")
-updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TTA:NORMAL Elevation:NORMAL")
+updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TargetPredPos:VECTOR TTA:NORMAL Elevation:NORMAL")
 
 Inputs.Lock:addTrigger(function(v)
     if v == 0 then return end

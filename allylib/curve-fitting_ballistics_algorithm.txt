@@ -19,11 +19,11 @@ local G2D       = Vector2(0, G[3])  -- vertical accel in 2D
 local TIME_STEP = game.getTickInterval()  -- finer dt for accuracy
 local VALIDGUN  = false
 
-local QUOTA_RATIO_MAX    = 0.85     -- throttle generation if near quota
-local STEP_INTERVAL      = 0.1      -- seconds between generation slices
-local MAX_STEPS_PER_TICK = 3
+local QUOTA_RATIO_MAX    = 0.92     -- throttle generation if near quota
+local STEP_INTERVAL      = 0.05     -- seconds between generation slices
+local MAX_STEPS_PER_TICK = 6
 local MAX_DISTANCE_GU    = 50000
-local MAX_DATASET_POINTS = 512
+local MAX_DATASET_POINTS = 768
 
 local EPS_MV_ABS     = 0.01
 local EPS_MV_REL     = 1e-6
@@ -43,6 +43,8 @@ local TIME_SCALE = 1                -- global scale on T(x)
 
 local GEN_ANGLE        = 0          -- degrees
 local GEN_STEP_DEFAULT = 0.01      -- degrees
+local GEN_STEP_GROWTH  = 1.5
+local GEN_STEP_MAX     = 0.25
 local GEN_STEP         = GEN_STEP_DEFAULT
 local GEN_MAX_DISTANCE = 0
 local GEN_DONE         = false
@@ -344,7 +346,7 @@ local function stepDatasetGeneration(token)
 
         GEN_ANGLE = GEN_ANGLE + GEN_STEP
         -- bound step growth so we still have samples at long range
-        GEN_STEP  = math.min(GEN_STEP * 2, 0.5)
+        GEN_STEP  = math.min(GEN_STEP * GEN_STEP_GROWTH, GEN_STEP_MAX)
         stepsThisTick = stepsThisTick + 1
     end
 
