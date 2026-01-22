@@ -1,0 +1,392 @@
+--@name APS Auto Target Takedown
+--@author Ally for Hire / Merydian9
+--@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/curve-fitting_ballistics_algorithm.txt
+--@server
+
+local curtime = timer.curtime
+require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/curve-fitting_ballistics_algorithm.txt")
+
+INTERVAL = 0.05
+GZ = 600
+FIRE_TOL_DEG = 0.5
+FIRE_MAX_DIST = 15000
+TARGET_LEAD_TIME = 0.03
+SHORT_TTA = 0.5
+FIRE_TOL_SHORT_MULT = 6
+
+updateInputs("Gun:ENTITY Base:ENTITY Entities:ARRAY Positions:ARRAY Velocities:ARRAY Active:NORMAL")
+updateOutputs("TurretActive:NORMAL TargetEnt:ENTITY TargetPos:VECTOR TargetVel:VECTOR TargetPredPos:VECTOR TargetAimPos:VECTOR TTA:NORMAL Fire:NORMAL")
+
+local entities = {}
+local positions = {}
+local velocities = {}
+local active = false
+
+local targetEnt = nil
+local targetPos = Vector()
+local targetVel = Vector()
+local targetPredPos = Vector()
+local targetAimPos = Vector()
+local targetTracked = false
+local lastTta = 0
+local lastGun = nil
+local lastTargetVel = {}
+local lastTargetTime = {}
+local accelReadyThisTick = false
+local fireLatch = false
+local seen = {}
+
+local zeroVec = Vector()
+
+local function minCount3(a, b, c)
+    local count = #a
+    if #b < count then count = #b end
+    if #c < count then count = #c end
+    return count
+end
+
+local function clampValue(value, minValue, maxValue)
+    if value < minValue then return minValue end
+    if value > maxValue then return maxValue end
+    return value
+end
+
+local function updateTargetAccel(id, tvel, now)
+    local lastTime = lastTargetTime[id] or 0
+    if lastTime <= 0 then
+        lastTargetVel[id] = tvel
+        lastTargetTime[id] = now
+        return zeroVec, false
+    end
+
+    local dt = now - lastTime
+    if dt <= 0 then
+        lastTargetVel[id] = tvel
+        lastTargetTime[id] = now
+        return zeroVec, false
+    end
+
+    local accel = (tvel - (lastTargetVel[id] or zeroVec)) / dt
+    lastTargetVel[id] = tvel
+    lastTargetTime[id] = now
+
+    return accel, true
+end
+
+
+local function getBasePos(base, gun)
+    if base and base:isValid() then return base:getPos() end
+    if gun and gun:isValid() then return gun:getPos() end
+    return zeroVec
+end
+
+local function getBaseVel(base)
+    if base and base:isValid() then return base:getVelocity() end
+    return zeroVec
+end
+
+local function selectTarget()
+    local count = minCount3(entities, positions, velocities)
+    if count == 0 then return nil end
+
+    local base = Inputs.Base:get()
+    local gun = Inputs.Gun:get()
+    local basePos = getBasePos(base, gun)
+    local baseVel = getBaseVel(base)
+
+    local bestEnt = nil
+    local bestScore = -math.huge
+    local bestDist = 0
+
+    for i = 1, count do
+        local ent = entities[i]
+        local pos = positions[i]
+        local vel = velocities[i]
+        if ent == nil or pos == nil or vel == nil then
+            continue
+        end
+
+        local toTarget = pos - basePos
+        local dist = toTarget:getLength()
+        if dist <= 0 then
+            continue
+        end
+
+        local relVel = vel - baseVel
+        local closing = -(relVel:dot(toTarget / dist))
+
+        if closing > bestScore or (closing == bestScore and dist < bestDist) then
+            bestScore = closing
+            bestDist = dist
+            bestEnt = ent
+        end
+    end
+
+    return bestEnt
+end
+
+local function getBallisticAimPos(gun, base, basePos, tvel, tacc)
+    local gpos = gun:getMassCenterW() or gun:getPos()
+    local dist = gpos:getDistance(basePos)
+    local bvel  = base:getVelocity()
+    local baseToGun = basePos - gpos
+    local tta = 0
+
+    local low = 0
+    local high = 2
+    local baseTime = ballisticTime and ballisticTime(dist) or 0
+    if baseTime > 0 then
+        high = baseTime * 1.5
+        if high < 0.5 then high = 0.5 end
+        if high > 6 then high = 6 end
+    end
+    local diffLow = nil
+    local diffHigh = nil
+    tta = (low + high) / 2
+
+    local function evalDiff(t)
+        local tSq = t * t
+        local drop = Vector(0, 0, 0.5 * GZ * tSq)
+        local accel = tacc * (0.5 * tSq)
+        local tlen = (baseToGun + tvel * t + accel + drop):getLength()
+        local slen = ballisticDistance(t)
+        return slen - tlen
+    end
+
+    if not ballisticDistance then
+        return basePos, 0
+    end
+
+    local slenHigh = ballisticDistance(high)
+    if slenHigh <= 0 then
+        return basePos, 0
+    end
+
+    diffLow = evalDiff(low)
+    diffHigh = evalDiff(high)
+
+    while high - low > 0.05 do
+        local nextT = nil
+        if diffLow and diffHigh and diffHigh ~= diffLow then
+            local secant = high - diffHigh * (high - low) / (diffHigh - diffLow)
+            if secant > low and secant < high then
+                nextT = secant
+            end
+        end
+        if not nextT then
+            nextT = (low + high) / 2
+        end
+
+        local diff = evalDiff(nextT)
+        if diff < 0 then
+            low = nextT
+            diffLow = diff
+        else
+            high = nextT
+            diffHigh = diff
+        end
+
+        tta = (low + high) / 2
+    end
+
+    local drag = -bvel * tta
+    local ttaSq = tta * tta
+    local drop = Vector(0, 0, 0.5 * GZ * ttaSq)
+    local accel = tacc * (0.5 * ttaSq)
+    local aimPos = basePos + tvel * tta + accel + drag + drop
+    return aimPos, tta
+end
+
+local function getAimDot(gun, aimPos)
+    if not gun or not gun:isValid() then return -1 end
+    local origin = gun:getMassCenterW() or gun:getPos()
+    local toAim = aimPos - origin
+    local dist = toAim:getLength()
+    if dist <= 0 then return -1 end
+    local dir = toAim / dist
+    local forward = gun:getAngles():getForward()
+    return forward:dot(dir)
+end
+
+local function updateTarget()
+    local now = curtime()
+    if not active then
+        targetEnt = nil
+        targetPos = zeroVec
+        targetVel = zeroVec
+        targetPredPos = zeroVec
+        targetAimPos = zeroVec
+        targetTracked = false
+        lastTta = 0
+        accelReadyThisTick = false
+        Outputs.TTA:update(0)
+        return
+    end
+
+    targetEnt = selectTarget()
+
+    local count = minCount3(entities, positions, velocities)
+    local found = false
+    local base = Inputs.Base:get()
+    local gun = Inputs.Gun:get()
+    local gunValid = gun and gun:isValid()
+    local baseValid = base and base:isValid()
+    local basePos = getBasePos(base, gun)
+
+    for k in pairs(seen) do
+        seen[k] = nil
+    end
+    for i = 1, count do
+        if entities[i] == targetEnt then
+            local pos = positions[i] or zeroVec
+            local vel = velocities[i] or zeroVec
+            targetPos = pos
+            targetVel = vel
+            found = true
+            targetTracked = true
+
+            accelReadyThisTick = false
+            local tacc, accelReady = updateTargetAccel(targetEnt, vel, now)
+            accelReadyThisTick = accelReady
+            local leadTime = TARGET_LEAD_TIME
+            local leadSq = leadTime * leadTime
+            local aimBasePos = pos + vel * leadTime + tacc * (0.5 * leadSq)
+            if gunValid and gun.acfMuzzleVel then
+                local mv = gun:acfMuzzleVel() or 0
+                if mv > 0 then
+                    local mvGu = mv * 39.3701
+                    local dist = basePos:getDistance(pos)
+                    local estTta = ballisticTime(dist) or 0
+                    if estTta > 0 then
+                        local maxLead = mvGu * estTta
+                        local offset = aimBasePos - basePos
+                        local offLen = offset:getLength()
+                        if offLen > maxLead then
+                            aimBasePos = basePos + offset * (maxLead / offLen)
+                        end
+                    end
+                end
+            end
+            targetPredPos = aimBasePos
+
+            if gunValid and baseValid then
+                local aimPos, tta = getBallisticAimPos(gun, base, targetPredPos, vel, tacc)
+                targetAimPos = aimPos
+                lastTta = tta
+                Outputs.TTA:update(tta)
+            else
+                targetAimPos = targetPredPos
+                lastTta = 0
+                Outputs.TTA:update(0)
+            end
+            seen[targetEnt] = true
+            break
+        end
+        local ent = entities[i]
+        if ent ~= nil then
+            seen[ent] = true
+        end
+    end
+
+    if not found then
+        targetTracked = false
+        targetPredPos = zeroVec
+        accelReadyThisTick = false
+    end
+
+    for ent in pairs(lastTargetTime) do
+        if not seen[ent] then
+            lastTargetTime[ent] = nil
+            lastTargetVel[ent] = nil
+        end
+    end
+
+end
+
+Inputs.Entities:addTrigger(function(value)
+    entities = value
+end)
+Inputs.Positions:addTrigger(function(value)
+    positions = value
+end)
+Inputs.Velocities:addTrigger(function(value)
+    velocities = value
+end)
+Inputs.Active:addTrigger(function(value)
+    active = value > 0
+end)
+local nextThink = 0
+hook.add("think", "APS_ATTD_Think", function()
+    local now = curtime()
+    if now < nextThink then return end
+    nextThink = now + INTERVAL
+    accelReadyThisTick = false
+    local gun = Inputs.Gun:get()
+    if gun and gun:isValid() and gun ~= lastGun and CFBA_SetGun then
+        CFBA_SetGun(gun)
+        lastGun = gun
+    end
+
+    updateTarget()
+
+    local outEnt = targetEnt
+    if not outEnt or not outEnt:isValid() then
+        outEnt = chip()
+    end
+
+    local fire = 0
+    local gun = Inputs.Gun:get()
+    local ready = false
+    if gun and gun:isValid() and gun.acfReady then
+        ready = gun:acfReady()
+    end
+
+    local aimOk = false
+    if active and targetEnt ~= nil and targetTracked then
+        local dot = getAimDot(gun, targetAimPos)
+        if dot > -1 then
+            local tol = FIRE_TOL_DEG
+            if lastTta > 0 and lastTta <= SHORT_TTA then
+                local alpha = 1 - (lastTta / SHORT_TTA)
+                tol = FIRE_TOL_DEG * (1 + (FIRE_TOL_SHORT_MULT - 1) * alpha)
+            end
+            local ang = math.deg(math.acos(clampValue(dot, -1, 1)))
+            if ang <= tol then
+                if gun and gun:isValid() then
+                    local origin = gun:getMassCenterW() or gun:getPos()
+                    local dist = origin:getDistance(targetAimPos)
+                    if dist <= FIRE_MAX_DIST and accelReadyThisTick then
+                        aimOk = true
+                    end
+                end
+            end
+        end
+    end
+
+    if not active or targetEnt == nil or not targetTracked or not aimOk then
+        fireLatch = false
+    elseif ready then
+        fireLatch = false
+        fire = 1
+    else
+        fireLatch = true
+    end
+
+    if fireLatch then
+        fire = 1
+    end
+
+    Outputs.TurretActive:update(active and targetEnt ~= nil and 1 or 0)
+    Outputs.TargetEnt:update(outEnt)
+    Outputs.TargetPos:update(targetPos)
+    Outputs.TargetVel:update(targetVel)
+    Outputs.TargetPredPos:update(targetPredPos)
+    Outputs.TargetAimPos:update(targetAimPos)
+    if not active or targetEnt == nil then
+        lastTta = 0
+        Outputs.TTA:update(0)
+    end
+    Outputs.Fire:update(fire)
+end)
