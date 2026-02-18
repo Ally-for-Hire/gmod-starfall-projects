@@ -43,7 +43,7 @@ local BRAKE_SPEED_GATE = 30
 --- Customizable Variables
 -- Gearing and Braking Setup
 local gearingType         = 3
-local maxBrakePower       = 25
+local maxBrakePower       = 150
 local brakeScaling        = false
 local wheelSize           = 28
 local finalRatio          = 0.18
@@ -52,7 +52,7 @@ local disableNeutralSteer = false
 
 -- Vehicle Setup 
 local hasWheels = false
-local dualClutch = true
+local dualClutch = false
 local invertedTransfers = 1
 local inlineTransfers = true
 
