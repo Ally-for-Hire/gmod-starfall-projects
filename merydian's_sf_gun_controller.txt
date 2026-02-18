@@ -12,7 +12,7 @@ INTERVAL   = 0.05
 GZ         = 600
 LOAD_DIST  = 10000
 LOAD_PITCH = nil
-TARGET_LEAD_TIME = 0.00
+TARGET_LEAD_TIME = 0.02
 
 NextThink  = 0
 Unlocked   = false
