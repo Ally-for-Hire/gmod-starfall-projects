@@ -2,7 +2,7 @@
 --@author Ally for Hire / Merydian9
 --@server
 
---- Version 0.11.0
+--- Version 0.12.0
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-starfall-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -34,6 +34,12 @@ Key notes:
 
 Need a hand tailoring it to a particular rig? Ping @allyfh and I'll walk you through it.
 */
+
+-- Helper (requires simple_server-side_wire_helper >= 1.5.0)
+require("allylib/simple_server-side_wire_helper.txt")
+syncInputCommands(true) -- init-only toggle; do not call per-tick
+updateInputs("Engine:ENTITY MainGearbox:ENTITY Base:ENTITY Pod:WIRELINK")
+updateOutputs("Throttle:NORMAL LeftWeldLatch:NORMAL RightWeldLatch:NORMAL")
 
 --- Constants
 local SPEEDCONV = 1 / 17.6
@@ -142,7 +148,12 @@ end
 
 local function writePortIfChanged(key, value, lastValue)
     if lastValue ~= value then
-        wire.ports[key] = value
+        local out = Outputs[key]
+        if out then
+            out:update(value)
+        else
+            wire.ports[key] = value
+        end
         return value
     end
     return lastValue
@@ -319,24 +330,21 @@ local function updateEngineVariables()
     end
 end
 
-local function handleWire(name, value)
-    if value == nil then return end
-    if name == "Engine" then
-        input_engine = value
-    elseif name == "MainGearbox" then
-        input_mainGearbox = value
-    elseif name == "Base" then
-        input_base = value
-    elseif name == "Pod" then
-        input_pod = value
-    end
-
-    if name == "Engine" or name == "MainGearbox" then
-        updateEngineVariables()
-    end
-end
+local prev_engine = nil
+local prev_mainGearbox = nil
 
 local function think()
+    input_engine = Engine
+    input_mainGearbox = MainGearbox
+    input_base = Base
+    input_pod = Pod
+
+    if input_engine ~= prev_engine or input_mainGearbox ~= prev_mainGearbox then
+        updateEngineVariables()
+        prev_engine = input_engine
+        prev_mainGearbox = input_mainGearbox
+    end
+
     if not input_engine or not input_mainGearbox or not input_base or not input_pod then return end
     if not isValid(input_engine) or not isValid(input_mainGearbox) or not isValid(input_base) then return end
     if not engineReady then return end
@@ -471,9 +479,4 @@ local function think()
 end
 
 --- Hooks
-wire.adjustPorts(
-    {Engine = "entity", MainGearbox = "entity", Base = "entity", Pod = "wirelink"},
-    {Throttle = "number", LeftWeldLatch = "number", RightWeldLatch = "number"}
-)
-hook.add("input", "Wire Inputs Updated", handleWire)
 timer.create("Main Logic Loop", 0.05, 0, think)
