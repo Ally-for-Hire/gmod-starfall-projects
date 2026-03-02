@@ -90,7 +90,6 @@ local leftWL = nil
 local rightWL = nil
 local engineReady = false
 
-local gears = {}
 local gearLinks = {}
 local gearSpeeds = {}
 local reverseGears = 0
@@ -261,7 +260,6 @@ local function updateEngineVariables()
     reverseGears = 0
     for i = 1, gearCount do
         local ratio = MainGearbox:acfGearRatio(i)
-        gears[i] = ratio
         if ratio < 0 then
             reverseGears = reverseGears + 1
         end
