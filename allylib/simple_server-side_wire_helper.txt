@@ -4,10 +4,14 @@
 --[[
 Small utility that turns human-readable wire I/O strings into actual ports and
 provides helper tables (`Inputs`, `Outputs`, `InputValues`) for quick access.
-Credit to Codex for comments and filling in functions.
+
+Optimized pass goals:
+- lower parse overhead (single-pass parser, no token table)
+- safer trigger execution (isolated callback failures)
+- lightweight API additions while preserving compatibility
 ]]--
 
--- Version 1.0.0
+-- Version 1.5.0
 
 --[[
 Usage:
@@ -18,151 +22,325 @@ Usage:
     local baseEnt = InputValues.Base
 ]]--
 
-Inputs, Outputs, InputValues = {}, {}, {}
-local InputTriggers = {}
+Inputs, Outputs, InputValues = Inputs or {}, Outputs or {}, InputValues or {}
+local InputTriggers = InputTriggers or {}
 
--- Input helper prototype
+local LastInputNames, LastInputTypes = LastInputNames or {}, LastInputTypes or {}
+local LastOutputNames, LastOutputTypes = LastOutputNames or {}, LastOutputTypes or {}
+local ChangedState = ChangedState or {}
+local SyncInputCommandsEnabled = SyncInputCommandsEnabled or false
+local SyncedInputCommandNames = SyncedInputCommandNames or {}
+local SyncedInputCommandBackup = SyncedInputCommandBackup or {}
+
+local _type = type
+local _pairs = pairs
+local _setmetatable = setmetatable
+local _xpcall = xpcall
+local _tostring = tostring
+local _print = print
+local _table_remove = table.remove
+local _debug = debug
+local _math_abs = math.abs
+local _G = _G
+
+-- Input helper prototype ---------------------------------------------------
 local inputProto = {}
 inputProto.__index = inputProto
 
---[[
-inputProto:get
-    Returns the latest cached value for the input.
-]]--
 function inputProto:get()
     return InputValues[self.name]
 end
 
---[[
-inputProto:addTrigger
-    Registers a callback to run whenever this input updates.
-]]--
 function inputProto:addTrigger(fn)
-    if type(fn) ~= "function" then return end
-    local list = InputTriggers[self.name]
+    if _type(fn) ~= "function" then return nil end
+
+    local name = self.name
+    local list = InputTriggers[name]
     if list == nil then
         list = {}
-        InputTriggers[self.name] = list
+        InputTriggers[name] = list
     end
-    list[#list + 1] = fn
+
+    local idx = #list + 1
+    list[idx] = fn
+    return idx
 end
 
--- Output helper prototype
+function inputProto:removeTrigger(idx)
+    if _type(idx) ~= "number" then return false end
+
+    local list = InputTriggers[self.name]
+    if not list or not list[idx] then return false end
+
+    _table_remove(list, idx) -- keep trigger execution order deterministic
+    if #list == 0 then
+        InputTriggers[self.name] = nil
+    end
+
+    return true
+end
+
+function inputProto:clearTriggers()
+    InputTriggers[self.name] = nil
+end
+
+-- Output helper prototype --------------------------------------------------
 local outputProto = {}
 outputProto.__index = outputProto
 
---[[
-outputProto:update
-    Convenience wrapper around wire.ports for this output.
-]]--
 function outputProto:update(value)
     wire.ports[self.name] = value
 end
 
--- Parse helpers -----------------------------------------------------------
---[[
-tokenizePorts
-    Breaks the helper string into tokens separated by whitespace/commas.
-]]--
-local function tokenizePorts(str)
-    local tokens = {}
-    if type(str) ~= "string" then return tokens end
-    for token in str:gmatch("[^,%s]+") do
-        tokens[#tokens + 1] = token
-    end
-    return tokens
-end
-
---[[
-splitPortString
-    Converts helper strings into parallel name/type arrays.
-]]--
+-- Parse helpers ------------------------------------------------------------
+-- single-pass parser: "A:TYPE B C:TYPE" -> names/types arrays
 local function splitPortString(portString)
     local names, types = {}, {}
-    local tokens = tokenizePorts(portString)
 
-    for i = 1, #tokens do
-        local token = tokens[i]
-        local name, portType = token:match("([^:]+):?(.*)")
-        if name then
-            names[#names + 1] = name
-            if portType ~= nil and portType ~= "" then
-                types[#types + 1] = portType
-            else
-                types[#types + 1] = "number"
-            end
+    if _type(portString) ~= "string" then
+        return names, types
+    end
+
+    local n = 0
+    for token in portString:gmatch("[^,%s]+") do
+        local name, portType = token:match("^([^:]+):?(.*)$")
+        if name and name ~= "" then
+            n = n + 1
+            names[n] = name
+            types[n] = (portType ~= nil and portType ~= "") and portType or "NORMAL"
         end
     end
 
     return names, types
 end
 
--- Internal wire input hook ------------------------------------------------
---[[
-doWireInput
-    Core hook that caches new values and fires triggers.
-]]--
+-- Internal wire input hook -------------------------------------------------
+local function onTriggerError(err)
+    return "[SS-SWH] trigger error: " .. _tostring(err)
+end
+
+local function syncInputGlobal(name, value)
+    if not SyncInputCommandsEnabled then return end
+
+    if not SyncedInputCommandNames[name] then
+        SyncedInputCommandNames[name] = true
+        SyncedInputCommandBackup[name] = _G[name]
+    end
+
+    _G[name] = value
+end
+
+local function unsyncInputGlobal(name)
+    if not SyncedInputCommandNames[name] then return end
+
+    _G[name] = SyncedInputCommandBackup[name]
+    SyncedInputCommandBackup[name] = nil
+    SyncedInputCommandNames[name] = nil
+end
+
 local function doWireInput(name, value)
+    -- Keep legacy behavior: ignore nil update payloads
     if value == nil then return end
+
     InputValues[name] = value
+    syncInputGlobal(name, value)
 
     local triggers = InputTriggers[name]
-    if triggers then
-        for i = 1, #triggers do
-            triggers[i](value)
+    if not triggers then return end
+
+    for i = 1, #triggers do
+        local fn = triggers[i]
+        if fn then
+            local ok, msg = _xpcall(fn, onTriggerError, value)
+            if not ok then _print(msg) end
         end
     end
 end
 
--- Public API --------------------------------------------------------------
---[[
-updateInputs
-    Registers inputs from helper string syntax and rebuilds the helper tables.
-]]--
+local function samePortLayout(namesA, typesA, namesB, typesB)
+    local len = #namesA
+    if len ~= #namesB or len ~= #typesA or len ~= #typesB then return false end
+
+    for i = 1, len do
+        if namesA[i] ~= namesB[i] or typesA[i] ~= typesB[i] then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function copyPortLayout(srcNames, srcTypes, dstNames, dstTypes)
+    for i = 1, #dstNames do
+        dstNames[i] = nil
+        dstTypes[i] = nil
+    end
+
+    for i = 1, #srcNames do
+        dstNames[i] = srcNames[i]
+        dstTypes[i] = srcTypes[i]
+    end
+end
+
+local function resolveChangedSlot(explicitSlot)
+    if explicitSlot ~= nil then return explicitSlot end
+
+    if _debug and _debug.getinfo then
+        local info = _debug.getinfo(3, "Sl") -- caller of changed/resetChanged
+        if info then
+            return (_tostring(info.short_src) .. ":" .. _tostring(info.currentline))
+        end
+    end
+
+    return "__default_slot"
+end
+
+local function valuesEqual(a, b, epsilon)
+    if a == b then return true end
+
+    if epsilon and _type(a) == "number" and _type(b) == "number" then
+        return _math_abs(a - b) <= epsilon
+    end
+
+    return false
+end
+
+-- Public API ---------------------------------------------------------------
+function syncInputCommands(enabled)
+    local turnOn = enabled == true
+
+    if turnOn == SyncInputCommandsEnabled then
+        return SyncInputCommandsEnabled
+    end
+
+    SyncInputCommandsEnabled = turnOn
+
+    if SyncInputCommandsEnabled then
+        for name, value in _pairs(InputValues) do
+            syncInputGlobal(name, value)
+        end
+    else
+        for name in _pairs(SyncedInputCommandNames) do
+            unsyncInputGlobal(name)
+        end
+    end
+
+    return SyncInputCommandsEnabled
+end
+
+function changed(value, keepChangedState, slot, epsilon)
+    local key = resolveChangedSlot(slot)
+    local state = ChangedState[key]
+
+    if not state then
+        ChangedState[key] = { last = value, pending = value, dirty = false }
+        return true
+    end
+
+    if not valuesEqual(value, state.last, epsilon) then
+        state.pending = value
+        state.dirty = true
+    end
+
+    if not state.dirty then
+        return false
+    end
+
+    if not keepChangedState then
+        state.last = state.pending
+        state.dirty = false
+    end
+
+    return true
+end
+
+function resetChanged(slot)
+    if slot == nil then
+        for _, state in _pairs(ChangedState) do
+            if state.dirty then
+                state.last = state.pending
+                state.dirty = false
+            end
+        end
+        return true
+    end
+
+    local key = resolveChangedSlot(slot)
+    local state = ChangedState[key]
+    if not state then return false end
+
+    if state.dirty then
+        state.last = state.pending
+        state.dirty = false
+    end
+
+    return true
+end
+
 function updateInputs(str)
     local names, types = splitPortString(str)
+
+    local changed = not samePortLayout(names, types, LastInputNames, LastInputTypes)
+    if not changed then
+        return names, types, Inputs, false
+    end
+
     local keep = {}
     for i = 1, #names do
         keep[names[i]] = true
     end
-    for key in pairs(InputTriggers) do
+
+    for key in _pairs(InputTriggers) do
         if not keep[key] then InputTriggers[key] = nil end
     end
-    for key in pairs(InputValues) do
-        if not keep[key] then InputValues[key] = nil end
+
+    for key in _pairs(InputValues) do
+        if not keep[key] then
+            InputValues[key] = nil
+            unsyncInputGlobal(key)
+        end
     end
-    for key in pairs(Inputs) do Inputs[key] = nil end
+
+    for key in _pairs(Inputs) do
+        Inputs[key] = nil
+    end
+
     for i = 1, #names do
         local name = names[i]
-        Inputs[name] = setmetatable({name = name}, inputProto)
+        Inputs[name] = _setmetatable({ name = name }, inputProto)
     end
+
+    copyPortLayout(names, types, LastInputNames, LastInputTypes)
     wire.adjustInputs(names, types)
-    return names, types, Inputs
+    return names, types, Inputs, true
 end
 
---[[
-updateOutputs
-    Registers outputs from helper string syntax and rebuilds helper tables.
-]]--
 function updateOutputs(str)
     local names, types = splitPortString(str)
-    for key in pairs(Outputs) do Outputs[key] = nil end
+
+    local changed = not samePortLayout(names, types, LastOutputNames, LastOutputTypes)
+    if not changed then
+        return names, types, Outputs, false
+    end
+
+    for key in _pairs(Outputs) do
+        Outputs[key] = nil
+    end
+
     for i = 1, #names do
         local name = names[i]
-        Outputs[name] = setmetatable({name = name}, outputProto)
+        Outputs[name] = _setmetatable({ name = name }, outputProto)
     end
+
+    copyPortLayout(names, types, LastOutputNames, LastOutputTypes)
     wire.adjustOutputs(names, types)
-    return names, types, Outputs
+    return names, types, Outputs, true
 end
 
---[[
-addInputTrigger
-    Helper to attach a trigger using the Inputs table.
-]]--
 function addInputTrigger(name, fn)
     local inputObj = Inputs[name]
-    if not inputObj then return end
-    inputObj:addTrigger(fn)
+    if not inputObj then return nil end
+    return inputObj:addTrigger(fn)
 end
 
 hook.add("input", "SS-SWH_input", doWireInput)
