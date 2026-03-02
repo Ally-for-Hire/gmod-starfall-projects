@@ -46,6 +46,7 @@ updateOutputs("Throttle:NORMAL LeftWeldLatch:NORMAL RightWeldLatch:NORMAL")
 local SPEEDCONV = 1 / 17.6
 local MAX_YAW_RATE = 240
 local BRAKE_SPEED_GATE = 30
+local THINK_DT = 0.05
 
 --- Customizable Variables
 -- Gearing and Braking Setup
@@ -65,7 +66,9 @@ local inlineTransfers = true
 
 -- Countersteering Setup
 local yawDeadzone = 15
-local counterSteerStrength = 1.5
+local counterSteerStrength = 1.5 -- legacy P gain (kept for compatibility)
+local counterSteerKi = 0
+local counterSteerKd = 0.05 -- small D term for easier damping tuning
 
 -- Steering Setup
 local invertSteer = false
@@ -113,6 +116,9 @@ local lastLBrake, lastRBrake = nil, nil
 local lastLClutch, lastRClutch = nil, nil
 local lastLGear, lastRGear = nil, nil
 local lastLWeld, lastRWeld = nil, nil
+
+local counterSteerI = 0
+local counterSteerPrevError = 0
 
 --- Functions
 local function applyBrakeClutch(LBrake, RBrake, LClutch, RClutch)
@@ -444,11 +450,21 @@ local function think()
 
     if not hasWheels and hasDriveInput and not hasSteerInput then
         local yawRate = Base:getAngleVelocity().z
-        if math.abs(yawRate) > yawDeadzone then
-            local counterSteerWeight = math.min(
-                math.abs(yawRate) / MAX_YAW_RATE * counterSteerStrength,
-                1
-            ) * brakePower
+        local yawAbs = math.abs(yawRate)
+
+        if yawAbs > yawDeadzone then
+            local err = yawAbs
+            counterSteerI = counterSteerI + err * THINK_DT
+
+            local p = (err / MAX_YAW_RATE) * counterSteerStrength
+            local i = (counterSteerI / MAX_YAW_RATE) * counterSteerKi
+            local d = ((err - counterSteerPrevError) / THINK_DT / MAX_YAW_RATE) * counterSteerKd
+
+            local pidNorm = math.min(math.max(p + i + d, 0), 1)
+            local counterSteerWeight = pidNorm * brakePower
+
+            counterSteerPrevError = err
+
             local direction = driveDir ~= 0 and driveDir or 1
             if invertSteer then
                 direction = -direction
@@ -461,11 +477,17 @@ local function think()
                 outputRightBrake = math.max(outputRightBrake, counterSteerWeight)
                 outputRightClutch = math.max(outputRightClutch, clutchTurn)
             end
+        else
+            counterSteerI = 0
+            counterSteerPrevError = 0
         end
+    else
+        counterSteerI = 0
+        counterSteerPrevError = 0
     end
 
     applyOutputs()
 end
 
 --- Hooks
-timer.create("Main Logic Loop", 0.05, 0, think)
+timer.create("Main Logic Loop", THINK_DT, 0, think)
