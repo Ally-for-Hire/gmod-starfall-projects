@@ -326,14 +326,14 @@ local function updateEngineVariables()
     end
 end
 
-local prev_engine = nil
-local prev_mainGearbox = nil
+local prevEngine = nil
+local prevMainGearbox = nil
 
 local function think()
-    if Engine ~= prev_engine or MainGearbox ~= prev_mainGearbox then
+    if Engine ~= prevEngine or MainGearbox ~= prevMainGearbox then
         updateEngineVariables()
-        prev_engine = Engine
-        prev_mainGearbox = MainGearbox
+        prevEngine = Engine
+        prevMainGearbox = MainGearbox
     end
 
     if not Engine or not MainGearbox or not Base or not Pod then return end
