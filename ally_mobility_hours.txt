@@ -1,5 +1,6 @@
 --@name Ally Mobility Hours
 --@author Ally for Hire / Merydian9
+--@include allylib/simple_server-side_wire_helper.txt
 --@server
 
 --- Version 0.12.0
