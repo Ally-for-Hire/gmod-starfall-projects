@@ -1,5 +1,4 @@
 --@client
-
 -- Believe this was from legokidlogan on the starfall discord.
 
 local rtName = "whatever"
