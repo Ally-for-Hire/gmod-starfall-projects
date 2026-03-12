@@ -1,4 +1,4 @@
---@name Bounding Box Relative to Camera Render
+--@name Resizing Target Box Test
 --@author Ally for Hire / Merydian9
 --@client
 -- CLIENT VARIABLES HERE
