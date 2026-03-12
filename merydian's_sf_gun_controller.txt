@@ -9,42 +9,13 @@ require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/curve-fitting_ballistics_algorithm.txt")
 
 INTERVAL   = 0.05
-GZ         = 600
 LOAD_DIST  = 10000
 LOAD_PITCH = nil
-TARGET_LEAD_TIME = 0.02
 
 NextThink  = 0
 Unlocked   = false
 LastGun    = nil
-LastTargetVel  = Vector()
-LastTargetTime = 0
-TargetAccel    = Vector()
 LastReady      = false
-LastTargetDt   = 0
-local zeroVec = Vector()
-
-local function updateTargetAccel(tvel, now)
-    if LastTargetTime <= 0 then
-        LastTargetVel = tvel
-        LastTargetTime = now
-        TargetAccel = zeroVec
-        return TargetAccel
-    end
-
-    local dt = now - LastTargetTime
-    if dt <= 0 then
-        TargetAccel = zeroVec
-    else
-        TargetAccel = (tvel - LastTargetVel) / dt
-        LastTargetDt = dt
-    end
-
-    LastTargetVel = tvel
-    LastTargetTime = now
-
-    return TargetAccel
-end
 
 local function getBasePos(hit, tpos)
     if tpos:getLength() > 0 then
@@ -65,78 +36,6 @@ local function getLoadAimPos(gun, base, targetPos, loadAng)
     return origin + ang:getForward() * LOAD_DIST
 end
 
-local function getBallisticAimPos(gun, base, basePos, tvel, tacc)
-    local gpos = gun:getMassCenterW() or gun:getPos()
-    local dist = gpos:getDistance(basePos)
-    local bvel  = base:getVelocity()
-    local baseToGun = basePos - gpos
-    local tta = 0
-
-    local low = 0
-    local high = 6
-    local baseTime = ballisticTime and ballisticTime(dist) or 0
-    if baseTime > 0 then
-        high = baseTime * 1.5
-        if high < 0.5 then high = 0.5 end
-        if high > 6 then high = 6 end
-    end
-    local diffLow = nil
-    local diffHigh = nil
-    tta = (low + high) / 2
-
-    local function evalDiff(t)
-        local tSq = t * t
-        local drop = Vector(0, 0, 0.5 * GZ * tSq)
-        local accel = tacc * (0.5 * tSq)
-        local tlen = (baseToGun + tvel * t + accel + drop):getLength()
-        local slen = ballisticDistance(t)
-        return slen - tlen
-    end
-
-    if not ballisticDistance then
-        return basePos, 0
-    end
-
-    local slenHigh = ballisticDistance(high)
-    if slenHigh <= 0 then
-        return basePos, 0
-    end
-
-    diffLow = evalDiff(low)
-    diffHigh = evalDiff(high)
-
-    while high - low > 0.05 do
-        local nextT = nil
-        if diffLow and diffHigh and diffHigh ~= diffLow then
-            local secant = high - diffHigh * (high - low) / (diffHigh - diffLow)
-            if secant > low and secant < high then
-                nextT = secant
-            end
-        end
-        if not nextT then
-            nextT = (low + high) / 2
-        end
-
-        local diff = evalDiff(nextT)
-        if diff < 0 then
-            low = nextT
-            diffLow = diff
-        else
-            high = nextT
-            diffHigh = diff
-        end
-
-        tta = (low + high) / 2
-    end
-
-    local drag = -bvel * tta
-    local ttaSq = tta * tta
-    local drop = Vector(0, 0, 0.5 * GZ * ttaSq)
-    local accel = tacc * (0.5 * ttaSq)
-    local aimPos = basePos + tvel * tta + accel + drag + drop
-    return aimPos, tta
-end
-
 local function main()
     local now = curtime()
     if now < NextThink then return end
@@ -147,6 +46,7 @@ local function main()
     local hit    = Inputs.HitPos:get() or Vector()
     local tpos   = Inputs.TargetPos:get() or Vector()
     local tvel   = Inputs.TargetVel:get() or Vector()
+    local hasTrackedPos = tpos:getLength() > 0
     local manual = (Inputs.M2:get()    or 0) ~= 0
     local loadEnabled = LOAD_PITCH ~= nil
     local loadAng = nil
@@ -169,49 +69,56 @@ local function main()
         LastGun = gun
     end
 
-    local basePos = getBasePos(hit, tpos)
-    local tacc = updateTargetAccel(tvel, now)
-
-    local leadTime = LastTargetDt + TARGET_LEAD_TIME
-    local leadSq = leadTime * leadTime
-    local aimBasePos = basePos + tvel * leadTime + tacc * (0.5 * leadSq)
-    if gunValid and gun.acfMuzzleVel then
-        local mv = gun:acfMuzzleVel() or 0
-        if mv > 0 then
-            local mvGu = mv * 39.3701
-            local dist = (gun:getMassCenterW() or gun:getPos()):getDistance(basePos)
-            local estTta = ballisticTime(dist) or 0
-            if estTta > 0 then
-                local maxLead = mvGu * estTta
-                local offset = aimBasePos - basePos
-                local offLen = offset:getLength()
-                if offLen > maxLead then
-                    aimBasePos = basePos + offset * (maxLead / offLen)
-                end
-            end
-        end
-    end
-    local targetPredPos = aimBasePos
-    local aimPos = basePos
-    local tta    = 0
-
+    local rawBasePos = getBasePos(hit, tpos)
+    local solvedPredPos = rawBasePos
+    local solvedAimPos = rawBasePos
+    local solvedTta = 0
     local activeControl =
         Unlocked and not manual and
         gunValid and
-        baseValid
+        baseValid and
+        hasTrackedPos
 
     local loadActive = loadEnabled and Unlocked and not manual and not LastReady
+    local shouldSolve =
+        (activeControl or loadActive) and
+        gunValid and
+        baseValid and
+        hasTrackedPos and
+        CFBA_SolveIntercept
+
+    if CFBA_ResetTargetTracking and not shouldSolve then
+        CFBA_ResetTargetTracking()
+    end
+
+    if shouldSolve then
+        solvedPredPos, solvedAimPos, solvedTta = CFBA_SolveIntercept(base, tpos, tvel)
+    end
+
+    local targetPredPos = rawBasePos
+    local aimPos = rawBasePos
+    local tta    = 0
+
+    if activeControl then
+        targetPredPos = solvedPredPos
+        aimPos = solvedAimPos
+        tta = solvedTta
+    end
 
     if loadActive then
+        targetPredPos = solvedPredPos
         local loadPos = getLoadAimPos(gun, base, targetPredPos, loadAng)
         if loadPos then
             aimPos = loadPos
         end
         tta = 0
-    elseif activeControl then
-        aimPos, tta = getBallisticAimPos(gun, base, targetPredPos, tvel, tacc)
-    else
-        aimPos = basePos
+    elseif manual then
+        targetPredPos = rawBasePos
+        aimPos = rawBasePos
+        tta    = 0
+    elseif not activeControl then
+        aimPos = rawBasePos
+        targetPredPos = rawBasePos
         tta    = 0
     end
 
