@@ -3,102 +3,179 @@
 --@shared
 --@server
 
--- GLOBAL VARIABLES HERE
--- Wire port setup
 wire.adjustPorts({
-    Aimer = "entity", 
+    Aimer = "entity",
     HitPos = "vector",
     LockTurret = "number",
-    TargetPos = "vector", 
-    LeadPos = "vector", 
-    TargetName = "string"}, 
+    TargetPos = "vector",
+    LeadPos = "vector",
+    TargetName = "string"
+},
     {GunTarget = "vector"})
 
--- Gun settings
-local ROTATESPEED = Angle(240)
-local MAXELEVATION = 75
-local MAXDEPRESSION = 10
-local MAXYAW = Angle(0, 180, 0) -- Not currently functional
+local DT = game.getTickInterval()
+local ROTATE_SPEED = Angle(240) * DT * 5
+local MAX_ELEVATION = 75
+local MAX_DEPRESSION = 10
+local LOCK_DISTANCE = 100000
 
--- PID constants
 local KP = 450
-local KI = 15 -- Basically only here to help with autolead, feel free to turn off
+local KI = 15
 local KD = 40
 
--- Global variable initialization
-local HITPOS = Vector()
-local INERTIA = Angle()
-local AIMHOLOGRAM = hologram.create(Vector(), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl", Vector())
-local INTEGRAL = Angle(0, 0, 0)
-local dt = game.getTickInterval() -- Time step for the PID loop (adjust as needed)   
-local LASTHITPOS = Vector()
-local ROTATESPEED = ROTATESPEED * dt * 5
-local TURRETLOCKED = true
-local GUNANG = chip():getAngles()
-local GUN = wire.ports.Aimer
-local LOCKEDPOS = chip():worldToLocal(GUN:getPos() + chip():getForward() * 10000000)
-
--- SERVER FUNCTIONS HERE
-function angClamp(ang1, ang2, ang3) -- angle, lowangle, highangle
-    return Angle(math.clamp(ang1.pitch, ang2.pitch, ang3.pitch), math.clamp(ang1.yaw, ang2.yaw, ang3.yaw), math.clamp(ang1.roll, ang2.roll, ang3.roll))    
-end
 local ABS = math.abs
 
--- SERVER HOOKS HERE
--- Updating inputs
-hook.add ("input", "updateWire", function(INPUT, VALUE) 
+local gun = nil
+local inertia = Angle()
+local integral = Angle()
+local turretLocked = true
+local lockedPos = chip():worldToLocal(chip():getPos() + chip():getForward() * LOCK_DISTANCE)
+local lastLockValue = 0
+local lockInitialized = false
+
+local function clampAngle(ang, lowAng, highAng)
+    return Angle(
+        math.clamp(ang.pitch, lowAng.pitch, highAng.pitch),
+        math.clamp(ang.yaw, lowAng.yaw, highAng.yaw),
+        math.clamp(ang.roll, lowAng.roll, highAng.roll)
+    )
+end
+
+local function zeroRoll(ang)
+    return Angle(ang.pitch, ang.yaw, 0)
+end
+
+local function negateAngle(ang)
+    return Angle(-ang.pitch, -ang.yaw, -ang.roll)
+end
+
+local function getGunOrigin(currentGun)
+    return currentGun:getMassCenterW() or currentGun:getPos()
+end
+
+local function isNonZeroVector(vec)
+    return vec ~= nil and vec:getLength() > 0
+end
+
+local function updateGunState(value)
+    gun = value
+    if not gun or not gun:isValid() then
+        inertia = Angle()
+        lockInitialized = false
+        return false
+    end
+
+    local gunInertia = gun:getInertia()
+    inertia = Angle(gunInertia.y, gunInertia.z, 0)
+    lockInitialized = false
+    return true
+end
+
+local function getHoldAimPos(currentGun)
+    if currentGun and currentGun:isValid() then
+        return getGunOrigin(currentGun) + currentGun:getForward() * LOCK_DISTANCE
+    end
+    return chip():getPos() + chip():getForward() * LOCK_DISTANCE
+end
+
+local function getUnlockedTargetSnapshot(currentGun)
+    local hitPos = wire.ports.HitPos or Vector()
+    local targetPos = wire.ports.TargetPos or Vector()
+    local leadPos = wire.ports.LeadPos or Vector()
+    local targetName = wire.ports.TargetName or ""
+
+    if targetName ~= "" and isNonZeroVector(leadPos) then
+        if isNonZeroVector(targetPos) then
+            return leadPos, targetPos
+        end
+        return leadPos, leadPos
+    end
+
+    if isNonZeroVector(hitPos) then
+        return hitPos, hitPos
+    end
+
+    if isNonZeroVector(targetPos) then
+        return targetPos, targetPos
+    end
+
+    local holdAimPos = getHoldAimPos(currentGun)
+    return holdAimPos, holdAimPos
+end
+
+local function getTargetSnapshot(currentGun)
+    if turretLocked then
+        local lockedWorldPos = chip():localToWorld(lockedPos)
+        return lockedWorldPos, lockedWorldPos
+    end
+
+    return getUnlockedTargetSnapshot(currentGun)
+end
+
+local function captureLockPos(currentGun)
+    lockedPos = chip():worldToLocal(getHoldAimPos(currentGun))
+    lockInitialized = true
+end
+
+hook.add("input", "updateWire", function(INPUT, VALUE)
     if INPUT == "Aimer" then
-        local temp = Angle(VALUE:getInertia().x, VALUE:getInertia().y, VALUE:getInertia().z)
-        INERTIA = Angle(temp.yaw, temp.roll, temp.pitch)
-        INERTIA.roll = 0   
+        updateGunState(VALUE)
     elseif INPUT == "LockTurret" then
-        if VALUE == 1 then
-            TURRETLOCKED = !TURRETLOCKED
-            
-            if TURRETLOCKED then
-                LOCKEDPOS = chip():worldToLocal(wire.ports.HitPos)
-            end
+        local pressed = VALUE ~= 0 and lastLockValue == 0
+        lastLockValue = VALUE
+        if not pressed then return end
+
+        turretLocked = not turretLocked
+        if turretLocked then
+            captureLockPos(gun)
         end
     end
 end)
 
--- Gun aiming
 hook.add("tick", "main", function()
-    if wire.ports.Aimer == nil or wire.ports.Aimer:isFrozen() then return end
-    
-    if TURRETLOCKED then
-        GUNANG = (chip():localToWorld(LOCKEDPOS) - GUN:getMassCenterW()):getNormalized():getAngle()
-        wire.ports.GunTarget = wire.ports.HitPos  
-    elseif (wire.ports.TargetName != "") then 
-        GUNANG = (wire.ports.LeadPos - GUN:getMassCenterW()):getNormalized():getAngle()
-        wire.ports.GunTarget = wire.ports.TargetPos
-    elseif (wire.ports.TargetName == "") then
-        GUNANG = (wire.ports.HitPos - GUN:getMassCenterW()):getNormalized():getAngle()
-        wire.ports.GunTarget = wire.ports.HitPos 
+    if wire.ports.Aimer ~= gun then
+        updateGunState(wire.ports.Aimer)
+    end
+    if not gun or not gun:isValid() or gun:isFrozen() then
+        integral = Angle()
+        wire.ports.GunTarget = Vector()
+        return
+    end
+    if turretLocked and not lockInitialized then
+        captureLockPos(gun)
     end
 
-    local chipAngs = chip():localToWorldAngles(Angle(0, 0, 0))
+    local aimPos, gunTarget = getTargetSnapshot(gun)
+    wire.ports.GunTarget = gunTarget
+
+    local toTarget = aimPos - getGunOrigin(gun)
+    if not isNonZeroVector(toTarget) then
+        integral = Angle()
+        return
+    end
+
+    local gunAng = toTarget:getAngle()
+    local chipAngs = chip():localToWorldAngles(Angle())
     local chipPitch = chipAngs.pitch
-    local relPitch = math.clamp((GUNANG.pitch > 90 and -(360 - GUNANG.pitch) or GUNANG.pitch), -(MAXELEVATION) + chipPitch, MAXDEPRESSION + chipPitch)
-    GUNANG.pitch = GUNANG.pitch > 90 and relPitch + 360 or relPitch
-    
-    local force = GUN:worldToLocalAngles(GUNANG)
-    
+    local relPitch = gunAng.pitch > 90 and -(360 - gunAng.pitch) or gunAng.pitch
+    relPitch = math.clamp(relPitch, -MAX_ELEVATION + chipPitch, MAX_DEPRESSION + chipPitch)
+    gunAng.pitch = gunAng.pitch > 90 and relPitch + 360 or relPitch
+
+    local force = zeroRoll(gun:worldToLocalAngles(gunAng))
+
     if ABS(force.yaw) > 45 then
         force.pitch = 0
-    elseif (ABS(force.pitch) + ABS(force.yaw)) < 5 then
-        INTEGRAL = INTEGRAL + force:setR(0)  
-        INTEGRAL = angClamp(INTEGRAL, -ROTATESPEED, ROTATESPEED)
+        integral = Angle()
+    elseif ABS(force.pitch) + ABS(force.yaw) < 5 then
+        integral = integral + force
+        integral = clampAngle(integral, negateAngle(ROTATE_SPEED), ROTATE_SPEED)
     else
-        INTEGRAL = Angle()
+        integral = Angle()
     end
-    
-    force = angClamp(force, -ROTATESPEED, ROTATESPEED)
-    
-    local output = force * KP + INTEGRAL * KI - GUN:getAngleVelocityAngle() * KD
-    
-    LASTERROR = error   
-    LASTHITPOS = HITPOS
-    
-    GUN:applyAngForce(output * INERTIA)
+
+    force = clampAngle(force, negateAngle(ROTATE_SPEED), ROTATE_SPEED)
+
+    local angVel = zeroRoll(gun:getAngleVelocityAngle())
+    local output = force * KP + integral * KI - angVel * KD
+    gun:applyAngForce(output * inertia)
 end)
