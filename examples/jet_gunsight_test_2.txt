@@ -1,4 +1,4 @@
---@name Better Reticle
+--@name Jet Gunsight Test 2
 --@author Ally for Hire / Merydian9
 --@shared
 
