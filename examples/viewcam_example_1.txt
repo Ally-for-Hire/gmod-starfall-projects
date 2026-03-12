@@ -1,4 +1,4 @@
---@name Renderview Test
+--@name Viewcam Example 1
 --@author Merydian9
 --@client
 
