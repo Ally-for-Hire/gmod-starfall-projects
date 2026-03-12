@@ -65,6 +65,8 @@ if CLIENT then
     COL_ORANGE = Color(255, 100, 0)
     COL_PURPLE = Color(255, 0, 255)
     COL_GOLD = Color(255, 200, 0)
+    COL_YELLOW = Color(255, 255, 0)
+    COL_CYAN = Color(0, 255, 255)
     
     -- Color for clearing RenderTargets with
     COL_RENDERTARGET = Color(0, 0, 0, 0)
@@ -156,9 +158,12 @@ if CLIENT then
     end
 
 
-    function drawCenterRT (x, y, rtname)
+    function drawCenterRT (x, y, rtname, divisor)
+        local size = 1024
+        if divisor != nil then size = size / divisor end
+        
         _setRTTexture(rtname)
-        _drawTexturedRect(x - 512, y - 512, 1024, 1024)    
+        _drawTexturedRect(x - size / 2, y - size / 2, size, size)    
         _setRTTexture()
     end
     
@@ -185,6 +190,7 @@ if CLIENT then
         _drawCircle(x, y, diameter)
     end
     filledCircle  = _drawFilledCircle
+    circleFilled = _drawFilledCircle
     font = _setFont
     color = _setColor
     text = _drawText
