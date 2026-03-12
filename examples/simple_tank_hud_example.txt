@@ -1,0 +1,137 @@
+--@name Simple Tank Hud Example
+--@author Ally for Hire (help from LegoKidLogan)
+--@shared
+
+-- This is quite old from me, and doesn't make alot of optimizations
+-- I would otherwise. I've thrown a few comments around where needed,
+-- as this has good examples of mistakes new people may make. 
+
+if SERVER then
+    local active = false -- Doesn't really need to be localized up here if you never end up using it serverside   
+    local inputNames = { "Active", "MainGun"}
+    local inputTypes = { "NUMBER", "ENTITY"}
+    
+    wire.adjustInputs( inputNames, inputTypes )
+    
+    function wireInput( name, value )
+        if name == "Active" then
+            active = value ~= 0
+            
+            net.start( "TankHud_SetActive" )
+            net.writeBool( active )
+            net.send( find.allPlayers() ) -- [FUTURE] net.send() does this by default
+        elseif name == "MainGun" and isValid(value) then
+            maingunent = value
+            
+            net.start( "TankHud_MainGunEnt" )
+            net.writeEntity( maingunent )
+            net.send( find.allPlayers() ) -- [FUTURE] net.send() does this by default
+        end
+    end
+
+    hook.add( "input", "", wireInput )
+    
+    timer.simple( 1, function()
+        for i, name in ipairs( inputNames ) do
+            wireInput( name, wire.ports[name] )
+        end
+    end)
+end   
+
+if CLIENT then
+    
+    local HudMainColor = Color(255,181,0)
+    local ReticleColor = Color(255,181,0)
+    
+    local active = false
+    local MainGun = false
+    local gunAimPos = chip():getPos()
+    local RangeActive = false
+    
+    -- [FUTURE] A rather useful function actually, I have it in my helper still
+    local function drawThickLine( x1, y1, x2, y2, thickness )
+        local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
+        local perpX = perpDir[1]
+        local perpY = perpDir[2]
+    
+        render.drawPoly( {
+            { x = x1 + perpX, y = y1 + perpY },
+            { x = x2 + perpX, y = y2 + perpY },
+            { x = x2 - perpX, y = y2 - perpY },
+            { x = x1 - perpX, y = y1 - perpY },
+        } )
+    end
+
+    local x, y = render.getResolution()
+    local x, y = x / 2, y / 2
+    
+    timer.simple( 1, function()
+        HudRangerActive = 1
+    end)
+    
+        
+    hook.add( "drawhud", "TankHud_RenderHUD", function()
+        if not active then return end  
+        
+        textFont = render.createFont("Marlett",15,1000) -- [FUTURE] DO NOT CREATE FONTS IN A HOOK, THIS IS BAD
+        render.setFont(textFont)
+        render.setColor(HudMainColor)
+        -- [FUTURE] See how these don't move? Don't draw them like this every frame.
+        -- Put them in a renderTarget, and just draw that.
+        drawThickLine(x+15,y,x+75,y,2)
+        drawThickLine(x-15,y,x-75,y,2)
+        drawThickLine(x-15,y,x-15,y+15,2)
+        drawThickLine(x+15,y,x+15,y+15,2)
+        
+        drawThickLine(x+75,y+15,x+150,y+15,2)
+        drawThickLine(x+75,y-15,x+150,y-15,2)
+        drawThickLine(x+150,y,x+200,y,2)
+        
+        drawThickLine(x-75,y+15,x-150,y+15,2)
+        drawThickLine(x-75,y-15,x-150,y-15,2)
+        drawThickLine(x-150,y,x-200,y,2)
+        
+        if RangeActive == true then
+            gunAimPos = trace.trace( MainGun:getPos(), MainGun:getPos() + MainGun:getForward() * 100000, MainGun )["HitPos"]
+        end
+        local scrPos = gunAimPos:toScreen()
+        if scrPos.visible then
+            -- [FUTURE] Same here, these elements aren't moving relative to scrPos. 
+            -- Draw them in a renderTarget and then just draw that at scrPos.
+            render.setColor( ReticleColor )
+            drawThickLine(scrPos.x,scrPos.y,scrPos.x+10,scrPos.y+20,2)
+            drawThickLine(scrPos.x,scrPos.y,scrPos.x-10,scrPos.y+20,2)
+            drawThickLine(scrPos.x,scrPos.y,scrPos.x,scrPos.y+55,1)
+            drawThickLine(scrPos.x,scrPos.y+22,scrPos.x+10,scrPos.y+22,2)
+            drawThickLine(scrPos.x,scrPos.y+24,scrPos.x+10,scrPos.y+24,2)
+            drawThickLine(scrPos.x,scrPos.y+28,scrPos.x+10,scrPos.y+28,2)
+            drawThickLine(scrPos.x,scrPos.y+36,scrPos.x+10,scrPos.y+36,2)
+            drawThickLine(scrPos.x,scrPos.y+52,scrPos.x+10,scrPos.y+52,2)
+        end 
+    end )
+    
+    timer.create("hudupdate",1,0,function()
+        -- [FUTURE] Don't recall what this was for truthfully
+    end)
+    
+    -- [FUTURE] Having all these different net sends is actually fine, and 
+    -- can help optimization. In this case, since these will only be sent
+    -- a few times, and not very fast at that, there is no issues with these
+    -- lines of code.
+    net.receive( "TankHud_SetActive", function()
+        active = net.readBool()
+    end )    
+    net.receive( "TankHud_MainGunEnt", function()
+        MainGun = net.readEntity()
+        if MainGun == chip() then
+            MainGun = false -- Starfall doesn't let us create NULL entities, have to use the chip itself as the fail case
+        end
+    end )
+    
+    -- [FUTURE] No reason for this to not be set up in the receive for the main gun
+    -- ent. It also wouldn't be needed if I just sent them properly in ClientInitialized.
+    timer.simple( 1, function()
+        if not isValid( MainGun ) then return end
+        RangeActive = true   
+    end )
+end
