@@ -1,0 +1,119 @@
+--@name Viewcam Example 2
+--@author 
+-- https://github.com/wrefgtzweve/starfall-e2-scripts
+--@shared
+
+if SERVER then
+        
+    local inputs = {"Target", "Velocity"}
+    local inputTypes = {"Vector", "Vector"}
+    
+    wire.adjustInputs( inputs, inputTypes )
+    
+    hook.add("input", "", function(input, value)
+        local wireInformation = {}
+        for k in ipairs( inputs ) do
+            local name = inputs[k]
+            wireInformation[name] = wire.ports[name]
+        end
+        
+        net.start( "wiresend" )
+        net.writeTable( wireInformation )
+        net.send( find.allPlayers() )
+    end)
+
+elseif CLIENT then
+    if(player() != owner()) then return end
+    
+    Player = owner()
+    fov = 90
+    aimpos = chip():getPos()
+    vel = Vector(0, 0, 0)
+    
+    render.createRenderTarget("rt")
+    local mat = material.create("gmodscreenspace")
+    mat:setTextureRenderTarget("$basetexture", "rt")
+    
+    hook.add("renderscene","render",function()
+        if quotaAverage() > quotaMax()*0.6 then 
+            return 
+        end
+        OriginPos = chip():getPos()  + Vector(0, 0, 10)
+        render.selectRenderTarget("rt")
+        render.renderView({
+            origin = OriginPos,
+            angles = (aimpos + vel / 10 - OriginPos):getAngle(),
+            x = 0,
+            y = 0,
+            w = 1024,--1024
+            h = 1024,
+            drawviewmodel = false,
+            drawhud = false,
+            fov = fov
+        })
+    end)
+    
+    hook.add("drawhud", "", function()
+        local x, y = render.getResolution()
+        local x, y = x / 2, y / 2
+
+        render.setMaterial(mat)
+        render.setColor(Color(255, 255, 255, 1))
+        render.drawTexturedRect(x + 512 / 2, y - 128, 256, 256)
+
+        render.setMaterial()        
+        render.setColor(Color(0, 255, 0, 255))
+        local crossx = x + (256 + 512) / 2, y
+        
+        render.enableScissorRect(x + 256, y - 128, x + 512, y + 128)
+            --render.drawRect(x - 2500, y - 2500, 5000, 5000)
+            size = 90 / fov * 20
+            sizey = 90 / fov * 10
+            render.drawCircle(crossx, y, size / 2)
+            render.drawLine(crossx + size / 2, y, crossx + size + 15, y)
+            render.drawLine(crossx - size / 2, y, crossx - size - 15, y)
+            render.drawLine(crossx - size - 5, y + sizey, crossx - size - 50, y + sizey)
+            render.drawLine(crossx - size - 5, y - sizey, crossx - size - 50, y - sizey)
+            render.drawLine(crossx + size + 5, y + sizey, crossx + size + 50, y + sizey)
+            render.drawLine(crossx + size + 5, y - sizey, crossx + size + 50, y - sizey)
+            render.drawLine(crossx + size + 50, y, crossx + size + 95, y)
+            render.drawLine(crossx - size - 50, y, crossx - size - 95, y)
+        render.disableScissorRect()
+        
+        size = 90 / fov * 0.5
+        render.drawLine(crossx - size, y, crossx + size, y, 2)
+        render.drawLine(crossx, y + size, crossx, y - size)
+        render.setColor(Color(0, 0, 0, 100))
+        --size = 128
+        --render.drawRectOutline(crossx - size / 2, y - size / 2, size, size, 2)
+        
+        render.setColor(Color(0, 0, 0))
+        render.drawRectOutline(x + 512 / 2, y - 256 / 2, 256, 256,3)
+        
+        aimposCoords = aimpos:toScreen()
+        render.drawCircle(aimposCoords.x, aimposCoords.y, 5)
+        
+        velocityCoords = (aimpos + vel / 4):toScreen()
+        render.drawLine(aimposCoords.x, aimposCoords.y, velocityCoords.x, velocityCoords.y)
+    end)
+    
+    hook.add("inputPressed", "", function(key)
+        -- 112 = up
+        -- 113 = down
+        if key == 112 then
+            fov = fov / 2    
+        elseif key == 113 then
+            fov = fov * 2    
+        end
+        fov = math.max(math.min(fov, 90), 1) 
+    end)
+    
+    net.receive("wiresend", function()
+        inputs = net.readTable()
+        
+        if(inputs["Target"] != Vector(0, 0, 0)) then
+            aimpos = inputs["Target"]
+        end
+        vel = inputs["Velocity"]
+    end)
+end
