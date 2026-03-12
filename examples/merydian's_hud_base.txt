@@ -39,7 +39,14 @@ if SERVER then
             INPUTS.Chair = value 
         end
     end
-    
+
+    local function clientInitializedHandler(entity)
+        net.start(SHARED.ENTID .. " Initial Wire Sync")
+            -- Put things that will be wired at the start here
+        net.send()
+    end
+
+    hook.add("ClientInitialized", "ClientInitialized", clientInitialiedHandler)
     hook.add("PlayerEnteredVehicle", SHARED.ENTID .. " PlayerEnteredVehicle", enteredVehicleHandler)
     hook.add("PlayerLeaveVehicle", SHARED.ENTID .. " PlayerLeaveVehicle", leftVehicleHandler)
     hook.add("Input", SHARED.ENTID .. " Input", wireHandler)
@@ -62,6 +69,7 @@ if CLIENT then
     
     local function drawOffscreenHandler()
         -- Draw active elements here, this is where I'd recommend you do logic
+        -- Unfortunately you get a max of 20 of these, so be mindful
         
         if staticDrawn then  return end
         -- Draw static elements here
@@ -87,8 +95,13 @@ if CLIENT then
         local name = net.readString()
 
     end
+
+    local function initialWireHandler()
+        -- Receive initially wired things here
+    end
         
     hook.add("drawhud", SHARED.ENTID .. " DrawHud", drawHudHandler)
     net.receive(SHARED.ENTID .. " Driver Update", driverUpdateHandler) 
     net.receive(SHARED.ENTID .. " Wire Update", wireHandler)
+    net.receive(SHARED.ENTID .. " Initial Wire Sync", initialWireHandler)
 end
