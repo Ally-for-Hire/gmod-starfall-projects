@@ -334,14 +334,12 @@ if CLIENT then
     local function driverUpdateHandler()
         local newDriver = net.readEntity()
         if newDriver == SHARED.Driver then
-            enableHud(SHARED.Driver, false)
             SHARED.Driver = chip()
             return
         end
         
         if newDriver != SHARED.P then return end
         SHARED.Driver = newDriver
-        enableHud(SHARED.Driver, true)
         resetCam()
     end
 
