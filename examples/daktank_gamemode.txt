@@ -1,0 +1,391 @@
+--@name Daktank Gamemode
+--@author Ally for Hire / Merydian9
+--@shared
+
+/*
+OK so this is actually super fun. I made this aaaages ago for use on my private server
+to have fun with daktank. And, well, that is what it does! It's a basic CTP gamemode
+with randomized teams, you did however have to include some stuff to help it on your
+own dupes since I couldn't pull server data, and the handhelds required their own
+dupes. Nonetheless, a good time, and fun to read!
+*/
+
+-- daktank point cost detection
+hook.add( "OnPhysgunReload", "Gamemode_DakPointCost", function(physgun,ply) 
+    local trace = ply:getEyeTrace()
+    local Ent = trace.Entity
+    holograms.removeAll()
+    SoundHolo = holograms.create(player():getEyePos(), Angle(0,0,0), "models/hunter/blocks/cube025x025x025.mdl", Vector(0))
+    if isValid(Ent) and winner == "" then
+        local ContChildren = Ent:getChildren()
+        points = 0
+        Gate = nil
+        Core = nil
+        if(playerTeam == 1) then
+            points = team1Points
+        else
+            points = team2Points
+        end
+            
+        for k,v in pairs(ContChildren) do
+            if(v:getClass()=="gmod_wire_gate")then Gate = v; break end
+        end       
+        if(not isValid(Gate))then
+            SoundHolo:emitSound("ambient/alarms/klaxon1.wav")
+            return false
+        end
+        
+        for k,v in pairs(Gate:getChildren()) do
+            if(v:getClass()=="dak_tankcore") then Core = v; break end
+        end       
+        if(not isValid(Core) or Core:getMass()<=1 or Core:getMass() > points)then
+            SoundHolo:emitSound("ambient/alarms/klaxon1.wav")
+            Ent:remove()
+            Gate:remove()
+            return false
+        else
+            SoundHolo:emitSound("Item.Materialize")
+            playerTeam = playersSorted[ply:getName()]
+            if(playerTeam == 1) then
+                team1Points = team1Points - Core:getMass()
+            else
+                team2Points = team2Points - Core:getMass()
+            end
+        end
+    end
+end)
+
+-- daktank weapon spawning handler
+hook.add( "PlayerSay", "Gamemode_WeaponSpawning", function(ply, text, plyteam, isdead)
+    if not isdead then
+        SoundHolo = holograms.create(player():getEyePos(), Angle(0,0,0), "models/hunter/blocks/cube025x025x025.mdl", Vector(0))
+        textin = string.split(text, "!")
+        options = {["pz"] = {"dak_panzerschreck",7},["jav"] = {"dak_javelin",20},["ptrs"] = {"dak_ptrs41",2}}
+        
+        if( textin[1] == "" ) then
+            command = string.split(string.lower(text)," ")
+            if command[1] == "!wep" then
+                local weapon = options[command[2]]
+                if (weapon != nil) then
+                    local player = string.split(ply:getName()," ")[1]
+                    local playerTeam = playersSorted[ply:getName()]
+                    if( playerTeam == 1 ) then
+                        if weapon[2] < team1Points then
+                            team1Points = team1Points - weapon[2]
+                            SoundHolo:emitSound("Item.Materialize")
+                            concmd("ulx give " .. player .. " " .. weapon[1]) 
+                        else
+                            SoundHolo:emitSound("ambient/alarms/klaxon1.wav")
+                        end
+                    else
+                        if weapon[2] < team2Points then
+                            team2Points = team2Points - weapon[2]
+                            SoundHolo:emitSound("Item.Materialize")
+                            concmd("ulx give " .. player .. " " .. weapon[1]) 
+                        else
+                            SoundHolo:emitSound("ambient/alarms/klaxon1.wav")
+                        end
+                    end
+                else
+                    SoundHolo:emitSound("ambient/alarms/warningbell1.wav")
+                end
+            end
+        end
+    end
+end)
+
+-- server code, handles all logic
+if SERVER then
+    function arrayLen(array) 
+        local size = 0
+        for _ in pairs(array) do size = size + 1 end
+        return size
+    end
+    caps = {{Vector(10861, 8612, -1882),3,{}},{Vector(7550, -4925, -2061),3,{}},{Vector(-9033, 9634, -2193),3,{}},{Vector(-10809, -7097, -2191),3,{}}}
+    caps = {{Vector(-9172, 9459, -2193),3,{}},{Vector(8912, -10506, -2191),3,{}}}
+    local pointSize = 1500
+    
+    team1 = {}
+    team2 = {}  
+    playersSorted = {}
+    team1Points = 5
+    team2Points = 5
+    winner = ""
+    teamPoints = {team1Points,team2Points}
+    pointCapPercents = {}
+    for c,v in pairs(caps) do 
+        pointCapPercents[c] = {0,0,0}
+    end
+    teams = {team1,team2,team1Points,team2Points,playersSorted} 
+    local players = find.allPlayers()
+    local teamColours = {Color(255, 0, 0),Color(0,0,255),Color(155,155,155)}
+    teamSize = arrayLen(players) / 2 
+    print(Color(0,255,0),"Teams of " .. teamSize .. " Players each chosen")
+    
+    for _,v in pairs(players) do
+        retry = true
+        while retry do
+            teamPick = math.random(1,2)
+            chosenTeam = teams[teamPick]
+            if arrayLen(chosenTeam)<teamSize then
+                retry = false
+                table.insert(chosenTeam,#chosenTeam,v)
+                playersSorted[v:getName()] = teamPick
+            end          
+        end
+    end
+    
+    
+    timer.create("Gamemode_CapCheck",1,0,function()
+        if winner == "" then
+            team1GainPoints = 0
+            team2GainPoints = 0
+            for c,v in pairs(caps) do
+                if v[2] == 1 then
+                    team1GainPoints = team1GainPoints + 1
+                elseif v[2] == 2 then
+                    team2GainPoints = team2GainPoints + 1
+                end
+            
+                local players = find.allPlayers()
+                nearbyPlayers = {0,0}
+                for _,p in pairs(players) do
+                    if(v[1]:getDistance(p:getPos()) < pointSize/2 and not isValid(p:getVehicle()) and p:isAlive()) then
+                        -- if player is on point execute below code
+                        local playerTeam = playersSorted[p:getName()]
+                        nearbyPlayers[playerTeam] = nearbyPlayers[playerTeam] + 1
+                        local players = find.allPlayers()
+                        local enemyTeamOnPoint = 0
+                        for _,k in pairs(players) do
+                            if v[1]:getDistance(k:getPos()) < pointSize/2 and not isValid(k:getVehicle()) and k:isAlive() and playersSorted[k:getName()] != playerTeam then
+                                enemyTeamOnPoint = 1
+                            end
+                        end
+                        if(v[2]!=playerTeam and enemyTeamOnPoint == 0) then
+                            pointCapPercents[c][playerTeam] = pointCapPercents[c][playerTeam] + 1
+                            caps[c][3] = pointCapPercents[c][playerTeam]
+                            if( pointCapPercents[c][playerTeam] >= 15 ) then 
+                                caps[c][2] = playerTeam 
+                                pointCapPercents[c][playerTeam] = 0
+                            end 
+                        end
+                    end
+                end
+                v[3] = pointCapPercents[c]          
+                for j,k in pairs(nearbyPlayers) do
+                    if k == 0 then
+                        pointCapPercents[c][j] = math.max(pointCapPercents[c][j] - 0.3,0)
+                    else
+                        
+                    end
+                end
+            end
+            if(team1GainPoints > team2GainPoints) then
+                team1Points = team1Points + 0.25 * team1GainPoints
+            elseif(team2GainPoints > team1GainPoints) then
+                team2Points = team2Points + 0.25 * team2GainPoints
+            end
+            if(team1Points > 75) then winner = "Blue Team"
+            elseif(team2Points > 75) then winner = "Red Team" end
+        end
+    end)
+    
+    timer.create( "Gamemode_NetInterface", 1, 0, function() -- redox wrote this
+        net.start("Gamemode_CapInformation")
+        net.writeTable(caps)
+        net.send(find.allPlayers())
+        teams = {team1,team2,team1Points,team2Points,playersSorted,winner}
+        net.start("Gamemode_TeamInformation")
+        net.writeTable(teams)
+        net.send(find.allPlayers())
+    end)
+    timer.create( "Gamemode_HoloUpdate", 1, 0, function()
+        holograms.removeAll()
+        for k, m in ipairs( caps ) do
+            local capPos = m[1]
+            local capHolo = holograms.create(capPos, Angle(0,0,90), "models/sprops/geometry/t_fdisc_24.mdl", Vector(1))
+            capHolo:setSize(Vector(pointSize,1,pointSize))
+            capHolo:setMaterial("models/wireframe")
+            capHolo:setColor(teamColours[m[2]])
+        end
+    end)
+end
+
+-- client code, handles hud
+if CLIENT then
+    -- initial variable designation
+    local p = player()
+    local caps = {}
+    local teams = {{},{},0,0}
+    local capFont = render.createFont( "Trebuchet18", 82, 4000 )
+    local hudCapFont = render.createFont( "Trebuchet18", 48, 4000 )
+    local alph = {"A","B","C","D","E","F","G"}
+    local x,y = render.getResolution()
+    local cx,cy = x/2,y/2
+    local mainCrosshairColor = Color(255,0,0)
+    local InfoFontBig = render.createFont( "Marlett", 64, 40)
+    
+    -- hides original hud
+    hook.add( "hudshoulddraw", "Player_HideHud", function( elem )
+       if elem == "CHudBattery" then return false end
+       if elem == "CHudCrosshair" then return false end
+       if elem == "CHudHealth" then return false end
+       if elem == "CHudAmmo" then return false end
+    end)
+    
+    -- hud code
+    hook.add("drawhud","Gamemode_HudDraw", function()
+        local teamColours = {Color(255, 0, 0),Color(0,0,255),Color(155,155,155)}
+        function drawBasedRoundedBox(r,x,y,w,h) render.drawRoundedBox(r,x-w/2,y-h/2,w,h) end
+        -- team drawing
+        local x,y = render.getResolution()
+        for k, v in pairs(teams[1]) do    
+            local nameLength = string.len(v:getName())
+            if nameLength > 7 then 
+                fontSize = 26 - 2 * math.abs(nameLength - 7)
+            else 
+                fontSize = 26 
+            end
+            local nameFont = render.createFont("Trebuchet18",fontSize)
+            render.setFont(nameFont)
+            render.drawSimpleText(x/14,y/10+(24*k),v:getName(),1,1)
+        end
+        for k, v in pairs(teams[2]) do    
+            nameLength = string.len(v:getName())
+            if nameLength > 7 then 
+                fontSize = 26 - 2 * math.abs(nameLength - 7)
+            else 
+                fontSize = 26 
+            end
+            nameFont = render.createFont("Trebuchet18",fontSize)
+            render.setFont(nameFont)
+            render.drawSimpleText(x/7,y/10+(24*k),v:getName(),1,1)
+        end
+        -- capture point drawing
+        for k, m in ipairs( caps ) do
+            local titlePos = m[1] + Vector(0,0,2500)
+            local scrPos = titlePos:toScreen()
+            local sx = scrPos.x
+            local sy = scrPos.y
+            local xstart = x/2-(48+(48*#caps))/2
+            local textPos = xstart+48*k
+            
+            render.setFont( capFont )            
+            render.setColor(Color(0,0,0,155))
+            drawBasedRoundedBox( 14, textPos, 24, 40, 40  )
+            drawBasedRoundedBox(14,sx,sy,70,70)
+            
+            render.setColor(Color(255, 0, 0, 155))
+            drawBasedRoundedBox( 14, textPos, 24, 40*m[3][1]/15, 40*m[3][1]/15 )
+            render.setColor(Color(0, 0, 255, 155))
+            drawBasedRoundedBox( 14, textPos, 24, 40*m[3][2]/15, 40*m[3][2]/15 )
+            
+            render.setColor(Color(255, 0, 0, 155))
+            drawBasedRoundedBox( 14, sx, sy, 70*m[3][1]/15, 70*m[3][1]/15 )
+            render.setColor(Color(0, 0, 255, 155))
+            drawBasedRoundedBox( 14, sx, sy, 70*m[3][2]/15, 70*m[3][2]/15 )
+            
+            
+            render.setColor( teamColours[m[2]] )
+            render.drawSimpleText( sx, sy, alph[k] , 1, 1 )
+            render.setFont( hudCapFont )
+            render.drawSimpleText( textPos, 0, alph[k],1)
+        end
+        
+        render.setColor(Color(0,0,0,155)) 
+        drawBasedRoundedBox(14,x/14,y/6,100,200)
+        drawBasedRoundedBox(14,x/7,y/6,100,200)
+        
+        render.setColor(Color(255,255,255,155))
+        render.setFont("Trebuchet24")
+        render.drawSimpleText(x/14,y/12,"Red Team",1,1) 
+        render.drawSimpleText(x/7,y/12,"Blue Team",1,1)
+        render.setFont("Trebuchet18")
+        render.drawSimpleText(x/14,y/10,"Points: " .. teams[3],1,1)  
+        render.drawSimpleText(x/7,y/10,"Points: " .. teams[4],1,1)
+        
+        if not isValid(p:getVehicle()) then
+            local mul = 1
+            local Crosshair = 0
+            if p:isSprinting() then mul = mul*1.5 end
+            if(p:isCrouching()) then mul = mul*(1/2) end
+            
+            render.setFont(InfoFontBig)
+            render.setColor(Color(0,0,0,155))   
+            render.drawRoundedBox(14,cx/10,cy/0.6,150,93)     
+            render.drawRoundedBox(14,cx/3,cy/0.6,150,93)
+                   
+            render.setColor(Color(255,255,255,155))
+            render.drawSimpleText(cx/5.5,cy/0.6,tostring(p:getHealth()),1)    
+            render.drawSimpleText(cx/2.45, cy/0.6,tostring(p:getArmor()),1)
+            render.setFont("HudSelectionText")
+            render.drawSimpleText(cx/5.5,cy/0.56,"Health",1)    
+            render.drawSimpleText(cx/2.45, cy/0.56,"Armor",1)
+            
+            local weapon = p:getActiveWeapon()
+            
+            if p:isAlive() and isValid(weapon) then
+                local InfoFontSmall = render.createFont( "Marlett", 15, 4000, true, false, false, false, false, false)
+                render.setFont(InfoFontSmall)
+                local sat = {[-1]="NONE",[2] = "AR2PB",[9] = "SMGG",[11] = "SDET"}
+                if weapon:clip1() > -1 then
+                    local wname = weapon:getPrintName()
+                    if wname == "FGM-148 Javelin" or wname == "M47 Dragon" then Crosshair=1 end
+                    if wname == "Panzerschreck" or wname == "M9 Bazooka" or wname == "RPG-28" or wname == "AT4" then Crosshair=2 end
+                    render.setColor(Color(0,0,0,155))   
+                    render.drawRoundedBox(12,cx+75,cy-20,120,40)  
+                    render.setColor(Color(255,255,255))
+                    render.drawSimpleText(cx+135,cy-20,tostring(weapon:getPrintName()),1)
+                    render.drawSimpleText(cx+95,cy-5,tostring(weapon:clip1()),1)
+                    render.drawSimpleText(cx+135,cy-5,tostring(weapon:maxClip1()),1)
+                    render.drawSimpleText(cx+175,cy-5,tostring(sat[weapon:getSecondaryAmmoType()]),1)
+                else
+                    Crosshair = 4
+                end  
+            end
+            if Crosshair==0 then
+                render.setColor(Color(0,0,0))
+                render.drawCircle(cx, cy, 12*mul) 
+                render.setColor(mainCrosshairColor)
+                render.drawCircle(cx, cy, 11.5*mul) 
+                render.setColor(mainCrosshairColor)
+            elseif Crosshair==1 then
+                render.setColor(Color(0,0,0))
+                render.drawRectOutline(cx-50.2,cy-50.2,102,102)
+                render.drawRect(cx-25.5,cy-1.6,51,3.2)
+                render.drawRect(cx-1.5,cy-8,3,16)
+                
+                render.setColor(mainCrosshairColor)
+                render.drawRectOutline(cx-50,cy-50,100,100)
+                render.drawRect(cx-25,cy-1,50,2)
+                render.drawRect(cx-1,cy-7.5,2,15)
+            elseif Crosshair == 2 then
+                render.setColor(Color(0,0,0))
+                render.drawRect(cx-25.5,cy-1.5,16,4)
+                render.drawRect(cx+10.5,cy-1.5,16,4) 
+                render.drawRect(cx-2,cy-0.5,3,17) 
+                
+                render.setColor(mainCrosshairColor)
+                render.drawRect(cx-25,cy-1,15,2)
+                render.drawRect(cx+10,cy-1,15,2) 
+                render.drawRect(cx-1,cy,2,15)    
+            else 
+                render.setColor(Color(0,0,0))
+                render.drawRect(cx-2,cy-10,4,20)
+                render.drawRect(cx-10,cy-2,20,4)
+                
+                render.setColor(mainCrosshairColor)
+                render.drawRect(cx-0.5,cy-10,2,20)
+                render.drawRect(cx-10,cy-0.5,20,2)
+            end  
+        end
+    end)
+    
+    -- moving values from server to client
+    net.receive( "Gamemode_CapInformation", function()
+        caps = net.readTable()
+    end) 
+    net.receive( "Gamemode_TeamInformation", function()
+        teams = net.readTable()
+    end) 
+end
