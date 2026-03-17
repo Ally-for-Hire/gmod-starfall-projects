@@ -2,238 +2,290 @@
 --@author Ally for Hire / Merydian9
 --@shared
 
--- Version 1.2.2
+-- Version 1.3.0
+
+local UPDATE_INTERVAL = 0.05
+local POSITION_EPS = 1
+local VELOCITY_EPS = 1
+local STALE_TRACK_TIME = 1.5
+local MAX_EXTRAPOLATION = 0.35
+local NET_ID_BITS = 16
+
+local function vectorDeltaLenSq(a, b)
+    local dx = a[1] - b[1]
+    local dy = a[2] - b[2]
+    local dz = a[3] - b[3]
+    return dx * dx + dy * dy + dz * dz
+end
 
 if SERVER then
-    -- SERVER VARIABLES HERE
     local positions = {}
     local velocities = {}
     local owners = {}
     local ids = {}
-    local lastUpdate = timer.curtime()
-    local count = 0
-    
-    -- SERVER FUNCTIONS HERE
-    local function handleInput (inputName, inputValue)
-        count = count + 1
-        if count < 4 then return end
-        count = 0
-        
-        positions = wire.ports.Position
-        velocities = wire.ports.Velocity
-        owners = wire.ports.Owner
-        ids = wire.ports.IDs
-        
-        if not (#positions == #velocities and #velocities == #owners and #owners == #ids) then return end
-        if (timer.curtime() - lastUpdate) < 0.1 then return end
-                
-        lastUpdate = timer.curtime()
-                
+    local lastUpdate = 0
+    local posEpsSq = POSITION_EPS * POSITION_EPS
+    local velEpsSq = VELOCITY_EPS * VELOCITY_EPS
+
+    local function datasetChanged(newPositions, newVelocities, newOwners, newIds)
+        local count = #newPositions
+        if count ~= #positions then return true end
+
+        for i = 1, count do
+            if newIds[i] ~= ids[i] then return true end
+            if newOwners[i] ~= owners[i] then return true end
+            if vectorDeltaLenSq(newPositions[i], positions[i]) > posEpsSq then return true end
+            if vectorDeltaLenSq(newVelocities[i], velocities[i]) > velEpsSq then return true end
+        end
+
+        return false
+    end
+
+    local function storeSnapshot(newPositions, newVelocities, newOwners, newIds)
+        positions = {}
+        velocities = {}
+        owners = {}
+        ids = {}
+
+        for i = 1, #newPositions do
+            positions[i] = newPositions[i]
+            velocities[i] = newVelocities[i]
+            owners[i] = newOwners[i]
+            ids[i] = newIds[i]
+        end
+    end
+
+    local function handleInput()
+        local now = timer.curtime()
+        if (now - lastUpdate) < UPDATE_INTERVAL then return end
+
+        local newPositions = wire.ports.Position or {}
+        local newVelocities = wire.ports.Velocity or {}
+        local newOwners = wire.ports.Owner or {}
+        local newIds = wire.ports.IDs or {}
+        local count = #newPositions
+
+        if not (count == #newVelocities and count == #newOwners and count == #newIds) then return end
+        if not datasetChanged(newPositions, newVelocities, newOwners, newIds) then return end
+
+        lastUpdate = now
+        storeSnapshot(newPositions, newVelocities, newOwners, newIds)
+
         net.start("updateValues")
-            net.writeInt(#positions, 16)
-            for i = 1, #positions do
+            net.writeInt(count, NET_ID_BITS)
+            net.writeFloat(now)
+            for i = 1, count do
                 net.writeVector(positions[i])
                 net.writeVector(velocities[i])
-                net.writeString(owners[i])
-                net.writeInt(ids[i], 16)
+                net.writeString(owners[i] or "")
+                net.writeInt(ids[i] or 0, NET_ID_BITS)
             end
-        net.send(owner(), true)       
+        net.send(owner(), true)
     end
-    
-    -- SERVER HOOKS HERE
+
     hook.add("input", "Update Inputs", handleInput)
     wire.adjustPorts({Position = "array", Velocity = "array", Owner = "array", IDs = "array"}, {})
-
 end
 
 if CLIENT then
     if player() ~= owner() then return end
-    
-    -- CLIENT VARIABLES HERE
+
     local box_size = 40
-    local last_update = 0
+    local targetBoxTextureSize = 64
     local type = 2
-    local times = {}
-    
-    if server_positions == nil then
-        server_positions = {}
-        server_velocities = {}
-        server_owners = {}
-        server_ids = {}
-    end
-    
+    local posEpsSq = POSITION_EPS * POSITION_EPS
+    local velEpsSq = VELOCITY_EPS * VELOCITY_EPS
+
+    local tracks = {}
+    local drawOrder = {}
+    local serverTime = 0
+    local lastUpdate = 0
+
     local col_black = Color(0, 0, 0)
     local col_black_noalpha = Color(0, 0, 0, 0)
-    local col_red = Color(255, 0, 0)
-    local col_green = Color(0, 255, 0)
-    local col_blue = Color(0, 0, 255)
     local col_white = Color(255, 255, 255)
-    
     local col_main = col_white
-    
+
     local font_main = render.createFont("FontAwesome", 16, 800, nil, nil, nil, true)
-    local font_small = render.createFont("FontAwesome", 12, 400, nil, nil, nil, true)
-    
-    local last_hud_update = 0
-    
-    -- CLIENT FUNCTIONS HERE
-    -- Updating variables
-    local function updateVariables ()
-        local count = net.readInt(16)
-        
-        local new_server_positions, new_server_velocities, new_server_owners, new_server_ids = {}, {}, {}, {}
-        
-        for i = 1, count do
-            new_server_positions[#new_server_positions + 1] = net.readVector()
-            new_server_velocities[#new_server_velocities + 1] = net.readVector()
-            new_server_owners[#new_server_owners + 1] = net.readString()
-            new_server_ids[#new_server_ids + 1] = net.readInt(16)
-        end
-        
-        for i = 1, count do
-            if server_positions[i] != new_server_positions[i] then
-                times[new_server_ids[i]] = timer.curtime()    
-            end
-        end
-        
-        server_positions, server_velocities, server_owners, server_ids = new_server_positions, new_server_velocities, new_server_owners, new_server_ids
-        
-        last_update = timer.curtime()
-    end
-    
-    -- Local overwrites
-    local drawCircle = render.drawCircle
+
     local drawRect = render.drawRect
     local drawLine = render.drawLine
-    local drawRectOutline = render.drawRectOutline
     local drawSimpleText = render.drawSimpleText
     local drawPoly = render.drawPoly
     local setColor = render.setColor
     local setFont = render.setFont
-    
-    -- Hud elements
-    local function drawRectOutlineCent (x, y, w, h, s) drawRectOutline(x - w / 2, y - h / 2, w, h, s) end
-    local function drawThickLine (x1, y1, x2, y2, thickness)
-        local perpDir = Vector( y2 - y1, -( x2 - x1 ), 0 ):getNormalized() * thickness / 2
-        local perpX = perpDir[1]
-        local perpY = perpDir[2]
-    
+    local setRenderTargetTexture = render.setRenderTargetTexture
+    local drawTexturedRect = render.drawTexturedRect
+    local selectRenderTarget = render.selectRenderTarget
+    local createRenderTarget = render.createRenderTarget
+    local clear = render.clear
+    local getResolution = render.getResolution
+
+    local function drawThickLine(x1, y1, x2, y2, thickness)
+        local dx = x2 - x1
+        local dy = y2 - y1
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len <= 0 then return end
+
+        local scale = thickness * 0.5 / len
+        local perpX = dy * scale
+        local perpY = -dx * scale
+
         drawPoly({
-            { x = x1 + perpX, y = y1 + perpY },
-            { x = x2 + perpX, y = y2 + perpY },
-            { x = x2 - perpX, y = y2 - perpY },
-            { x = x1 - perpX, y = y1 - perpY },
+            {x = x1 + perpX, y = y1 + perpY},
+            {x = x2 + perpX, y = y2 + perpY},
+            {x = x2 - perpX, y = y2 - perpY},
+            {x = x1 - perpX, y = y1 - perpY}
         })
     end
-    local function drawColoredBox (x, y, boxColor, outline)
-        if outline then
-            setColor(col_black)
-            drawRectOutlineCent(x, y, box_size + 2, box_size + 2, 1)
-            drawRectOutlineCent(x, y, box_size - 4, box_size - 4, 1)
+
+    local function drawRenderTarget(x, y, name, sizeX, sizeY)
+        if sizeY == nil then sizeY = sizeX end
+        setRenderTargetTexture(name)
+        drawTexturedRect(x - sizeX * 0.5, y - sizeY * 0.5, sizeX, sizeY)
+        setRenderTargetTexture()
+    end
+
+    local function updateVariables()
+        local count = net.readInt(NET_ID_BITS)
+        serverTime = net.readFloat()
+        lastUpdate = timer.curtime()
+
+        local seen = {}
+        for i = 1, count do
+            local pos = net.readVector()
+            local vel = net.readVector()
+            local ownerName = net.readString()
+            local id = net.readInt(NET_ID_BITS)
+            local track = tracks[id]
+
+            if not track then
+                track = {}
+                tracks[id] = track
+            end
+
+            local changed = (not track.pos)
+                or vectorDeltaLenSq(track.pos, pos) > posEpsSq
+                or vectorDeltaLenSq(track.vel, vel) > velEpsSq
+                or track.owner ~= ownerName
+
+            track.pos = pos
+            track.vel = vel
+            track.owner = ownerName
+            track.id = id
+            track.lastServerTime = serverTime
+            if changed then
+                track.lastChangeTime = serverTime
+            elseif not track.lastChangeTime then
+                track.lastChangeTime = serverTime
+            end
+
+            drawOrder[i] = id
+            seen[id] = true
         end
-        
-        setColor(boxColor)
-        drawRectOutlineCent(x, y, box_size, box_size, 2)    
-    end
-    local function drawRenderTarget(x, y, name, sizex, sizey)
-        if sizey == nil then sizey = sizex end
-        
-        render.setRenderTargetTexture(name)
-        render.drawTexturedRect(x - sizex / 2, y - sizey / 2, sizex, sizey)
-        render.setRenderTargetTexture()    
+
+        for i = count + 1, #drawOrder do
+            drawOrder[i] = nil
+        end
+
+        for id, track in pairs(tracks) do
+            if not seen[id] and (serverTime - (track.lastServerTime or serverTime)) > STALE_TRACK_TIME then
+                tracks[id] = nil
+            end
+        end
     end
 
-    -- Actual hud
-    local function renderHud ()
-        local x,y = render.getResolution()
-        local x,y = x / 2, y / 2
-        
-        local minDist = 9999
-        local minCoordsX, minCoordsY = 0, 0
+    local function getDisplayTrackPos(track, now)
+        local age = now - (track.lastServerTime or now)
+        if age < 0 then
+            age = 0
+        end
 
+        local extrapolation = math.min(age + UPDATE_INTERVAL * 0.5, MAX_EXTRAPOLATION)
+        local staleAge = now - (track.lastChangeTime or now)
+        if staleAge > STALE_TRACK_TIME then
+            extrapolation = 0
+        end
+
+        return track.pos + track.vel * extrapolation, staleAge
+    end
+
+    local function renderHud()
         setColor(col_main)
         setFont(font_main)
-        
-        for key = 1, #server_positions do
-            local dt = (timer.curtime() - times[server_ids[key]])
-            
-            local targetPos = server_positions[key] 
-            local targetInterpolatedPos = server_positions[key] + server_velocities[key] * (dt + 0.05)
-            local coords = targetPos:toScreen()
-            local interpolatedCoords = targetInterpolatedPos:toScreen()
-            
-            if dt < 0.5 then
-                coords = interpolatedCoords
+
+        local now = serverTime + (timer.curtime() - lastUpdate)
+        for i = 1, #drawOrder do
+            local id = drawOrder[i]
+            local track = tracks[id]
+            if track and track.pos and track.vel then
+                local displayPos, staleAge = getDisplayTrackPos(track, now)
+                local coords = displayPos:toScreen()
+
+                if coords.visible then
+                    drawRenderTarget(coords.x, coords.y, "targetBox", box_size, box_size)
+                    drawSimpleText(coords.x + box_size * 0.5 + 5, coords.y - box_size * 0.5, track.owner or "", TEXT_ALIGN.LEFT, TEXT_ALIGN.TOP)
+                    drawSimpleText(coords.x + box_size * 0.5 + 5, coords.y + box_size * 0.5, math.round(track.vel:getLength() / 17.6) .. "KM/H", TEXT_ALIGN.LEFT, TEXT_ALIGN.BOTTOM)
+
+                    if staleAge > 0.5 then
+                        drawLine(coords.x - 15, coords.y - 15, coords.x + 15, coords.y + 15)
+                        drawLine(coords.x + 15, coords.y - 15, coords.x - 15, coords.y + 15)
+                        render.drawRectOutline(coords.x - 15, coords.y - 15, 30, 30, 1)
+                    end
+                end
             end
-            
-            drawRenderTarget(coords.x, coords.y, "targetBox", 1024)
-            drawSimpleText(coords.x + box_size / 2 + 5, coords.y - box_size / 2, server_owners[key], TEXT_ALIGN.LEFT, TEXT_ALIGN.TOP)
-            drawSimpleText(coords.x + box_size / 2 + 5, coords.y + box_size / 2, math.round(server_velocities[key]:getLength() / 17.6) .. "KM/H", TEXT_ALIGN.LEFT, TEXT_ALIGN.BOTTOM)
-            
-            if dt > 0.5 then
-                render.drawLine(coords.x - 15, coords.y - 15, coords.x + 15, coords.y + 15)    
-                render.drawLine(coords.x + 15, coords.y - 15, coords.x - 15, coords.y + 15) 
-                render.drawRectOutline(coords.x - 15, coords.y - 15, 30, 30, 1)
-            end
-            
-        end    
-        
-        last_hud_update = timer.curtime()   
+        end
     end
-    
-    local function createStaticElements ()
-        -- Important screen variables
-        local x, y = render.getResolution()
-        local x, y = x / 2, y / 2
-        
-        -- Target box
-        render.createRenderTarget("targetBox")
-        render.selectRenderTarget("targetBox")
-        render.clear(col_black_noalpha)
+
+    local function createStaticElements()
+        local x, y = targetBoxTextureSize, targetBoxTextureSize
+        x = x * 0.5
+        y = y * 0.5
+
+        createRenderTarget("targetBox")
+        selectRenderTarget("targetBox")
+        clear(col_black_noalpha)
         setFont(font_main)
-        
+
         if type == 1 then
             setColor(col_black)
-            drawThickLine(x + box_size / 2 + 2, y + box_size / 2, x + box_size / 2 - 15 - 2, y + box_size / 2, 5)
-            drawThickLine(x + box_size / 2, y + box_size / 2 + 2, x + box_size / 2, y + box_size / 2 - 15 - 2, 5)
-            drawThickLine(x - box_size / 2 - 2, y + box_size / 2, x - box_size / 2 + 15 + 2, y + box_size / 2, 5)
-            drawThickLine(x - box_size / 2, y + box_size / 2 + 2, x - box_size / 2, y + box_size / 2 - 15 - 2, 5)
-            
-            drawThickLine(x + box_size / 2 + 2, y - box_size / 2, x + box_size / 2 - 15 - 2, y - box_size / 2, 5)
-            drawThickLine(x + box_size / 2, y - box_size / 2 - 2, x + box_size / 2, y - box_size / 2 + 15 + 2, 5)
-            drawThickLine(x - box_size / 2 - 2, y - box_size / 2, x - box_size / 2 + 15 + 2, y - box_size / 2, 5)
-            drawThickLine(x - box_size / 2, y - box_size / 2 - 2, x - box_size / 2, y - box_size / 2 + 15 + 2, 5)
-            
+            drawThickLine(x + box_size * 0.5 + 2, y + box_size * 0.5, x + box_size * 0.5 - 17, y + box_size * 0.5, 5)
+            drawThickLine(x + box_size * 0.5, y + box_size * 0.5 + 2, x + box_size * 0.5, y + box_size * 0.5 - 17, 5)
+            drawThickLine(x - box_size * 0.5 - 2, y + box_size * 0.5, x - box_size * 0.5 + 17, y + box_size * 0.5, 5)
+            drawThickLine(x - box_size * 0.5, y + box_size * 0.5 + 2, x - box_size * 0.5, y + box_size * 0.5 - 17, 5)
+
+            drawThickLine(x + box_size * 0.5 + 2, y - box_size * 0.5, x + box_size * 0.5 - 17, y - box_size * 0.5, 5)
+            drawThickLine(x + box_size * 0.5, y - box_size * 0.5 - 2, x + box_size * 0.5, y - box_size * 0.5 + 17, 5)
+            drawThickLine(x - box_size * 0.5 - 2, y - box_size * 0.5, x - box_size * 0.5 + 17, y - box_size * 0.5, 5)
+            drawThickLine(x - box_size * 0.5, y - box_size * 0.5 - 2, x - box_size * 0.5, y - box_size * 0.5 + 17, 5)
+
             setColor(col_main)
-            drawThickLine(x + box_size / 2, y + box_size / 2, x + box_size / 2 - 15, y + box_size / 2, 2)
-            drawThickLine(x + box_size / 2, y + box_size / 2, x + box_size / 2, y + box_size / 2 - 15, 2)
-            drawThickLine(x - box_size / 2, y + box_size / 2, x - box_size / 2 + 15, y + box_size / 2, 2)
-            drawThickLine(x - box_size / 2, y + box_size / 2, x - box_size / 2, y + box_size / 2 - 15, 2)
-            
-            drawThickLine(x + box_size / 2, y - box_size / 2, x + box_size / 2 - 15, y - box_size / 2, 2)
-            drawThickLine(x + box_size / 2, y - box_size / 2, x + box_size / 2, y - box_size / 2 + 15, 2)
-            drawThickLine(x - box_size / 2, y - box_size / 2, x - box_size / 2 + 15, y - box_size / 2, 2)
-            drawThickLine(x - box_size / 2, y - box_size / 2, x - box_size / 2, y - box_size / 2 + 15, 2)
+            drawThickLine(x + box_size * 0.5, y + box_size * 0.5, x + box_size * 0.5 - 15, y + box_size * 0.5, 2)
+            drawThickLine(x + box_size * 0.5, y + box_size * 0.5, x + box_size * 0.5, y + box_size * 0.5 - 15, 2)
+            drawThickLine(x - box_size * 0.5, y + box_size * 0.5, x - box_size * 0.5 + 15, y + box_size * 0.5, 2)
+            drawThickLine(x - box_size * 0.5, y + box_size * 0.5, x - box_size * 0.5, y + box_size * 0.5 - 15, 2)
+
+            drawThickLine(x + box_size * 0.5, y - box_size * 0.5, x + box_size * 0.5 - 15, y - box_size * 0.5, 2)
+            drawThickLine(x + box_size * 0.5, y - box_size * 0.5, x + box_size * 0.5, y - box_size * 0.5 + 15, 2)
+            drawThickLine(x - box_size * 0.5, y - box_size * 0.5, x - box_size * 0.5 + 15, y - box_size * 0.5, 2)
+            drawThickLine(x - box_size * 0.5, y - box_size * 0.5, x - box_size * 0.5, y - box_size * 0.5 + 15, 2)
         elseif type == 2 then
             setColor(col_black)
             drawThickLine(x - 2, y, x + 22, y, 5)
             drawThickLine(x + 20, y - 7, x + 20, y + 7, 5)
             drawRect(x - 4, y - 4, 8, 8)
-            
+
             setColor(col_main)
             drawThickLine(x, y, x + 20, y, 2)
             drawThickLine(x + 20, y - 5, x + 20, y + 5, 2)
             drawRect(x - 2.5, y - 2.5, 5, 5)
         end
-        --drawSimpleText(x + box_size / 2 + 5, y + box_size / 2, "VEL: ", TEXT_ALIGN.LEFT, TEXT_ALIGN.BOTTOM)
-        
-        -- Remove after, we only need to do this once
-        hook.remove("renderoffscreen", "Create Rendertargets")     
+
+        selectRenderTarget()
+        hook.remove("renderoffscreen", "Create Rendertargets")
     end
-    
-    -- CLIENT HOOKS HERE
+
     hook.add("drawhud", "Visualize Information", renderHud)
     hook.add("renderoffscreen", "Create Rendertargets", createStaticElements)
     net.receive("updateValues", updateVariables)
 end
-
