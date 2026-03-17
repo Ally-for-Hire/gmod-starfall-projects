@@ -53,16 +53,12 @@ if SERVER then
 end
 
 if CLIENT then
-    resx, resy = 0, 0
-    x, y = 0, 0
+    resx, resy = render.getResolution()
+    x, y = resx / 2, resy / 2
     staticDrawn = false
     
     local function drawHudHandler()
         if SHARED.P ~= SHARED.Driver then return end
-        if resx == 0 then
-            resx, resy = render.getResolution()
-            x, y = resx / 2, resy / 2
-        end
 
         -- Drawing stuff goes here, I wouldn't recommend doing much here
     end
