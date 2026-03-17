@@ -1,72 +1,73 @@
-# Starfall Projects Portfolio
+# GMOD Starfall Releases
 
-A portfolio of Starfall Lua systems for Garry's Mod. This repository mirrors the
-`garrysmod/data/starfall/` layout and collects production scripts, shared
-libraries, and demonstrations used for in-game automation, UI, and simulation.
+Production and experimental Starfall scripts for Garry's Mod, organized to mirror `garrysmod/data/starfall/`.
 
-## Highlights
-- Production-ready Starfall chips with a focus on performance in the sandboxed runtime
-- Modular Lua architecture with shared libraries in `allylib/`
-- HUD/UI, data visualization, and control logic for ACF and Wire setups
-- Multiplayer-friendly tooling with documented configuration and wiring guidance
+This README was refreshed to match the current folder contents.
 
-## Repository Layout
-- `allylib/` - Shared libraries used across projects
-- `examples/` - Focused demos, render tests, and HUD experiments
-- `information_systems/` - Universal datalink and server/client link components
-- `misc/` - Standalone utilities and prototypes
-- `defunct/` - Archived or superseded scripts kept for reference
-- Root files - Primary chips and controllers
+## What’s here
+- **Root chips**: primary release scripts (controllers, mobility, camera, targeting)
+- **`allylib/`**: shared libraries used by multiple chips
+- **`information_systems/`**: datalink/server-link families and client counterparts
+- **`examples/`**: focused demos and HUD/render experiments
+- **`misc/`**: standalone helpers and utilities
+- **`defunct/`**: archived/superseded scripts kept for reference
 
-## Project Index
-### Root Scripts
-- `2024_physical_gun_controller.txt` - Physical gun controller utilities.
-- `ally_mobility_hours.txt` - Mobility brain for tracked and wheeled ACF vehicles.
-- `merydian's_camera_chip.txt` - Camera management with filtering for HUD pipelines.
-- `merydian's_sf_gun_controller.txt` - Server-side ACF gun controller with curve-fit
-  ballistics and Wire I/O helpers.
+## Current inventory
+- Root scripts: **5**
+- `allylib/`: **7**
+- `information_systems/`: **8**
+- `examples/`: **10**
+- `misc/`: **4**
+- `defunct/`: **7**
 
-### Information Systems (`information_systems/`)
-- `universal1_datalink_node.txt` - Universal1 datalink node.
-- `universal1_datalink_root.txt` - Universal1 datalink root.
-- `universal2_datalink_combo.txt` - Universal2 datalink combo.
-- `universal3_datalink_combo_version_2.txt` - Universal3 datalink combo v2.
-- `universal4_serverlink.txt` - Universal4 server link.
-- `universal4_serverlink_client-end.txt` - Universal4 client-side link.
-- `universal5_itk.txt` - Universal5 ITK server component.
-- `universal5_itk_client.txt` - Universal5 ITK client component.
+---
 
-### Libraries (`allylib/`)
-- `acf_ballistics_lib.txt` - Ballistics utilities for ACF.
-- `animation_class.txt` - Lightweight animation helper for HUDs.
-- `curve-fitting_ballistics_algorithm.txt` - Curve-fit solver for ACF guns and
-  time-to-impact estimates.
-- `general_algorithms.txt` - Miscellaneous reusable algorithms.
-- `helpful_hud_functions.txt` - HUD drawing helpers and render-target utilities.
-- `projectile_library.txt` - Projectile helper routines.
-- `simple_server-side_wire_helper.txt` - Declarative Wire I/O helper with cached
-  values and triggers.
+## Root scripts
+- `2024_physical_gun_controller.txt`
+- `ally_mobility_hours.txt`
+- `aps_auto_target_takedown.txt`
+- `merydian's_camera_chip.txt`
+- `merydian's_sf_gun_controller.txt`
 
-### Examples (`examples/`)
-- `bounding_box_relative_to_camera_render.txt` - Render bounding boxes relative to
-  camera space.
-- `fixed-cam_test_2.txt` - Fixed camera test.
-- `jet_gunsight_test.txt` - Jet gunsight test.
-- `jet_gunsight_test2.txt` - Jet gunsight test variant.
-- `merydian's_hud_base.txt` - Base HUD example.
-- `radar_data_visualizer.txt` - Radar data visualization example.
-- `render_target_example.txt` - Render target example.
-- `renderview_test.txt` - RenderView test.
+## Libraries (`allylib/`)
+- `acf_ballistics_lib.txt`
+- `animation_class.txt`
+- `curve-fitting_ballistics_algorithm.txt`
+- `general_algorithms.txt`
+- `helpful_hud_functions.txt`
+- `projectile_library.txt`
+- `simple_server-side_wire_helper.txt`
 
-### Misc (`misc/`)
-- `all_wheels_unhittable.txt` - Utility to toggle wheel hittability.
-- `handheld_rpg.txt` - Handheld RPG utility.
-- `prop_to_starfall_hologram.txt` - Convert props to Starfall holograms.
-- `quadratic_target_model_generator.txt` - Quadratic target model generator.
+## Information systems (`information_systems/`)
+- `universal1_datalink_node.txt`
+- `universal1_datalink_root.txt`
+- UNRELEASED: `universal2_datalink_combo.txt`
+- UNRELEASED: `universal3_datalink_combo_version_2.txt`
+- UNRELEASED: `universal4_serverlink.txt`
+- UNRELEASED: `universal4_serverlink_client-end.txt`
+- UNRELEASED: `universal5_itk.txt`
+- UNRELEASED: `universal5_itk_client.txt`
 
-### Defunct (`defunct/`)
-Archived or superseded scripts retained for reference.
-- `2024_cam_controller_and_hud.txt`
+## Examples (`examples/`)
+- `fixed-cam_test_2.txt`
+- `jet_gunsight_test_1.txt`
+- `jet_gunsight_test_2.txt`
+- `merydian's_hud_base.txt`
+- `radar_data_visualizer.txt`
+- `render_target_example.txt`
+- `resizing_target_box_test.txt`
+- `simple_tank_hud_example.txt`
+- `viewcam_example_1.txt`
+- `viewcam_example_2.txt`
+
+## Misc (`misc/`)
+- `all_wheels_unhittable.txt`
+- `handheld_rpg.txt`
+- `prop_to_starfall_hologram.txt`
+- `quadratic_target_model_generator.txt`
+
+## Defunct (`defunct/`)
+- `2024+2_cam_controller_and_hud.txt`
 - `2027_projectile_aimbot_computer.txt`
 - `2028_projectile_aimbot_computer.txt`
 - `acf3_rws_controller.txt`
@@ -74,26 +75,21 @@ Archived or superseded scripts retained for reference.
 - `modern_hud_beta.txt`
 - `modern_hud_beta_varlib.txt`
 
-## Using the Projects
-1. Copy the desired `.txt` file into `garrysmod/data/starfall/` and keep the
-   relative folder structure.
-2. Load it in-game through a Starfall chip.
-3. Review the header comments for configuration, wiring, and dependencies.
+---
 
-## Includes and Dependencies
-- Many scripts use `--@include` from `allylib/`; keep folder names and paths intact.
-- If you copy a single script that references `allylib`, also copy the required
-  library files.
-- Some systems have server/client pairs; install and link both sides as documented
-  at the top of each file.
+## Usage
+1. Place/keep these files under `garrysmod/data/starfall/` with the same relative paths.
+2. Spawn/open a Starfall chip in-game and load the target script.
+3. If a script uses `--@include`, make sure referenced library files are present.
+4. For paired systems (server/client), load both components.
+
+## Notes
+- This repo includes `.git/` metadata when cloned locally; script inventories above ignore that internal VCS data.
+- Some scripts are examples or legacy references; use `defunct/` at your own discretion.
 
 ## Links
-- GitHub: https://github.com/Ally-for-Hire
-- Google Drive (legacy releases): https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
-- YouTube: https://www.youtube.com/@allyforhire
-- Steam: https://steamcommunity.com/id/alliedmerydian/
-- Discord: @allyfh
-
-## Contact
-Open to feedback, collaboration, and commissions. If you are exploring Starfall,
-building GMod tooling, or hiring for scripting roles, feel free to reach out.
+- GitHub: <https://github.com/Ally-for-Hire>
+- Legacy Drive folder: <https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto>
+- YouTube: <https://www.youtube.com/@allyforhire>
+- Steam: <https://steamcommunity.com/id/alliedmerydian/>
+- Discord: `@allyfh`
