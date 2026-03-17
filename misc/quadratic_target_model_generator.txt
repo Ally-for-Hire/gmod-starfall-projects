@@ -1,124 +1,200 @@
 --@name Quadratic Target Model Generator
 --@shared
 
-function transposeMatrix (a) -- assuming a 3x3 matrix
+local MAX_SAMPLES = 8
+local MIN_SAMPLE_DT = 0.01
+
+local function determinant3(a)
+    return a[1][1] * (a[2][2] * a[3][3] - a[2][3] * a[3][2])
+        - a[1][2] * (a[2][1] * a[3][3] - a[2][3] * a[3][1])
+        + a[1][3] * (a[2][1] * a[3][2] - a[2][2] * a[3][1])
+end
+
+local function inverse3(a)
+    local det = determinant3(a)
+    if math.abs(det) < 1e-9 then return nil end
+
+    local invDet = 1 / det
     return {
-        {a[1][1], a[2][1], a[3][1]}, 
-        {a[1][2], a[2][2], a[3][2]}, 
-        {a[1][3], a[2][3], a[3][3]}
+        {
+            (a[2][2] * a[3][3] - a[2][3] * a[3][2]) * invDet,
+            (a[1][3] * a[3][2] - a[1][2] * a[3][3]) * invDet,
+            (a[1][2] * a[2][3] - a[1][3] * a[2][2]) * invDet
+        },
+        {
+            (a[2][3] * a[3][1] - a[2][1] * a[3][3]) * invDet,
+            (a[1][1] * a[3][3] - a[1][3] * a[3][1]) * invDet,
+            (a[1][3] * a[2][1] - a[1][1] * a[2][3]) * invDet
+        },
+        {
+            (a[2][1] * a[3][2] - a[2][2] * a[3][1]) * invDet,
+            (a[1][2] * a[3][1] - a[1][1] * a[3][2]) * invDet,
+            (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * invDet
+        }
     }
 end
-function minorDeterminant (a) -- assuming a 2x2 matrix
-    return (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-end
-function majorDeterminant (a) -- assuming a 3x3 matrix
-    local term1 = a[2][2] * a[3][3] - a[2][3] * a[3][2]
-    local term2 = a[2][1] * a[3][3] - a[2][3] * a[3][1]
-    local term3 = a[2][1] * a[3][2] - a[2][2] * a[3][1]
-    return a[1][1] * term1 - a[1][2] * term2 + a[1][3] * term3
-end
-function allMinorDeterminants (array) -- assuming a 3x3 matrix
-    -- for every index of the matrix, exclude row and column
-    -- use other 4 numbers and get minor determinant and create a new 3x3 matrix of them    
 
-    return {} -- new 3x3 of all minor determinants in order
-end
-function getCofactors (a) -- assuming a 3x3 matrix filled with minor determinants
+local function mulMat3Vec3(a, b)
     return {
-        {a[1][1], -a[1][2], a[1][3]}, 
-        {-a[2][1], a[2][2], -a[2][3]}, 
-        {a[3][1], -a[3][2], a[3][3]}
+        a[1][1] * b[1] + a[1][2] * b[2] + a[1][3] * b[3],
+        a[2][1] * b[1] + a[2][2] * b[2] + a[2][3] * b[3],
+        a[3][1] * b[1] + a[3][2] * b[2] + a[3][3] * b[3]
     }
-end
-function divideMatricesbyDeterminant (a1, det) -- assuming a 3x3 matrix by a 3x3 matrix
-    local newTable = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}
-    for y = 1, 3 do
-        for x = 1, 3 do
-            newTable[x][y] = a1[x][y] / det
-        end
-    end
-    return newTable
-end
-function multiplyMatrices (a1, a2) -- assuming a 3x3 matrix by a 3x1 matrix
-    local result = {}
-    for i = 1, 3 do
-        result[i] = 0
-        for j = 1, 3 do
-            result[i] = result[i] + a1[i][j] * a2[j]
-        end
-    end
-    return result
-end
-function invertMatrix (a) -- assuming a 3x3 matrix
-    local determinant = majorDeterminant(a) -- Step 1: Compute the major determinant
-    if (determinant == 0) then
-        print("No Inverse") 
-        return nil
-    end
-
-    local transposedMatrix = transposeMatrix(a) -- Step 1.1: Transpose for Step 2
-    local allMinorMatrix = allMinorDeterminants(transposed) -- Step 2: Compute the matrix of minors determinants
-
-    local cofactorMatrix = getCofactors(allMinorMatrix) -- Step 3: Get the cofactors.
-    local inverse = divideMatricesbyDeterminant(cofactorMatrix, determinant) -- Step 4: divide the cofactor by the major determinant
-
-    return inverse
 end
 
 if SERVER then
-    -- Wire port configuration
-    wire.adjustPorts({TargetPos = "vector", TargetVel = "vector"}, {HitPos = "vector"})
+    wire.adjustPorts(
+        {
+            TargetPos = "vector",
+            TargetVel = "vector",
+            PredictionTime = "number",
+            SampleTime = "number",
+            Reset = "number"
+        },
+        {
+            HitPos = "vector",
+            ModelPos = "vector",
+            ModelVel = "vector",
+            ModelAccel = "vector",
+            SampleCount = "number",
+            Valid = "number"
+        }
+    )
 
-    -- Variables to store data
-    local TIMES = {}
-    local POSITIONS = {}
-    local VELOCITIES = {}
-    local startTime = timer.curtime()
-    local predTime = 0.1
+    local samples = {}
+    local modelValid = false
+    local modelPos = Vector()
+    local modelVel = Vector()
+    local modelAccel = Vector()
+    local predictedPos = Vector()
 
-    -- Hook for processing input
-    hook.add("input", "process_input", function(name, value)
-        if value == nil then return end
+    local function clearSamples()
+        samples = {}
+        modelValid = false
+        modelPos = Vector()
+        modelVel = Vector()
+        modelAccel = Vector()
+        predictedPos = Vector()
+        wire.ports.HitPos = predictedPos
+        wire.ports.ModelPos = modelPos
+        wire.ports.ModelVel = modelVel
+        wire.ports.ModelAccel = modelAccel
+        wire.ports.SampleCount = 0
+        wire.ports.Valid = 0
+    end
 
-        -- Capture the current position, velocity, and time
-        table.insert(POSITIONS, wire.ports.TargetPos)
-        table.insert(VELOCITIES, wire.ports.TargetVel)
-        table.insert(TIMES, timer.curtime())
-
-        -- Keep the last 4 data points
-        if #TIMES > 4 then
-            table.remove(TIMES, 1)
-            table.remove(POSITIONS, 1)
-            table.remove(VELOCITIES, 1)
+    local function pushSample(pos, vel, t)
+        local last = samples[#samples]
+        if last and math.abs(t - last.t) < MIN_SAMPLE_DT then
+            last.pos = pos
+            last.vel = vel
+            last.t = t
+            return
         end
 
-        -- Ensure we have enough data points
-        if #TIMES < 4 then return end
-
-        -- Calculate relative times
-        local startTime = TIMES[1]
-        local t1 = 0
-        local t2 = TIMES[2] - startTime
-        local t3 = TIMES[3] - startTime
-        local t4 = TIMES[4] - startTime
-
-        -- Construct the time matrix and position matrix
-        local tMatrix = {
-            {t2^3, t2^2, 1},
-            {t3^3, t3^2, 1},
-            {t4^3, t4^2, 1}
+        samples[#samples + 1] = {
+            pos = pos,
+            vel = vel,
+            t = t
         }
-        local posMatrix = {
-            POSITIONS[2] - VELOCITIES[2] * t2,
-            POSITIONS[3] - VELOCITIES[3] * t3,
-            POSITIONS[4] - VELOCITIES[4] * t4
+
+        while #samples > MAX_SAMPLES do
+            table.remove(samples, 1)
+        end
+    end
+
+    local function fitModel()
+        if #samples < 2 then
+            modelValid = false
+            modelPos = Vector()
+            modelVel = Vector()
+            modelAccel = Vector()
+            return
+        end
+
+        local refTime = samples[#samples].t
+        local ata = {
+            {0, 0, 0},
+            {0, 0, 0},
+            {0, 0, 0}
         }
-        
-        local inverse = invertMatrix(tMatrix)
-        local coefs = multiplyMatrices(inverse, posMatrix)
+        local atb = {Vector(), Vector(), Vector()}
 
-        if inverse == nil then return end
+        for i = 1, #samples do
+            local sample = samples[i]
+            local t = sample.t - refTime
+            local posRow = {1, t, t * t}
+            local velRow = {0, 1, 2 * t}
 
-        local badGuy = coefs[1] * predTime^3 + coefs[2] * predTime^2 + coefs[3] * predTime + POSITIONS[1]
+            for r = 1, 3 do
+                atb[r] = atb[r] + sample.pos * posRow[r] + sample.vel * velRow[r]
+
+                for c = 1, 3 do
+                    ata[r][c] = ata[r][c] + posRow[r] * posRow[c] + velRow[r] * velRow[c]
+                end
+            end
+        end
+
+        local inverse = inverse3(ata)
+        if not inverse then
+            modelValid = false
+            modelPos = Vector()
+            modelVel = Vector()
+            modelAccel = Vector()
+            return
+        end
+
+        local coefs = mulMat3Vec3(inverse, atb)
+        modelPos = coefs[1]
+        modelVel = coefs[2]
+        modelAccel = coefs[3] * 2
+        modelValid = true
+    end
+
+    local function updateOutputs()
+        fitModel()
+
+        local predictionTime = wire.ports.PredictionTime or 0
+        if not modelValid then
+            predictedPos = wire.ports.TargetPos or Vector()
+        else
+            predictedPos = modelPos
+                + modelVel * predictionTime
+                + modelAccel * (0.5 * predictionTime * predictionTime)
+        end
+
+        wire.ports.HitPos = predictedPos
+        wire.ports.ModelPos = modelPos
+        wire.ports.ModelVel = modelVel
+        wire.ports.ModelAccel = modelAccel
+        wire.ports.SampleCount = #samples
+        wire.ports.Valid = modelValid and 1 or 0
+    end
+
+    hook.add("input", "quadratic_target_model_generator", function(name, value)
+        if name == "Reset" then
+            if value ~= 0 then
+                clearSamples()
+            else
+                updateOutputs()
+            end
+            return
+        end
+
+        if name == "TargetPos" or name == "TargetVel" or name == "SampleTime" then
+            local samplePos = wire.ports.TargetPos or Vector()
+            local sampleVel = wire.ports.TargetVel or Vector()
+            local sampleTime = wire.ports.SampleTime or 0
+
+            if sampleTime == 0 then
+                sampleTime = timer.curtime()
+            end
+
+            pushSample(samplePos, sampleVel, sampleTime)
+        end
+
+        updateOutputs()
     end)
+
+    clearSamples()
 end
