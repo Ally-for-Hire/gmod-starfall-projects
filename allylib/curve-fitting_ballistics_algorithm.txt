@@ -47,14 +47,20 @@ local TIME_SCALE = 1
 
 local TARGET_SAMPLE_POS_EPS = 1
 local TARGET_SAMPLE_VEL_EPS = 1
+local TRACK_ACCEL_FILTER_TIME = 0.15
 
-local TRACK_ACCEL         = Vector()
-local TRACK_TURN_OMEGA    = Vector()
 local TRACK_SAMPLE_POS    = Vector()
 local TRACK_SAMPLE_VEL    = Vector()
 local TRACK_SAMPLE_TIME   = 0
-local TRACK_SAMPLE_DT     = 0
+local TRACK_ACCEL         = Vector()
+local TRACK_CURRENT_AGE   = 0
+local LAST_INTERCEPT_TTA  = 0
+local BASE_SAMPLE_ENTITY  = nil
+local BASE_SAMPLE_VEL     = Vector()
+local BASE_SAMPLE_ACCEL   = Vector()
+local BASE_SAMPLE_TIME    = 0
 local ZERO_VEC            = Vector()
+local UPDATE_TOKEN        = 0
 
 local GEN_ANGLE        = 0          -- degrees
 local GEN_STEP_DEFAULT = 0.01      -- degrees
@@ -72,6 +78,10 @@ local D_MAX   = 0
 local D_SCALE = 1
 
 local MAX_TIME = 6                  -- s, safety cap
+local INTERCEPT_TIME_EPS = 0.005
+local MIN_INTERCEPT_TIME = 0.01
+local INTERCEPT_TIME_BIAS = 0.1
+local GUN_UPDATE_INTERVAL = 1
 
 local DEBUG_ENABLED = false
 
@@ -230,6 +240,31 @@ local function interpolateTimeToDistance(T)
     return lerp(a.distance, b.distance, frac)
 end
 
+local function interpolateTimeToAngle(T)
+    local count = #DATASET
+    if count <= 0 then return 0 end
+    if T <= DATASET[1].time then return DATASET[1].angle or 0 end
+    if T >= DATASET[count].time then return DATASET[count].angle or 0 end
+
+    local low = 1
+    local high = count
+    while high - low > 1 do
+        local mid = math.floor((low + high) * 0.5)
+        if DATASET[mid].time < T then
+            low = mid
+        else
+            high = mid
+        end
+    end
+
+    local a = DATASET[low]
+    local b = DATASET[high]
+    local span = b.time - a.time
+    if span <= 0 then return a.angle or 0 end
+    local frac = (T - a.time) / span
+    return lerp(a.angle or 0, b.angle or 0, frac)
+end
+
 local function clampValue(value, minValue, maxValue)
     if value < minValue then return minValue end
     if value > maxValue then return maxValue end
@@ -240,143 +275,152 @@ local function vectorDeltaLen(a, b)
     return (a - b):getLength()
 end
 
-local function getTangentialAccel(vel, accel)
-    local speed = vel:getLength()
-    if speed <= 0 then
-        return ZERO_VEC
-    end
-
-    local dir = vel / speed
-    return dir * dir:dot(accel)
-end
-
-local function rotateAroundAxis(vec, axis, ang)
-    local cosAng = math.cos(ang)
-    local sinAng = math.sin(ang)
-    return vec * cosAng
-        + axis:cross(vec) * sinAng
-        + axis * axis:dot(vec) * (1 - cosAng)
-end
-
-local function predictConstantTurnOffset(vel, turnOmega, accel, dt)
-    if dt <= 0 then
-        return ZERO_VEC
-    end
-
-    local omegaMag = turnOmega:getLength()
-    local speed = vel:getLength()
-    if speed <= 0 then
-        return ZERO_VEC
-    end
-
-    local tangentialAccel = getTangentialAccel(vel, accel)
-    if omegaMag <= 0 then
-        return vel * dt + tangentialAccel * (0.5 * dt * dt)
-    end
-
-    local axis = turnOmega / omegaMag
-    local velParallel = axis * axis:dot(vel)
-    local velPerp = vel - velParallel
-
-    local ang = omegaMag * dt
-    local sinAng = math.sin(ang)
-    local cosAng = math.cos(ang)
-    local arcOffset = (
-        velParallel * dt
-        + velPerp * (sinAng / omegaMag)
-        + axis:cross(velPerp) * ((1 - cosAng) / omegaMag)
-    )
-
-    return arcOffset + tangentialAccel * (0.5 * dt * dt)
-end
-
-local function advanceTargetState(pos, vel, accel, turnOmega, dt)
+local function advanceTargetState(pos, vel, accel, dt)
     if dt <= 0 then
         return pos, vel
     end
 
-    local nextPos = pos + predictConstantTurnOffset(vel, turnOmega, accel, dt)
-    local omegaMag = turnOmega:getLength()
-    local speed = vel:getLength()
-    if speed <= 0 then
-        return nextPos, vel
-    end
-
-    local tangentialAccel = getTangentialAccel(vel, accel)
-    if omegaMag <= 0 then
-        return nextPos, vel + tangentialAccel * dt
-    end
-
-    local axis = turnOmega / omegaMag
-    local rotatedVel = rotateAroundAxis(vel, axis, omegaMag * dt)
-    local rotatedSpeed = rotatedVel:getLength()
-    if rotatedSpeed <= 0 then
-        return nextPos, rotatedVel
-    end
-
-    local tangentialDelta = tangentialAccel:dot(vel / speed) * dt
-    local nextVel = rotatedVel + (rotatedVel / rotatedSpeed) * tangentialDelta
+    local nextPos = pos + vel * dt + accel * (0.5 * dt * dt)
+    local nextVel = vel + accel * dt
     return nextPos, nextVel
+end
+
+local function predictTargetOffset(vel, accel, dt)
+    if dt <= 0 then
+        return ZERO_VEC
+    end
+
+    return vel * dt + accel * (0.5 * dt * dt)
+end
+
+local function getEffectiveBallisticDistance(relPos, t)
+    local x = relPos[1]
+    local y = relPos[2]
+    local z = relPos[3]
+    local horizSq = x * x + y * y
+    local effectiveSq = horizSq + z * z
+
+    if z ~= 0 and t > 0 then
+        effectiveSq = effectiveSq + z * GZ * t * t
+    end
+
+    if effectiveSq <= 0 then
+        return 0
+    end
+
+    return math.sqrt(effectiveSq)
+end
+
+local function interpolateDistanceToAngle(D)
+    local count = #DATASET
+    if count <= 0 then return 0 end
+    if D <= DATASET[1].distance then return DATASET[1].angle or 0 end
+    if D >= DATASET[count].distance then return DATASET[count].angle or 0 end
+
+    local low = 1
+    local high = count
+    while high - low > 1 do
+        local mid = math.floor((low + high) * 0.5)
+        if DATASET[mid].distance < D then
+            low = mid
+        else
+            high = mid
+        end
+    end
+
+    local a = DATASET[low]
+    local b = DATASET[high]
+    local span = b.distance - a.distance
+    if span <= 0 then return a.angle or 0 end
+    local frac = (D - a.distance) / span
+    return lerp(a.angle or 0, b.angle or 0, frac)
 end
 
 local function resetTargetTracking()
     TRACK_ACCEL = ZERO_VEC
-    TRACK_TURN_OMEGA = ZERO_VEC
     TRACK_SAMPLE_POS = ZERO_VEC
     TRACK_SAMPLE_VEL = ZERO_VEC
     TRACK_SAMPLE_TIME = 0
-    TRACK_SAMPLE_DT = 0
+    TRACK_RAW_POS = ZERO_VEC
+    TRACK_RAW_VEL = ZERO_VEC
+    TRACK_RAW_TIME = 0
+    TRACK_CURRENT_AGE = 0
+    LAST_INTERCEPT_TTA = 0
+    BASE_SAMPLE_ENTITY = nil
+    BASE_SAMPLE_VEL = ZERO_VEC
+    BASE_SAMPLE_ACCEL = ZERO_VEC
+    BASE_SAMPLE_TIME = 0
+end
+
+local function updateBaseTracking(base, now)
+    if not base or not base:isValid() then
+        BASE_SAMPLE_ENTITY = nil
+        BASE_SAMPLE_VEL = ZERO_VEC
+        BASE_SAMPLE_ACCEL = ZERO_VEC
+        BASE_SAMPLE_TIME = 0
+        return ZERO_VEC, ZERO_VEC
+    end
+
+    local baseVel = base:getVelocity() or ZERO_VEC
+    if BASE_SAMPLE_ENTITY ~= base or BASE_SAMPLE_TIME <= 0 then
+        BASE_SAMPLE_ENTITY = base
+        BASE_SAMPLE_VEL = baseVel
+        BASE_SAMPLE_ACCEL = ZERO_VEC
+        BASE_SAMPLE_TIME = now
+        return baseVel, BASE_SAMPLE_ACCEL
+    end
+
+    local dt = now - BASE_SAMPLE_TIME
+    if dt > 0 then
+        BASE_SAMPLE_ACCEL = (baseVel - BASE_SAMPLE_VEL) / dt
+    else
+        BASE_SAMPLE_ACCEL = ZERO_VEC
+    end
+
+    BASE_SAMPLE_ENTITY = base
+    BASE_SAMPLE_VEL = baseVel
+    BASE_SAMPLE_TIME = now
+    return baseVel, BASE_SAMPLE_ACCEL
 end
 
 local function updateTargetTracking(targetPos, targetVel, now)
+    local sampleTime = now
     if TRACK_SAMPLE_TIME <= 0 then
         TRACK_SAMPLE_POS = targetPos
         TRACK_SAMPLE_VEL = targetVel
-        TRACK_SAMPLE_TIME = now
+        TRACK_SAMPLE_TIME = sampleTime
         TRACK_ACCEL = ZERO_VEC
-        TRACK_TURN_OMEGA = ZERO_VEC
-        return targetPos, targetVel
+        TRACK_CURRENT_AGE = 0
+        return targetPos, targetVel, TRACK_CURRENT_AGE
     end
 
-    if vectorDeltaLen(targetPos, TRACK_SAMPLE_POS) > TARGET_SAMPLE_POS_EPS
-    or vectorDeltaLen(targetVel, TRACK_SAMPLE_VEL) > TARGET_SAMPLE_VEL_EPS then
-        local dt = now - TRACK_SAMPLE_TIME
+    local sampleChanged =
+        vectorDeltaLen(targetPos, TRACK_SAMPLE_POS) > TARGET_SAMPLE_POS_EPS
+        or vectorDeltaLen(targetVel, TRACK_SAMPLE_VEL) > TARGET_SAMPLE_VEL_EPS
+
+    if sampleChanged then
+        local lastVel = TRACK_SAMPLE_VEL
+        local dt = sampleTime - TRACK_SAMPLE_TIME
         if dt > 0 then
-            TRACK_SAMPLE_DT = dt
-            TRACK_ACCEL = (targetVel - TRACK_SAMPLE_VEL) / dt
-
-            local lastSpeed = TRACK_SAMPLE_VEL:getLength()
-            local curSpeed = targetVel:getLength()
-            local rawTurnOmega = ZERO_VEC
-            if lastSpeed > 0 and curSpeed > 0 then
-                local prevDir = TRACK_SAMPLE_VEL / lastSpeed
-                local curDir = targetVel / curSpeed
-                local crossDir = prevDir:cross(curDir)
-                local crossLen = crossDir:getLength()
-                if crossLen > 0 then
-                    local axis = crossDir / crossLen
-                    local turnAngle = math.acos(clampValue(prevDir:dot(curDir), -1, 1))
-                    rawTurnOmega = axis * (turnAngle / dt)
-                end
-            end
-            TRACK_TURN_OMEGA = rawTurnOmega
-        else
-            TRACK_ACCEL = ZERO_VEC
-            TRACK_TURN_OMEGA = ZERO_VEC
+            local nextAccel = (targetVel - lastVel) / dt
+            local accelAlpha = dt / (TRACK_ACCEL_FILTER_TIME + dt)
+            TRACK_ACCEL = TRACK_ACCEL + (nextAccel - TRACK_ACCEL) * accelAlpha
         end
-
         TRACK_SAMPLE_POS = targetPos
         TRACK_SAMPLE_VEL = targetVel
-        TRACK_SAMPLE_TIME = now
-        return advanceTargetState(targetPos, targetVel, TRACK_ACCEL, TRACK_TURN_OMEGA, TRACK_SAMPLE_DT * 0.5)
+        TRACK_SAMPLE_TIME = sampleTime
     end
 
-    local age = now - TRACK_SAMPLE_TIME + TRACK_SAMPLE_DT * 0.5
+    local age = now - TRACK_SAMPLE_TIME
     if age < 0 then
         age = 0
     end
-    return advanceTargetState(targetPos, targetVel, TRACK_ACCEL, TRACK_TURN_OMEGA, age)
+    TRACK_CURRENT_AGE = age
+    local currentPos, currentVel = advanceTargetState(TRACK_SAMPLE_POS, TRACK_SAMPLE_VEL, TRACK_ACCEL, age)
+    return currentPos, currentVel, TRACK_CURRENT_AGE
 end
+
+local buildAimPos
 
 local function solveIntercept(base, targetPos, targetVel)
     if not VALIDGUN or not isValid(I.Gun) then
@@ -391,25 +435,50 @@ local function solveIntercept(base, targetPos, targetVel)
 
     local gun = I.Gun
     local gpos = gun:getMassCenterW() or gun:getPos()
-    local dist = gpos:getDistance(targetPos)
-    local bvel = base:getVelocity() or ZERO_VEC
     local baseToGun = targetPos - gpos
-    local low = 0
+    local now = timer.curtime()
+    local bvel = updateBaseTracking(base, now)
+    local low = MIN_INTERCEPT_TIME
     local high = 6
-    local baseTime = ballisticTime(dist) or 0
+    local baseTime = ballisticTime(math.sqrt(baseToGun[1] * baseToGun[1] + baseToGun[2] * baseToGun[2])) or 0
+    if baseTime > 0 then
+        local refineDistance = getEffectiveBallisticDistance(baseToGun, baseTime)
+        local refineTime = ballisticTime(refineDistance) or 0
+        if refineTime > baseTime then
+            baseTime = refineTime
+        end
+    end
     if baseTime > 0 then
         high = baseTime * 1.5
         if high < 0.5 then high = 0.5 end
         if high > 6 then high = 6 end
     end
+    if LAST_INTERCEPT_TTA > 0 then
+        local seededHigh = LAST_INTERCEPT_TTA * 1.5
+        if seededHigh > high then
+            high = seededHigh
+        end
+    end
+    if high > 6 then
+        high = 6
+    end
 
     local function evalDiff(t)
-        local tSq = t * t
-        local drop = Vector(0, 0, 0.5 * GZ * tSq)
-        local targetOffset = predictConstantTurnOffset(targetVel, TRACK_TURN_OMEGA, TRACK_ACCEL, t) - bvel * t
-        local tlen = (baseToGun + targetOffset + drop):getLength()
+        local baseOffset = bvel * t
+        local targetOffset = predictTargetOffset(targetVel, TRACK_ACCEL, t) - baseOffset
+        local futureRel = baseToGun + targetOffset
+        local tlen = getEffectiveBallisticDistance(futureRel, t)
         local slen = ballisticDistance(t)
         return slen - tlen
+    end
+
+    local function buildSolution(t)
+        local baseOffset = bvel * t
+        local targetOffset = predictTargetOffset(targetVel, TRACK_ACCEL, t) - baseOffset
+        local futureRel = baseToGun + targetOffset
+        local predPos = targetPos + predictTargetOffset(targetVel, TRACK_ACCEL, t)
+        local aimPos = buildAimPos(gpos, futureRel, t)
+        return predPos, aimPos, t
     end
 
     local slenHigh = ballisticDistance(high)
@@ -436,11 +505,13 @@ local function solveIntercept(base, targetPos, targetVel)
     end
 
     if diffHigh < 0 then
-        return targetPos, targetPos, 0
+        local predPos, aimPos, tta = buildSolution(high)
+        LAST_INTERCEPT_TTA = tta
+        return predPos, aimPos, tta
     end
 
     local tta = (low + high) * 0.5
-    while high - low > 0.05 do
+    while high - low > INTERCEPT_TIME_EPS do
         local nextT = nil
         if diffHigh ~= diffLow then
             local secant = high - diffHigh * (high - low) / (diffHigh - diffLow)
@@ -464,12 +535,69 @@ local function solveIntercept(base, targetPos, targetVel)
         tta = (low + high) * 0.5
     end
 
-    local ttaSq = tta * tta
-    local drop = Vector(0, 0, 0.5 * GZ * ttaSq)
-    local targetOffset = predictConstantTurnOffset(targetVel, TRACK_TURN_OMEGA, TRACK_ACCEL, tta) - bvel * tta
-    local predPos = targetPos + predictConstantTurnOffset(targetVel, TRACK_TURN_OMEGA, TRACK_ACCEL, tta)
-    local aimPos = targetPos + targetOffset + drop
+    tta = tta + INTERCEPT_TIME_BIAS
+    local predPos, aimPos = buildSolution(tta)
+    LAST_INTERCEPT_TTA = tta
     return predPos, aimPos, tta
+end
+
+buildAimPos = function(gpos, futureRel, tta)
+    local horizX = futureRel[1]
+    local horizY = futureRel[2]
+    local horizLen = math.sqrt(horizX * horizX + horizY * horizY)
+
+    if horizLen > 0 then
+        local basePitch = interpolateTimeToAngle(tta)
+        local aimOffsetZ = futureRel[3] + math.tan(basePitch) * horizLen
+        return Vector(
+            gpos[1] + horizX,
+            gpos[2] + horizY,
+            gpos[3] + aimOffsetZ
+        )
+    end
+
+    if futureRel[3] >= 0 then
+        return gpos + Vector(0, 0, 10000)
+    end
+    return gpos + Vector(0, 0, -10000)
+end
+
+local function solveStaticIntercept(base, targetPos)
+    if not VALIDGUN or not isValid(I.Gun) then
+        return targetPos, targetPos, 0
+    end
+    if not base or not base:isValid() then
+        return targetPos, targetPos, 0
+    end
+    if not ballisticDistance then
+        return targetPos, targetPos, 0
+    end
+
+    local gun = I.Gun
+    local gpos = gun:getMassCenterW() or gun:getPos()
+    local baseToGun = targetPos - gpos
+    local now = timer.curtime()
+    local bvel = updateBaseTracking(base, now)
+    local horizLen = math.sqrt(baseToGun[1] * baseToGun[1] + baseToGun[2] * baseToGun[2])
+    local tta = ballisticTime(horizLen) or 0
+    if tta <= 0 then
+        return targetPos, targetPos, 0
+    end
+
+    for _ = 1, 2 do
+        local futureRel = baseToGun - bvel * tta
+        local effectiveDistance = getEffectiveBallisticDistance(futureRel, tta)
+        local nextTta = ballisticTime(effectiveDistance) or tta
+        if math.abs(nextTta - tta) <= INTERCEPT_TIME_EPS then
+            tta = nextTta
+            break
+        end
+        tta = nextTta
+    end
+
+    local futureRel = baseToGun - bvel * tta
+    local aimPos = buildAimPos(gpos, futureRel, tta)
+    return targetPos, aimPos, tta
 end
 
 ------------------------------------------------------------
@@ -490,7 +618,7 @@ local function finishDataset()
         end)
 
         local lookup = {
-            { distance = 0, time = 0 }
+            { distance = 0, time = 0, angle = 0 }
         }
 
         for i = 1, #DATASET do
@@ -561,7 +689,7 @@ local function stepDatasetGeneration(token)
                     GEN_MAX_DISTANCE = d
                 end
                 if d > GEN_LAST_DISTANCE + MIN_DISTANCE_STEP then
-                    DATASET[#DATASET + 1] = { distance = d, time = t }
+                    DATASET[#DATASET + 1] = { distance = d, time = t, angle = math.rad(GEN_ANGLE) }
                     GEN_LAST_DISTANCE = d
                 end
             end
@@ -627,7 +755,8 @@ local function computeMuzzleDistance(gun)
     return 0
 end
 
-function updateValues()
+function updateValues(token)
+    if token ~= UPDATE_TOKEN then return end
     if not VALIDGUN then return end
 
     local gun = I.Gun
@@ -665,7 +794,9 @@ function updateValues()
         generateDataset()
     end
 
-    timer.simple(0.5, updateValues)
+    timer.simple(GUN_UPDATE_INTERVAL, function()
+        updateValues(token)
+    end)
 end
 
 ------------------------------------------------------------
@@ -673,6 +804,7 @@ end
 ------------------------------------------------------------
 
 local function initGun(value)
+    UPDATE_TOKEN = UPDATE_TOKEN + 1
     VALIDGUN = false
     resetTargetTracking()
     if not isValid(value) then
@@ -687,7 +819,7 @@ local function initGun(value)
     VALIDGUN = true
     I.Gun    = value
     dprint("initGun: gun set, class=", value:getClass())
-    updateValues()
+    updateValues(UPDATE_TOKEN)
 end
 
 -- used by your controller (@include + require)
@@ -706,8 +838,17 @@ end
 
 function CFBA_SolveIntercept(base, targetPos, targetVel)
     local now = timer.curtime()
-    local currentPos, currentVel = updateTargetTracking(targetPos or ZERO_VEC, targetVel or ZERO_VEC, now)
-    return solveIntercept(base, currentPos, currentVel)
+    local currentPos, currentVel, currentAge = updateTargetTracking(
+        targetPos or ZERO_VEC,
+        targetVel or ZERO_VEC,
+        now
+    )
+    local predPos, aimPos, tta = solveIntercept(base, currentPos, currentVel)
+    return predPos, aimPos, tta, currentAge
+end
+
+function CFBA_SolveStatic(base, targetPos)
+    return solveStaticIntercept(base, targetPos or ZERO_VEC)
 end
 
 ------------------------------------------------------------
