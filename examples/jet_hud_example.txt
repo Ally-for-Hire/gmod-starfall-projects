@@ -1,0 +1,125 @@
+--@name Jet Hud Example
+--@author Ally for Hire / Merydian9
+--@shared
+
+if SERVER then
+    wire.adjustInputs({"BombPos","Base","Throttle","Targets","CamPos","Altitude","Weapon","WeaponAmmo","Filter"},{"VECTOR","ENTITY","NORMAL","NORMAL","NORMAL","NORMAL","STRING","NORMAL","ARRAY"})
+    wireInputs = {}
+
+    function wireInput( name, value ) 
+        if( value ~= nil ) then
+            wireInputs[name] = value
+        end 
+    end
+    
+    hook.add( "input", "", wireInput )
+    
+    timer.create("netSend",0.5,0,function()
+        net.start("JetHud_sendWireData")
+        net.writeTable(wireInputs)
+        net.send(find.allPlayers())
+    end)
+end
+if CLIENT then    
+    wireData = {}     
+    CamPos = 1
+    Altitude = 0
+    Targets = 0
+    Throttle = 0    
+    Base = chip()  
+    Filter = {}
+    Weapon = "Loading..."
+    WeaponAmmo = 0
+    BombPos = Vector(0,0,0)
+    hook.add("drawhud", "drawstuff", function()
+        local x,y = render.getResolution()
+        local x,y = x/2,y/2
+        local cockpitFont = render.createFont("Thick", 21, 2000, false, true, true, true, true, true)
+        local thirdPersonFont = render.createFont("ChatFont", 36, 4000)
+              
+        angles = chip():getAngles()
+        pos = chip():getPos()
+        ar = Angle(math.round(angles.p/90, 1),math.round(angles.y/90, 1),math.round(angles.r/90, 1))
+        if( CamPos == 1 ) then
+            render.setFont(cockpitFont)
+            render.setColor(Color(0,255,0))
+            render.drawCircle(x,y,10)
+            render.drawLine(x,y-10,x,y-25)
+            render.drawLine(x+9,y+1,x+24,y+1)
+            render.drawLine(x+9,y-1,x+24,y-1)
+            render.drawLine(x-9,y+1,x-24,y+1)
+            render.drawLine(x-9,y-1,x-24,y-1)
+            
+            render.drawLine(x-150,y,x-350,y)
+            render.drawLine(x-350,y,x-350,y+15)
+            render.drawLine(x+150,y,x+350,y)
+            render.drawLine(x+350,y,x+350,y+15)
+            
+            render.drawLine(x+25,y-125,x+100,y-125)
+            render.drawLine(x+100,y-125,x+100,y-100)
+            render.drawLine(x-25,y-125,x-100,y-125)
+            render.drawLine(x-100,y-125,x-100,y-100)
+            
+            render.drawLine(x+75,y+125,x+100,y+125)
+            render.drawLine(x+100,y+125,x+100,y+100)
+            render.drawLine(x-75,y+125,x-100,y+125)
+            render.drawLine(x-100,y+125,x-100,y+100)
+            
+            render.drawLine(x+25,y+125,x+50,y+125)
+            render.drawLine(x-25,y+125,x-50,y+125)
+            
+            render.drawRectOutline(x-300,y-100,100,25)
+            render.drawSimpleText(x-250,y-100,tostring(math.round(Throttle*100,0)),1,0)
+            render.drawRectOutline(x+200,y-100,100,25)
+            render.drawSimpleText(x+250,y-100,tostring(math.round(Altitude,0)),1,0)
+            
+            render.drawSimpleText(x-425, y+50,"    1.0x")
+            render.drawSimpleText(x-425, y+25,"Y: " .. tostring(ar.y))
+            render.drawSimpleText(x-425, y+0,"R: " .. tostring(ar.r))
+            render.drawSimpleText(x-425, y-25,"P: " .. tostring(ar.p))
+            
+            render.drawSimpleText(x-125, y-85, "90",1,1)
+            render.drawSimpleText(x+125, y-85, "90",1,1)
+            render.drawSimpleText(x-125, y+85, "-90",1,1)
+            render.drawSimpleText(x+125, y+85, "-90",1,1)
+            
+            render.drawLine(x+35,y+125*ar.p,x+100,y+125*ar.p)
+            render.drawLine(x-35,y+125*ar.p,x-100,y+125*ar.p)
+            
+            render.drawSimpleText(x+250,y+100, Weapon .. ": " .. WeaponAmmo,1,1)
+            render.drawSimpleText(x-250,y+100,"04:29:58Z",1,1)
+            
+            tracePos = trace.trace(Base:getPos() - Base:getForward()*250, Base:getPos() - Base:getForward()*99999,Filter)["HitPos"]
+            screenCoords = tracePos:toScreen()
+            sx = screenCoords.x
+            sy = screenCoords.y
+            render.drawLine(sx-15,sy,sx-30,sy)
+            render.drawLine(sx+15,sy,sx+30,sy)
+            render.drawLine(sx,sy,sx+7,sy+15)
+            render.drawLine(sx,sy,sx-7,sy+15)
+            render.drawLine(sx+7,sy+15,sx+15,sy)
+            render.drawLine(sx-7,sy+15,sx-15,sy)
+        else
+            render.setFont(thirdPersonFont)
+            render.drawSimpleText(x/12,y/10,"THR:         " .. tostring(math.round(Throttle*100,0)),0)
+            render.drawSimpleText(x/12,y/6,"ALT:          " .. math.round(Altitude,0),0)
+            render.drawSimpleText(x/12,y/4.3,Weapon .. ":         " .. WeaponAmmo,0)
+            render.drawSimpleText(x/12,y/3.3,"TGS" .. ":          " .. Targets,0)
+            render.setColor(Color(255,255,255))
+            render.drawCircle(x,y,20)
+        end
+    end)
+    
+    net.receive("JetHud_sendWireData", function()
+        wireData = net.readTable()
+        CamPos = wireData["CamPos"]
+        Altitude = wireData["Altitude"]
+        Throttle = wireData["Throttle"]
+        Base = wireData["Base"]
+        Filter = wireData["Filter"]
+        Weapon = wireData["Weapon"]
+        WeaponAmmo = wireData["WeaponAmmo"]
+        Targets = wireData["Targets"]
+        BombPos = wireData["BombPos"]
+    end)
+end
