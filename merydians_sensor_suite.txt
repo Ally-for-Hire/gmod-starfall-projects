@@ -1,0 +1,220 @@
+--@name Merydian's Sensor Suite
+--@author Ally for Hire / Merydian9
+
+--@include allylib/helpful_hud_functions.txt
+--@include allylib/simple_server-side_wire_helper.txt
+
+--@shared
+
+require("allylib/helpful_hud_functions.txt")
+require("allylib/simple_server-side_wire_helper.txt")
+
+if SERVER then
+    updateInputs("Sensors:ARRAY")
+    updateOutputs("Position:ARRAY Velocity:ARRAY Owner:ARRAY IDs:ARRAY Times:ARRAY")
+
+    local STALE_TIME = 0.5
+    local THINK_RATE = 0.02
+    local IRST_ID_OFFSET = 200
+    local IRST_TRACE_RANGE = 999999
+    local IRST_TRACE_START = 300
+    local IRST_HULL_EXTENT = 10
+    local ZERO_VEC = Vector()
+    local IRST_HULL_MIN = Vector(-IRST_HULL_EXTENT, -IRST_HULL_EXTENT, -IRST_HULL_EXTENT)
+    local IRST_HULL_MAX = Vector(IRST_HULL_EXTENT, IRST_HULL_EXTENT, IRST_HULL_EXTENT)
+
+    local cachedRadars = {}
+    local cachedIrsts = {}
+    local contraptions = {}
+    local irstRanges = {}
+    local irstDirs = {}
+    local irstPositions = {}
+
+    local function isAceRadar(ent)
+        local class = ent:getClass()
+        return class == "ace_searchradar" or class == "ace_trackingradar"
+    end
+
+    local function pruneInvalidSensors(list)
+        for i = #list, 1, -1 do
+            if not isValid(list[i].ent) then
+                table.remove(list, i)
+            end
+        end
+    end
+
+    local function updateContact(id, pos, vel, owner, time)
+        if id == nil or pos == nil then return end
+
+        local existing = contraptions[id]
+        if existing then
+            if existing[4] > time then return end
+            existing[1] = pos
+            existing[2] = vel
+            existing[3] = owner
+            existing[4] = time
+            return
+        end
+
+        contraptions[id] = {pos, vel, owner, time}
+    end
+
+    local function readRadarContacts(time)
+        if #cachedRadars == 0 then return end
+
+        pruneInvalidSensors(cachedRadars)
+
+        for _, radar in pairs(cachedRadars) do
+            local wl = radar.wl
+            local positions = wl.Position
+            local ids = radar.useAceIds and wl.ID or wl.IDs
+
+            if not positions or not ids then
+                continue
+            end
+
+            local velocities = wl.Velocity
+            local owners = wl.Owner
+
+            for i, pos in pairs(positions) do
+                local id = ids[i]
+                if id == nil then continue end
+
+                local vel = velocities and velocities[i] or ZERO_VEC
+                local owner = owners and owners[i] or nil
+
+                updateContact(id, pos, vel, owner, time)
+            end
+        end
+    end
+
+    local function readIrstContacts(time)
+        if #cachedIrsts == 0 then return end
+
+        pruneInvalidSensors(cachedIrsts)
+
+        for _, entry in pairs(cachedIrsts) do
+            local ent = entry.ent
+            local wl = entry.wl
+            if not isValid(ent) then continue end
+
+            local ids = wl.ID
+            local angles = wl.Angle
+            if not ids or not angles then
+                continue
+            end
+
+            local origin = ent:getPos()
+
+            for i, id in pairs(ids) do
+                if id == nil then continue end
+                local irstId = id + IRST_ID_OFFSET
+
+                local ang = angles[i]
+                if not ang then continue end
+                local worldAng = ent:localToWorldAngles(-ang)
+                local fw = worldAng:getForward()
+
+                local cachedDir = irstDirs[irstId]
+                if cachedDir then
+                    local avgDir = cachedDir + fw
+                    if avgDir:getLength() > 0 then
+                        fw = avgDir:getNormalized()
+                    end
+                end
+                irstDirs[irstId] = fw
+
+                local traceRange = irstRanges[irstId] or IRST_TRACE_RANGE
+                if traceRange < IRST_TRACE_START then
+                    traceRange = IRST_TRACE_START
+                end
+
+                local startPos = origin + fw * IRST_TRACE_START
+                local endPos = origin + fw * traceRange
+                local tr = trace.hull(startPos, endPos, IRST_HULL_MIN, IRST_HULL_MAX, nil, nil, nil, true)
+                --if not tr.Hit then continue end
+
+                local hitPos = tr.HitPos + fw * IRST_HULL_EXTENT
+                if not hitPos then continue end
+
+                local cachedPos = irstPositions[irstId]
+                if cachedPos then
+                    hitPos = (cachedPos + hitPos) * 0.5
+                end
+                irstPositions[irstId] = hitPos
+
+                local hitDist = origin:getDistance(hitPos)
+                local stored = irstRanges[irstId]
+                if not stored or hitDist < stored then
+                    irstRanges[irstId] = hitDist
+                end
+
+                updateContact(irstId, hitPos, ZERO_VEC, "IRST TRACK", time)
+            end
+        end
+    end
+
+    local function cacheSensors(arr)
+        cachedRadars = {}
+        cachedIrsts = {}
+
+        if not arr then return end
+
+        for _, ent in pairs(arr) do
+            if not isValid(ent) then continue end
+
+            local wl = ent:getWirelink()
+            if not wl then continue end
+
+            if ent:getClass() == "ace_irst" then
+                cachedIrsts[#cachedIrsts + 1] = {ent = ent, wl = wl}
+            else
+                cachedRadars[#cachedRadars + 1] = {
+                    ent = ent,
+                    wl = wl,
+                    useAceIds = isAceRadar(ent),
+                }
+            end
+        end
+    end
+
+    Inputs.Sensors:addTrigger(cacheSensors)
+
+    timer.create("MerydianSensorSuite_Think", THINK_RATE, 0, function()
+        local time = timer.curtime()
+
+        readRadarContacts(time)
+        readIrstContacts(time)
+
+        local outPosition = {}
+        local outVelocity = {}
+        local outOwner = {}
+        local outIDs = {}
+        local outTimes = {}
+        local gIndex = 1
+
+        for id, data in pairs(contraptions) do
+            if time - data[4] >= STALE_TIME then
+                contraptions[id] = nil
+                irstRanges[id] = nil
+                irstDirs[id] = nil
+                irstPositions[id] = nil
+                continue
+            end
+
+            outPosition[gIndex] = data[1]
+            outVelocity[gIndex] = data[2] or ZERO_VEC
+            outOwner[gIndex] = data[3]
+            outIDs[gIndex] = id
+            outTimes[gIndex] = data[4]
+
+            gIndex = gIndex + 1
+        end
+
+        Outputs.Position:update(outPosition)
+        Outputs.Velocity:update(outVelocity)
+        Outputs.Owner:update(outOwner)
+        Outputs.IDs:update(outIDs)
+        Outputs.Times:update(outTimes)
+    end)
+end
