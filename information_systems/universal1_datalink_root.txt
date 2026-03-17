@@ -124,7 +124,7 @@ elseif CLIENT and CLIENTDISPLAY then
     local currentMissileTracks = {}
     local currentTracks = {currentVehicleTracks, currentMissileTracks}
     
-    local lib = require("public_release_projects/public_lib/helpful_hud_functions.txt")
+    local lib = require("../allylib/helpful_hud_functions.txt")
     
     local fontsmall = render.createFont("", 15, 1200, nil, nil, nil, true)
     

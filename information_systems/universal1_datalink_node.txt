@@ -133,7 +133,7 @@ elseif CLIENT and CLIENTDISPLAY then
     local lastUpdate = 0
     local resx, resy = 0, 0
     local drawStatic = true
-    local lib = require("public_release_projects/public_lib/helpful_hud_functions.txt")
+    local lib = require("../allylib/helpful_hud_functions.txt")
     
     local fontbig = render.createFont("", 30, 1200, nil, nil, nil, true)
     local fontmed = render.createFont("", 20, 1200, nil, nil, nil, true)

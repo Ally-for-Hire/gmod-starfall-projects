@@ -1,9 +1,9 @@
 --@name Fixed-Cam Test 2
 --@author Ally for Hire / Merydian9
---@include public_release_projects/allylib/simple_server-side_wire_helper.txt
+--@include ../allylib/simple_server-side_wire_helper.txt
 --@shared
 
-require("public_release_projects/allylib/simple_server-side_wire_helper.txt")
+require("../allylib/simple_server-side_wire_helper.txt")
 
 local INPUTS   = {}
 local USER     = player()

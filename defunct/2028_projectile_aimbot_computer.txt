@@ -51,7 +51,7 @@ local attemptingFire = false
 local targetValue, dt, time = 0, 0, 0
 local maxDeltaT, maxDeltaD = 0.01, 5
 
-local ballisticslib = require("../public_lib/acf_ballistics_lib.txt")
+local ballisticslib = require("../allylib/acf_ballistics_lib.txt")
 
 ------------------------------------------------------------
 -- Main Calculation Logic
