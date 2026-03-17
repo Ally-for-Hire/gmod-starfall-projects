@@ -1,0 +1,35 @@
+--@name GTABLE Example
+--@include lib/gtable_library.txt
+--@server
+
+--[[ Example:
+1. Save both this chip and `lib/gtable_library.txt` on the same Starfall processor.
+2. Run; each chip instance logs table updates coming from other chips.
+]]--
+
+-- pull in the GTABLE library
+require("lib/gtable_library.txt")
+
+local PREFIX = "GTABLE_DEMO"
+local gt = GTABLE:new(PREFIX)
+
+-- Set our own entry (keys are per-chip by default)
+gt:setSelf({
+    id = chip():entIndex(),
+    time = timer.curtime()
+})
+
+-- React to every update that is not from us
+gt:onChange(function(tbl, key, value, source)
+    -- ignore the callback for our own writes
+    if key == chip():entIndex() then return end
+
+    if key ~= nil then
+        print(string.format("[%s] key=%s source=%s value=%s", PREFIX, tostring(key), tostring(source), tostring(value)))
+    else
+        print(string.format("[%s] bulk change source=%s size=%d", PREFIX, tostring(source), gt:count()))
+    end
+end, true)
+
+-- ask the network for the current snapshot
+gt:pull()
