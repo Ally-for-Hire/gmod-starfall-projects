@@ -1,0 +1,713 @@
+--@name GTABLE Library
+--@description Expression2-style global table helper with automatic remote syncing between Starfall chips.
+--@server
+
+--[[
+GTABLE emulates Wiremod's Expression2 gTable for Starfall.
+
+Usage:
+  local gt = GTABLE:new("SCOREBOARD")
+  gt:modify("round", {kills = 3, deaths = 1})
+  gt:onChange(function(data, key, value, source)
+      print("[GTABLE]", source, key, value and type(value) or "<nil>")
+  end)
+
+Highlights:
+- One singleton controller per prefix per chip; repeated `new()` calls reuse the same instance.
+- `onChange` supports multiple listeners and returns an unsubscribe closure.
+- `setSelf` / `clearSelf` manage a per-chip entry (default key: chip():entIndex()).
+- `isReady()` becomes true once the table is usable; the first ready state triggers a change with `source == "ready"`.
+]]--
+
+--[[ Quick reference
+1) Create / reuse a group:
+   local gt = GTABLE:new("MY_GROUP")
+
+2) Local writes:
+   gt:modify("score", 10)
+   gt:modifyBulk({mode = "live", maxPlayers = 8})
+
+3) Per-chip storage:
+   gt:setSelf({hp = 100})
+   gt:clearSelf()
+
+4) Inspection helpers:
+   gt:get("score")
+   gt:exists("score")
+   gt:keys()
+   gt:count()
+
+5) Reacting to updates:
+   local stop = gt:onChange(function(tbl, key, value, source)
+       print("change", source, key, value)
+   end)
+   -- call `stop()` to unsubscribe
+]]--
+
+if not SERVER then return end
+
+GTABLE = GTABLE or {}
+GTABLE.__index = GTABLE
+
+GTABLE._registry = GTABLE._registry or {}
+GTABLE._idCounter = GTABLE._idCounter or 0
+GTABLE._nodeIdCounter = GTABLE._nodeIdCounter or 0
+
+local function nextId()
+    GTABLE._idCounter = GTABLE._idCounter + 1
+    return GTABLE._idCounter
+end
+
+local function nextNodeId()
+    GTABLE._nodeIdCounter = GTABLE._nodeIdCounter + 1
+    return GTABLE._nodeIdCounter
+end
+
+local function assertAlive(self)
+    if not self._alive then
+        error(string.format("GTABLE '%s' has been destroyed", self.prefix), 2)
+    end
+end
+
+local function deepeq(a, b, depth)
+    if a == b then return true end
+    if type(a) ~= type(b) then return false end
+    if type(a) ~= "table" then return false end
+    depth = (depth or 0) + 1
+    if depth > 6 then return false end
+    for k, v in pairs(a) do
+        if not deepeq(v, b[k], depth) then return false end
+    end
+    for k in pairs(b) do
+        if a[k] == nil then return false end
+    end
+    return true
+end
+
+local function wipeTable(tbl)
+    for k in pairs(tbl) do
+        tbl[k] = nil
+    end
+end
+
+local function shallow_copy(tbl)
+    local out = {}
+    for k, v in pairs(tbl or {}) do
+        out[k] = v
+    end
+    return out
+end
+
+local function callListener(self, cb, key, value, source)
+    local ok, err = pcall(cb, self.internalValues, key, value, source)
+    if not ok then
+        print(string.format("[GTABLE:%s] onChange callback error: %s", self.prefix, err))
+    end
+end
+
+local function makeStamp(self)
+    self._seq = self._seq + 1
+    return {
+        time = timer.curtime(),
+        writer = self._nodeId,
+        seq = self._seq
+    }
+end
+
+local function compareStamp(a, b)
+    if a == b then return 0 end
+    if a == nil then return -1 end
+    if b == nil then return 1 end
+
+    local aTime = tonumber(a.time) or 0
+    local bTime = tonumber(b.time) or 0
+    if aTime ~= bTime then
+        return aTime > bTime and 1 or -1
+    end
+
+    local aWriter = tonumber(a.writer) or 0
+    local bWriter = tonumber(b.writer) or 0
+    if aWriter ~= bWriter then
+        return aWriter > bWriter and 1 or -1
+    end
+
+    local aSeq = tonumber(a.seq) or 0
+    local bSeq = tonumber(b.seq) or 0
+    if aSeq ~= bSeq then
+        return aSeq > bSeq and 1 or -1
+    end
+
+    return 0
+end
+
+local function copyStamp(stamp)
+    if stamp == nil then return nil end
+    return {
+        time = tonumber(stamp.time) or 0,
+        writer = tonumber(stamp.writer) or 0,
+        seq = tonumber(stamp.seq) or 0
+    }
+end
+
+local function notify(self, key, value, source)
+    local listeners = self._listeners
+    if not listeners or next(listeners) == nil then return end
+    for _, cb in pairs(listeners) do
+        callListener(self, cb, key, value, source)
+    end
+end
+
+function GTABLE:new(prefix, opts)
+    assert(type(prefix) == "string" and prefix ~= "", "GTABLE:new() expects a non-empty string prefix")
+    opts = opts or {}
+    prefix = tostring(prefix)
+
+    local existing = GTABLE._registry[prefix]
+    if existing and existing._alive then
+        if opts.selfKey ~= nil then
+            existing:setSelfKey(opts.selfKey)
+        end
+        return existing
+    end
+
+    local obj = setmetatable({}, self)
+    obj.id = nextId()
+    obj.prefix = prefix
+    obj.internalValues = {}
+    obj.onNetwork = false
+    obj._ready = false
+    obj._alive = true
+    obj._listeners = {}
+    obj._listenerCounter = 0
+    obj._selfKeyCache = nil
+    obj._selfKeyProvider = nil
+    obj._versions = {}
+    obj._clearStamp = nil
+    obj._nodeId = nextNodeId()
+    obj._seq = 0
+    obj._chip = chip()
+    obj._chipIndex = obj._chip:entIndex()
+
+    if opts.selfKey ~= nil then
+        if type(opts.selfKey) == "function" then
+            obj._selfKeyProvider = opts.selfKey
+        else
+            obj._selfKeyCache = opts.selfKey
+        end
+    end
+
+    obj.hookRemote = string.format("GTABLE[%s]::remote::%d::%d", prefix, obj._chipIndex, obj.id)
+    obj.hookRemoved = string.format("GTABLE[%s]::removed::%d::%d", prefix, obj._chipIndex, obj.id)
+
+    obj.establishMessage      = prefix .. "::ESTABLISH"
+    obj.authMessage           = prefix .. "::AUTH"
+    obj.removeMessage         = prefix .. "::REMOVE"
+    obj.dataUpdateMessage     = prefix .. "::DATA"
+    obj.bulkDataUpdateMessage = prefix .. "::BULK"
+    obj.clearMessage          = prefix .. "::CLEAR"
+
+    GTABLE._registry[prefix] = obj
+
+    obj:_attachHooks()
+    obj:_scheduleEstablish(opts.establishDelay, opts.takeoverDelay)
+
+    return obj
+end
+
+function GTABLE:_attachHooks()
+    hook.add("remote", self.hookRemote, function(sender, owner, message, ...)
+        if not self._alive then return end
+        self:onRemote(sender, owner, message, ...)
+    end)
+
+    hook.add("removed", self.hookRemoved, function()
+        if not self._alive then return end
+        self:onRemove()
+        self:destroy(true)
+    end)
+end
+
+function GTABLE:_scheduleEstablish(establishDelay, takeoverDelay)
+    local establish = tonumber(establishDelay) or 0.1
+    local takeover = tonumber(takeoverDelay) or 0.15
+
+    timer.simple(establish, function()
+        if not self._alive then return end
+        self:establishNetwork()
+    end)
+
+    timer.simple(establish + takeover, function()
+        if not self._alive or self.onNetwork then return end
+        self.onNetwork = true
+        self:_markReady("self_leader")
+    end)
+end
+
+function GTABLE:_markReady(source)
+    if self._ready then return end
+    self._ready = true
+    notify(self, nil, nil, source or "ready")
+end
+
+function GTABLE:_selfKey()
+    if self._selfKeyProvider then
+        return self._selfKeyProvider()
+    end
+    if self._selfKeyCache ~= nil then
+        return self._selfKeyCache
+    end
+    return self._chipIndex
+end
+
+function GTABLE:setSelfKey(key)
+    assertAlive(self)
+    if type(key) == "function" then
+        self._selfKeyProvider = key
+        self._selfKeyCache = nil
+    else
+        self._selfKeyProvider = nil
+        self._selfKeyCache = key
+    end
+    return self
+end
+
+function GTABLE:safeSend(message, ...)
+    if not self._alive then return end
+    local ok = pcall(hook.runRemote, nil, message, ...)
+    return ok
+end
+
+function GTABLE:establishNetwork()
+    assertAlive(self)
+    self:safeSend(self.establishMessage, self._chipIndex)
+end
+
+function GTABLE:_applyIncoming(key, value, stamp, source)
+    if key == nil then return false end
+    local incomingStamp = copyStamp(stamp)
+    if incomingStamp == nil then return false end
+
+    local clearCmp = compareStamp(self._clearStamp, incomingStamp)
+    if clearCmp >= 0 then
+        return false
+    end
+
+    local currentStamp = self._versions[key]
+    if compareStamp(incomingStamp, currentStamp) <= 0 then
+        return false
+    end
+
+    self._versions[key] = incomingStamp
+
+    if value == nil then
+        if self.internalValues[key] == nil then
+            return true
+        end
+        self.internalValues[key] = nil
+        notify(self, key, nil, source or "remoteRemove")
+        return true
+    end
+
+    if deepeq(self.internalValues[key], value) then
+        return true
+    end
+
+    self.internalValues[key] = value
+    notify(self, key, value, source or "remote")
+    return true
+end
+
+function GTABLE:_applyClear(stamp, source)
+    local incomingStamp = copyStamp(stamp)
+    if incomingStamp == nil then return false end
+    if compareStamp(incomingStamp, self._clearStamp) <= 0 then
+        return false
+    end
+
+    self._clearStamp = incomingStamp
+    local changed = false
+    for key, value in pairs(self.internalValues) do
+        local keyStamp = self._versions[key]
+        if compareStamp(incomingStamp, keyStamp) > 0 then
+            self.internalValues[key] = nil
+            changed = true
+        end
+    end
+
+    return changed
+end
+
+function GTABLE:_buildSnapshot()
+    local values = {}
+    local versions = {}
+
+    for key, stamp in pairs(self._versions) do
+        versions[key] = copyStamp(stamp)
+        local value = self.internalValues[key]
+        if value ~= nil then
+            values[key] = value
+        end
+    end
+
+    return {
+        values = values,
+        versions = versions,
+        clearStamp = copyStamp(self._clearStamp)
+    }
+end
+
+function GTABLE:_mergeSnapshot(snapshot, source)
+    if type(snapshot) ~= "table" then return false end
+
+    local changed = false
+    local versions = snapshot.versions or {}
+    local values = snapshot.values or {}
+
+    if self:_applyClear(snapshot.clearStamp, source or "sync") then
+        changed = true
+    end
+
+    for key, stamp in pairs(versions) do
+        local value = values[key]
+        if self:_applyIncoming(key, value, stamp, source or "sync") then
+            changed = true
+        end
+    end
+
+    return changed
+end
+
+function GTABLE:onRemote(sender, owner, message, ...)
+    if sender == self._chip then return end
+
+    if message == self.establishMessage then
+        pcall(hook.runRemote, sender, self.authMessage, self:_buildSnapshot())
+        return
+    end
+
+    if message == self.authMessage then
+        local snapshot = ...
+        self.onNetwork = true
+        local changed = self:_mergeSnapshot(snapshot, "sync")
+        self:_markReady("sync")
+        if changed then
+            notify(self, nil, nil, "sync")
+        end
+        return
+    end
+
+    if message == self.removeMessage then
+        local explicit, stamp = ...
+        self:_applyIncoming(explicit, nil, stamp, "remoteRemove")
+        if not self._ready then
+            self:_markReady("remote")
+        end
+        self.onNetwork = true
+        return
+    end
+
+    if message == self.dataUpdateMessage then
+        local key, value, stamp = ...
+        self:_applyIncoming(key, value, stamp, "remote")
+        if not self._ready then
+            self:_markReady("remote")
+        end
+        self.onNetwork = true
+        return
+    end
+
+    if message == self.bulkDataUpdateMessage then
+        local payload, versions = ...
+        local changed = false
+        for key, stamp in pairs(versions or {}) do
+            if self:_applyIncoming(key, (payload or {})[key], stamp, "remoteBulk") then
+                changed = true
+            end
+        end
+        if changed then
+            notify(self, nil, nil, "remoteBulk")
+        end
+        if not self._ready then
+            self:_markReady("remote")
+        end
+        self.onNetwork = true
+        return
+    end
+
+    if message == self.clearMessage then
+        local stamp = ...
+        if self:_applyClear(stamp, "remoteClear") then
+            notify(self, nil, nil, "remoteClear")
+        end
+        if not self._ready then
+            self:_markReady("remote")
+        end
+        self.onNetwork = true
+        return
+    end
+end
+
+function GTABLE:onRemove()
+    if not self._alive then return end
+    local key = self:_selfKey()
+    if key ~= nil and self.internalValues[key] ~= nil then
+        self.internalValues[key] = nil
+        self._versions[key] = makeStamp(self)
+        notify(self, key, nil, "localRemove")
+        self:safeSend(self.removeMessage, key, self._versions[key])
+    else
+        local stamp = makeStamp(self)
+        if key ~= nil then
+            self._versions[key] = stamp
+        end
+        self:safeSend(self.removeMessage, key, stamp)
+    end
+    self.onNetwork = false
+end
+
+function GTABLE:destroy(skipBroadcast)
+    if not self._alive then return end
+    if not skipBroadcast then
+        self:onRemove()
+    end
+
+    self._alive = false
+    hook.remove("remote", self.hookRemote)
+    hook.remove("removed", self.hookRemoved)
+
+    if GTABLE._registry[self.prefix] == self then
+        GTABLE._registry[self.prefix] = nil
+    end
+
+    self._listeners = {}
+end
+
+function GTABLE:isReady()
+    assertAlive(self)
+    return self._ready
+end
+
+function GTABLE:isOnNetwork()
+    assertAlive(self)
+    return self.onNetwork
+end
+
+function GTABLE:onChange(fn, immediate)
+    assertAlive(self)
+    assert(type(fn) == "function", "GTABLE:onChange() expects a function")
+    self._listenerCounter = self._listenerCounter + 1
+    local id = self._listenerCounter
+    self._listeners[id] = fn
+    if immediate then
+        callListener(self, fn, nil, nil, "immediate")
+    end
+    return function()
+        self._listeners[id] = nil
+    end
+end
+
+function GTABLE:modify(index, value)
+    assertAlive(self)
+    if value == nil then
+        return self:remove(index)
+    end
+    if not self._ready then
+        self:_markReady("localWrite")
+    end
+    local old = self.internalValues[index]
+    if deepeq(old, value) then
+        return old
+    end
+    local stamp = makeStamp(self)
+    self.internalValues[index] = value
+    self._versions[index] = stamp
+    self:safeSend(self.dataUpdateMessage, index, value, stamp)
+    notify(self, index, value, "local")
+    return value
+end
+
+function GTABLE:modifyBulk(tbl)
+    assertAlive(self)
+    if type(tbl) ~= "table" then
+        error("GTABLE:modifyBulk() expects a table", 2)
+    end
+    if next(tbl) == nil then return false end
+    if not self._ready then
+        self:_markReady("localWrite")
+    end
+
+    local payload = {}
+    local versions = {}
+    local removePayload = {}
+    local changed = false
+
+    for key, value in pairs(tbl) do
+        local old = self.internalValues[key]
+        if value == nil then
+            if old ~= nil then
+                local stamp = makeStamp(self)
+                self.internalValues[key] = nil
+                self._versions[key] = stamp
+                removePayload[key] = stamp
+                changed = true
+            end
+        else
+            if not deepeq(old, value) then
+                local stamp = makeStamp(self)
+                self.internalValues[key] = value
+                self._versions[key] = stamp
+                payload[key] = value
+                versions[key] = stamp
+                changed = true
+            end
+        end
+    end
+
+    if next(payload) ~= nil then
+        self:safeSend(self.bulkDataUpdateMessage, payload, versions)
+    end
+
+    if next(removePayload) ~= nil then
+        self:safeSend(self.bulkDataUpdateMessage, {}, removePayload)
+    end
+
+    if changed then
+        notify(self, nil, nil, "localBulk")
+    end
+
+    return changed
+end
+
+function GTABLE:remove(index)
+    assertAlive(self)
+    local old = self.internalValues[index]
+    if old == nil then
+        return nil
+    end
+    if not self._ready then
+        self:_markReady("localWrite")
+    end
+    local stamp = makeStamp(self)
+    self.internalValues[index] = nil
+    self._versions[index] = stamp
+    self:safeSend(self.removeMessage, index, stamp)
+    notify(self, index, nil, "localRemove")
+    return old
+end
+
+function GTABLE:clear()
+    assertAlive(self)
+    if next(self.internalValues) == nil then return false end
+    if not self._ready then
+        self:_markReady("localWrite")
+    end
+    local stamp = makeStamp(self)
+    self._clearStamp = stamp
+    for key in pairs(self.internalValues) do
+        self._versions[key] = stamp
+    end
+    wipeTable(self.internalValues)
+    self:safeSend(self.clearMessage, stamp)
+    notify(self, nil, nil, "localClear")
+    return true
+end
+
+function GTABLE:get(index)
+    assertAlive(self)
+    return self.internalValues[index]
+end
+
+function GTABLE:exists(index)
+    assertAlive(self)
+    return self.internalValues[index] ~= nil
+end
+
+GTABLE.has = GTABLE.exists
+
+function GTABLE:getOrDefault(index, default)
+    assertAlive(self)
+    local value = self.internalValues[index]
+    if value == nil then
+        return default
+    end
+    return value
+end
+
+function GTABLE:ensure(index, default)
+    assertAlive(self)
+    local value = self.internalValues[index]
+    if value == nil and default ~= nil then
+        self:modify(index, default)
+        return default
+    end
+    return value
+end
+
+function GTABLE:setSelf(val)
+    assertAlive(self)
+    local key = self:_selfKey()
+    if key == nil then
+        error("GTABLE:setSelf() self key resolved to nil", 2)
+    end
+    return self:modify(key, val)
+end
+
+function GTABLE:clearSelf()
+    assertAlive(self)
+    local key = self:_selfKey()
+    if key == nil then return nil end
+    return self:remove(key)
+end
+
+function GTABLE:getSelf()
+    assertAlive(self)
+    local key = self:_selfKey()
+    if key == nil then return nil end
+    return self.internalValues[key]
+end
+
+function GTABLE:getTable()
+    assertAlive(self)
+    return self.internalValues
+end
+
+function GTABLE:toTable()
+    assertAlive(self)
+    return shallow_copy(self.internalValues)
+end
+
+function GTABLE:keys()
+    assertAlive(self)
+    local k = {}
+    local i = 0
+    for key in pairs(self.internalValues) do
+        i = i + 1
+        k[i] = key
+    end
+    return k
+end
+
+function GTABLE:values()
+    assertAlive(self)
+    local v = {}
+    local i = 0
+    for _, value in pairs(self.internalValues) do
+        i = i + 1
+        v[i] = value
+    end
+    return v
+end
+
+function GTABLE:count()
+    assertAlive(self)
+    local n = 0
+    for _ in pairs(self.internalValues) do
+        n = n + 1
+    end
+    return n
+end
+
+function GTABLE:pull()
+    assertAlive(self)
+    self:safeSend(self.establishMessage, self._chipIndex)
+end
