@@ -8,10 +8,14 @@ local curtime = timer.curtime
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/curve-fitting_ballistics_algorithm.txt")
 
+local ZERO_VEC = Vector()
+
 ACTIVE_INTERVAL = 0.05
 IDLE_INTERVAL   = 0.2
 LOAD_DIST  = 10000
 LOAD_PITCH = nil
+LOAD_ENABLED = LOAD_PITCH ~= nil
+LOAD_ANG = LOAD_ENABLED and Angle(LOAD_PITCH, 0, 0) or nil
 AUTO_FIRE_MAX_TARGET_AGE = 0.5
 AUTO_FIRE_LOS_CONE_DEG = 1
 AUTO_FIRE_LOS_INTERVAL = 0.1
@@ -21,7 +25,6 @@ AUTO_FIRE_HOLD_TIME = 0.12
 NextThink  = 0
 Unlocked   = false
 LastGun    = nil
-LastReady      = false
 TurretOverrideWired = false
 LastLosTime = 0
 LastLosPos = Vector()
@@ -42,9 +45,6 @@ local function getBasePos(hit, tpos)
 end
 
 local function getLoadAimPos(gun, base, targetPos, loadAng)
-    if not gun or not gun:isValid() then return nil end
-    if not base or not base:isValid() then return nil end
-
     local origin = gun:getMassCenterW() or gun:getPos()
     local baseAng = base:getAngles()
     local toTarget = targetPos - origin
@@ -114,33 +114,21 @@ end
 
 local function main()
     local now = curtime()
-    local manualFire = (Inputs.M1:get() or 0) ~= 0
+    local manualFire = (M1 or 0) ~= 0
 
-    local gun    = Inputs.Gun:get()    or I.Gun
-    local base   = Inputs.Base:get()
-    local hit    = Inputs.HitPos:get() or Vector()
-    local tpos   = Inputs.TargetPos:get() or Vector()
-    local tvel   = Inputs.TargetVel:get() or Vector()
+    local gun    = Gun or I.Gun
+    local base   = Base
+    local hit    = HitPos or ZERO_VEC
+    local tpos   = TargetPos or ZERO_VEC
+    local tvel   = TargetVel or ZERO_VEC
     local hasTrackedPos = tpos:getLength() > 0
-    local autoFireEnabled = (Inputs.AutoFire:get() or 0) ~= 0
-    local manual = (Inputs.M2:get()    or 0) ~= 0
-    local turretActiveOverride = (Inputs.TurretActiveOverride:get() or 0) ~= 0
-    local turretActive = Unlocked or (not turretActiveOverride and TurretOverrideWired and Inputs.Active:get() == 1 and true or false)
-    local loadEnabled = LOAD_PITCH ~= nil
-    local loadAng = nil
-    if loadEnabled then
-        loadAng = Angle(LOAD_PITCH, 0, 0)
-    end
+    local autoFireEnabled = (AutoFire or 0) ~= 0
+    local manual = (M2 or 0) ~= 0
+    local turretActiveOverride = (TurretActiveOverride or 0) ~= 0
+    local turretActive = Unlocked or (TurretOverrideWired and not turretActiveOverride and (Active or 0) == 1)
     local gunValid = gun and gun:isValid()
     local baseValid = base and base:isValid()
-    local needsReadyState = gunValid and (loadEnabled or autoFireEnabled)
-    local ready = LastReady
-    if needsReadyState then
-        ready = gun:acfReady()
-    end
-    if ready ~= LastReady then
-        LastReady = ready
-    end
+    local ready = gunValid and (LOAD_ENABLED or autoFireEnabled) and gun:acfReady() or false
 
     -- keep C-FBA in sync
     if gunValid and gun ~= LastGun and CFBA_SetGun then
@@ -149,10 +137,7 @@ local function main()
     end
 
     local rawBasePos = getBasePos(hit, tpos)
-    local manualBasePos = hit
-    if manualBasePos:getLength() <= 0 then
-        manualBasePos = rawBasePos
-    end
+    local manualBasePos = hit:getLength() > 0 and hit or rawBasePos
     local solvedPredPos = rawBasePos
     local solvedAimPos = rawBasePos
     local solvedTta = 0
@@ -164,7 +149,7 @@ local function main()
         baseValid and
         hasTrackedPos
 
-    local loadActive = loadEnabled and turretActive and not manual and not LastReady
+    local loadActive = LOAD_ENABLED and turretActive and not manual and not ready
     local dynamicAim = activeControl or loadActive or manual
 
     if now < NextThink and not dynamicAim then
@@ -190,7 +175,6 @@ local function main()
     local targetPredPos = rawBasePos
     local aimPos = rawBasePos
     local tta    = 0
-    local fire   = 0
 
     if activeControl then
         targetPredPos = solvedPredPos
@@ -200,7 +184,7 @@ local function main()
 
     if loadActive then
         targetPredPos = solvedPredPos
-        local loadPos = getLoadAimPos(gun, base, targetPredPos, loadAng)
+        local loadPos = getLoadAimPos(gun, base, targetPredPos, LOAD_ANG)
         if loadPos then
             aimPos = loadPos
         end
@@ -218,23 +202,20 @@ local function main()
         end
     end
 
-    if autoFireEnabled
-    and activeControl
-    and solvedTta > 0
-    and solvedTargetAge ~= nil
-    and solvedTargetAge < AUTO_FIRE_MAX_TARGET_AGE
-    and shouldAutoFire(gun, base, aimPos, targetPredPos, now) then
-        fire = 1
+    local autoFireNow =
+        autoFireEnabled
+        and activeControl
+        and solvedTta > 0
+        and solvedTargetAge ~= nil
+        and solvedTargetAge < AUTO_FIRE_MAX_TARGET_AGE
+        and shouldAutoFire(gun, base, aimPos, targetPredPos, now)
+
+    if autoFireNow then
         LastAutoFireUntil = now + AUTO_FIRE_HOLD_TIME
     end
-    if manualFire then
-        fire = 1
-    end
-    if fire == 0 and now < LastAutoFireUntil then
-        fire = 1
-    end
+    local fire = (manualFire or autoFireNow or now < LastAutoFireUntil) and 1 or 0
 
-    Outputs.TurretActive:update((turretActive or loadActive) and 1 or 0)
+    Outputs.TurretActive:update(turretActive and 1 or 0)
     Outputs.HAimPos:update(aimPos)
     Outputs.VAimPos:update(aimPos)
     Outputs.TargetPredPos:update(targetPredPos)
@@ -253,19 +234,18 @@ end
 
 updateInputs("Lock:NORMAL Active:NORMAL TurretActiveOverride:NORMAL M1:NORMAL M2:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR TargetPos:VECTOR TargetVel:VECTOR AutoFire:NORMAL")
 updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TargetPredPos:VECTOR TTA:NORMAL Elevation:NORMAL Fire:NORMAL")
+syncInputCommands(true)
 
 Inputs.Lock:addTrigger(function(v)
     if v == 0 then return end
     Unlocked = not Unlocked
 end)
 
-Inputs.Active:addTrigger(function(v)
+Inputs.Active:addTrigger(function()
     Unlocked = false
 end)
 
-Inputs.TurretActiveOverride:addTrigger(function(v)
-    if v == nil then return end
-
+Inputs.TurretActiveOverride:addTrigger(function()
     TurretOverrideWired = true
 end)
 
