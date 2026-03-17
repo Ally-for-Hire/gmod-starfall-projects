@@ -3,7 +3,7 @@
 --@include allylib/simple_server-side_wire_helper.txt
 --@server
 
---- Version 0.12.0
+--- Version 0.13.0
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-starfall-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -51,7 +51,7 @@ local THINK_DT = 0.05
 --- Customizable Variables
 -- Gearing and Braking Setup
 local gearingType         = 3
-local maxBrakePower       = 150
+local maxBrakePower       = 100
 local brakeScaling        = false
 local wheelSize           = 28
 local finalRatio          = 0.18
@@ -91,12 +91,14 @@ local upshiftRPM, downshiftRPM = 0, 0
 local mainWL = nil
 local leftWL = nil
 local rightWL = nil
+local activeEngine = nil
 local engineReady = false
 
 local gearLinks = {}
 local gearSpeeds = {}
 local reverseGears = 0
 local isAutogearing = false
+local hasSplitTransfers = false
 local canNeutralSteer = false
 local acf3GearRatios = true
 
@@ -121,6 +123,8 @@ local counterSteerI = 0
 local counterSteerPrevError = 0
 
 --- Functions
+local applyOutputs
+
 local function applyBrakeClutch(LBrake, RBrake, LClutch, RClutch)
     outputRightClutch = RClutch
     outputLeftClutch = LClutch
@@ -158,6 +162,50 @@ local function writePortIfChanged(key, value, lastValue)
         return value
     end
     return lastValue
+end
+
+local function resetOutputCache()
+    lastGear, lastThrottle = nil, nil
+    lastLBrake, lastRBrake = nil, nil
+    lastLClutch, lastRClutch = nil, nil
+    lastLGear, lastRGear = nil, nil
+    lastLWeld, lastRWeld = nil, nil
+end
+
+local function resetCounterSteer()
+    counterSteerI = 0
+    counterSteerPrevError = 0
+end
+
+local function applySafeState()
+    output_gear = 1
+    outputLeftGear = 1
+    outputRightGear = 1
+    output_throttle = 0
+    applyBrakeClutch(maxBrakePower, maxBrakePower, clutchBrake, clutchBrake)
+    resetCounterSteer()
+    applyOutputs()
+end
+
+local function findLinkedEngine(links)
+    local bestEngine = nil
+    local bestPowerMax = -1
+
+    for i = 1, #links do
+        local link = links[i]
+        if isValid(link) then
+            local class = link:getClass()
+            if class ~= "prop_physics" and class:find("engine", 1, true) then
+                local powerMax = link:acfPowerbandMax()
+                if powerMax > bestPowerMax then
+                    bestEngine = link
+                    bestPowerMax = powerMax
+                end
+            end
+        end
+    end
+
+    return bestEngine
 end
 
 local function selectGear(rpm, speed, driveDir, neutralSteerEnabled)
@@ -207,10 +255,7 @@ local function selectGear(rpm, speed, driveDir, neutralSteerEnabled)
     return newGear
 end
 
-local function applyOutputs()
-    if not mainWL then return end
-
-    lastGear = writeWireIfChanged(mainWL, "Gear", output_gear, lastGear)
+function applyOutputs()
     lastThrottle = writePortIfChanged("Throttle", output_throttle, lastThrottle)
 
     local lweld = outputLeftBrake > 0 and 1 or 0
@@ -218,6 +263,10 @@ local function applyOutputs()
 
     lastLWeld = writePortIfChanged("LeftWeldLatch", lweld, lastLWeld)
     lastRWeld = writePortIfChanged("RightWeldLatch", rweld, lastRWeld)
+
+    if not mainWL then return end
+
+    lastGear = writeWireIfChanged(mainWL, "Gear", output_gear, lastGear)
 
     if canNeutralSteer then
         if not leftWL or not rightWL then return end
@@ -248,13 +297,38 @@ local function applyOutputs()
 end
 
 local function updateEngineVariables()
-    if not isValid(Engine) or not isValid(MainGearbox) then
+    mainWL = nil
+    leftWL = nil
+    rightWL = nil
+    activeEngine = nil
+    leftTransfer = nil
+    rightTransfer = nil
+    canNeutralSteer = false
+    hasSplitTransfers = false
+    engineReady = false
+    gearLinks = {}
+    gearSpeeds = {}
+    resetOutputCache()
+
+    if not isValid(MainGearbox) then
         engineReady = false
         return
     end
 
-    powerMin = Engine:acfPowerbandMin()
-    powerMax = Engine:acfPowerbandMax()
+    gearLinks = MainGearbox:acfLinks()
+
+    if isValid(Engine) then
+        activeEngine = Engine
+    else
+        activeEngine = findLinkedEngine(gearLinks)
+    end
+
+    if not isValid(activeEngine) then
+        return
+    end
+
+    powerMin = activeEngine:acfPowerbandMin()
+    powerMax = activeEngine:acfPowerbandMax()
 
     biteRPM = powerMin * clutchStart
     releaseRPM = powerMin
@@ -291,26 +365,20 @@ local function updateEngineVariables()
         end
     end
 
-    gearLinks = MainGearbox:acfLinks()
-    leftTransfer = nil
-    rightTransfer = nil
-    leftWL = nil
-    rightWL = nil
-    canNeutralSteer = false
-
     local transfers = 0
     for i = 1, #gearLinks do
-        if gearLinks[i]:getClass() == "prop_physics" then continue end
-        local type = gearLinks[i]:acfType()
+        local link = gearLinks[i]
+        if not isValid(link) or link:getClass() == "prop_physics" then continue end
+
+        local type = link:acfType()
         if type == "Transfer Case" or type == "Transfer" then
             transfers = transfers + 1
-            local y = MainGearbox:worldToLocal(gearLinks[i]:getPos()).y
-            if y * invertedTransfers < 0 then rightTransfer = gearLinks[i] end
-            if y * invertedTransfers > 0 then leftTransfer = gearLinks[i] end
+            local y = MainGearbox:worldToLocal(link:getPos()).y
+            if y * invertedTransfers < 0 then rightTransfer = link end
+            if y * invertedTransfers > 0 then leftTransfer = link end
         end
     end
 
-    if transfers >= 2 then canNeutralSteer = true end
     mainWL = MainGearbox:getWirelink()
     if isValid(leftTransfer) then
         leftWL = leftTransfer:getWirelink()
@@ -318,13 +386,17 @@ local function updateEngineVariables()
     if isValid(rightTransfer) then
         rightWL = rightTransfer:getWirelink()
     end
-    engineReady = mainWL ~= nil
+
+    hasSplitTransfers = transfers >= 2
+    canNeutralSteer = hasSplitTransfers and leftWL ~= nil and rightWL ~= nil
+    engineReady = mainWL ~= nil and isValid(activeEngine) and (not hasSplitTransfers or canNeutralSteer)
 
     if showDebug then
         if acf3GearRatios and isAutogearing then print("This Vehicle Uses ACF3 Gears") elseif isAutogearing then print("This vehicle Uses ACE Gears") end
         print("Detected Forward Gears .. " .. gearCount)
         print("Detected Reverse Gears .. " .. reverseGears)
         print("Detected Transfers .. " .. transfers)
+        if isValid(activeEngine) then print("Active Engine .. " .. activeEngine:getClass()) end
         if isAutogearing then print("Autogearing Enabled") else print("Autogearing Disabled") end
         if canNeutralSteer then print("The Vehicle Can Neutral Steer") else print("The Vehicle Cannot Neutral Steer") end
     end
@@ -334,19 +406,33 @@ local prevEngine = nil
 local prevMainGearbox = nil
 
 local function think()
-    if Engine ~= prevEngine or MainGearbox ~= prevMainGearbox then
+    local needsRefresh = Engine ~= prevEngine or MainGearbox ~= prevMainGearbox
+    if not needsRefresh then
+        needsRefresh = not isValid(MainGearbox) or not isValid(activeEngine) or mainWL == nil or not engineReady
+        if not needsRefresh and canNeutralSteer then
+            needsRefresh = not isValid(leftTransfer) or not isValid(rightTransfer) or leftWL == nil or rightWL == nil
+        end
+    end
+
+    if needsRefresh then
         updateEngineVariables()
         prevEngine = Engine
         prevMainGearbox = MainGearbox
     end
 
-    if not Engine or not MainGearbox or not Base or not Pod then return end
-    if not isValid(Engine) or not isValid(MainGearbox) or not isValid(Base) then return end
-    if not engineReady then return end
+    if not MainGearbox or not Base or not Pod then
+        applySafeState()
+        return
+    end
+
+    if not isValid(MainGearbox) or not isValid(Base) or not engineReady then
+        applySafeState()
+        return
+    end
 
     local vel = Base:getVelocity()
-    local speed = vel:getLength() * SPEEDCONV
-    local rpm = Engine:acfRPM()
+    local speed = math.sqrt(vel.x * vel.x + vel.y * vel.y) * SPEEDCONV
+    local rpm = activeEngine:acfRPM()
     local W = Pod["W"] or 0
     local A = Pod["A"] or 0
     local S = Pod["S"] or 0
@@ -478,12 +564,10 @@ local function think()
                 outputRightClutch = math.max(outputRightClutch, clutchTurn)
             end
         else
-            counterSteerI = 0
-            counterSteerPrevError = 0
+            resetCounterSteer()
         end
     else
-        counterSteerI = 0
-        counterSteerPrevError = 0
+        resetCounterSteer()
     end
 
     applyOutputs()
