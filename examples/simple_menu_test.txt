@@ -1,0 +1,50 @@
+--@name Simple Menu Test
+--@author Ally for Hire / Merydian9
+
+--@include ../allylib/helpful_hud_functions.txt
+
+--@client
+
+O = owner()
+P = player()
+
+if P != O then return end
+
+require("../allylib/helpful_hud_functions.txt")
+enableHud(O, true)
+
+local open = false
+local centerX = 0
+local centerY = 0
+local resx, resy = render.getGameResolution()
+local x, y = resx / 2, resy / 2
+
+local function setOpen(state)
+    open = state
+    input.enableCursor(open)
+    if open then
+        input.setCursorPos(x, y)
+    end
+end
+
+hook.add("inputPressed", "radial_toggle", function(key)
+    if key == KEY.M then
+        setOpen(not open)
+    end
+end)
+
+hook.add("drawhud", "radial_draw", function()
+    color(COL_BLACK)
+    circle(x, y, 8, 6)
+    drawPlus(x, y, 22, 22, 22, 22, 6)
+    
+    color(COL_GREEN)
+    drawPlus(x, y, 20, 20, 20, 20, 2)
+    circle(x, y, 10, 2)
+    
+    if open then
+        local cursx, cursy = input.getCursorPos()
+        render.setColor(COL_BLACK)
+        drawPlus(cursx, cursy, 10, 10, 10, 10, 1)
+    end
+end)
