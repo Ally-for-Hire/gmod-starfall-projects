@@ -1,12 +1,12 @@
 --@name 2024 Cam Controller and Hud
 --@author Ally for Hire / Merydian9
 --@model models/jaanus/wiretool/wiretool_range.mdl
---@include public_release_projects/allylib/simple_server-side_wire_helper.txt
---@include public_release_projects/allylib/helpful_hud_functions.txt
+--@include ../allylib/simple_server-side_wire_helper.txt
+--@include ../allylib/helpful_hud_functions.txt
 --@shared
 
-require( "public_release_projects/allylib/simple_server-side_wire_helper.txt" )
-require( "public_release_projects/allylib/helpful_hud_functions.txt" )
+require( "../allylib/simple_server-side_wire_helper.txt" )
+require( "../allylib/helpful_hud_functions.txt" )
 
 if CLIENT then
     -- If not running for the owner, quit early
