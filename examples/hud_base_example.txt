@@ -1,6 +1,20 @@
---@name Merydian's HUD Base
+--@name HUD Base Example
 --@author Ally for Hire / Merydian9
 --@shared
+
+--[[
+Purpose:
+- Tiny reusable base pattern for chair/driver-aware HUD chips.
+- Demonstrates one of the older approaches to sharing seat occupancy with a client HUD.
+
+What To Learn:
+- Basic chair input handling and driver state mirroring.
+- A minimal server/client event flow around entering and leaving a vehicle.
+
+[FUTURE]
+- Today this would be built on a helper that owns driver tracking and owner-view gating instead of storing
+  mutable shared globals directly on the root file.
+]]--
 
 INPUTS = {}
 SHARED = {}
@@ -14,6 +28,7 @@ SHARED.ENTID = chip():entIndex()
 if SERVER then
     wire.adjustInputs({"Chair"}, {"Entity"}, {"Vehicle Chair"})
     
+    -- [FUTURE] A modern helper could abstract seat-enter/seat-leave hooks into one reusable driver-state service.
     local function enteredVehicleHandler(ply, vehicle, num)
         if vehicle ~= INPUTS.Chair then return end
         

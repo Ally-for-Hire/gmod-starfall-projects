@@ -1,16 +1,24 @@
---@name Daktank Gamemode
+--@name Daktank Gamemode Example
 --@author Ally for Hire / Merydian9
 --@shared
 
-/*
-OK so this is actually super fun. I made this aaaages ago for use on my private server
-to have fun with daktank. And, well, that is what it does! It's a basic CTP gamemode
-with randomized teams, you did however have to include some stuff to help it on your
-own dupes since I couldn't pull server data, and the handhelds required their own
-dupes. Nonetheless, a good time, and fun to read!
-*/
+--[[
+Purpose:
+- Demonstrates a larger shared Starfall script used as a lightweight Daktank-style server ruleset.
+- Shows old examples of event-driven game flow, point checking, and multi-entity contraption inspection.
+
+What To Learn:
+- How large shared chips were structured before helper-heavy patterns became common.
+- How entity traversal, ownership checks, and score/state logic can be stitched together in one file.
+
+[FUTURE]
+- Today we would split this into smaller server-only modules, avoid global mutable state, and move repeated
+  contraption scans behind cached helper functions.
+- This file is useful as a historical example, but not as a modern style baseline.
+]]--
 
 -- daktank point cost detection
+-- [FUTURE] Modern code would isolate this scan into a helper and cache per-contraption point totals.
 hook.add( "OnPhysgunReload", "Gamemode_DakPointCost", function(physgun,ply) 
     local trace = ply:getEyeTrace()
     local Ent = trace.Entity

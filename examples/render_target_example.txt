@@ -1,11 +1,25 @@
 --@client
--- Believe this was from legokidlogan on the starfall discord.
+
+--[[
+Purpose:
+- Minimal render target example showing the static-then-draw usage pattern.
+- Good starting point if you have never used RTs in Starfall before.
+
+What To Learn:
+- Render once to an offscreen target.
+- Reuse that texture in regular HUD drawing.
+
+[FUTURE]
+- Today we would usually hide the RT select/restore boilerplate behind helper functions and invalidate static
+  RTs on resolution/style changes instead of relying on a one-shot hook removal pattern.
+]]--
 
 local rtName = "whatever"
 render.createRenderTarget( rtName )
 
 hook.add( "renderoffscreen", "drawStatic", function()
     hook.remove( "renderoffscreen", "drawStatic" ) -- only call once
+    -- [FUTURE] Modern RT helpers usually handle one-shot static draws without open-coded hook removal.
     
     render.selectRenderTarget( rtName )
     render.clear( Color( 0, 0, 0, 0 ) ) -- change this if you want

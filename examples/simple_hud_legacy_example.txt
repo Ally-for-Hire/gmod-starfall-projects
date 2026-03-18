@@ -1,6 +1,20 @@
---@name Simple Hud V3
+--@name Simple HUD Legacy Example
 --@author Ally for Hire 
 --@shared
+
+--[[
+Purpose:
+- Very small shared HUD example that forwards a handful of wire values to clients.
+- Useful for seeing the sort of minimal HUD people used before explicit packet schemas became standard.
+
+What To Learn:
+- How early shared HUD chips mirrored simple wire state to the client.
+- The absolute minimum needed for a gun/ammo/chair/base HUD prototype.
+
+[FUTURE]
+- This is intentionally old-style. Today we would not use `net.writeTable()` or broadcast to all players for
+  owner-only HUD state, and we would create fonts/traces once instead of in ad hoc places.
+]]--
 
 if SERVER then
     if player() ~= owner() then return end
@@ -10,6 +24,7 @@ if SERVER then
     
     wire.adjustInputs( inputs, inputTypes )
     
+    -- [FUTURE] Replace this whole-table broadcast with an explicit owner-targeted packet and byte guards.
     timer.create("", 1, 0, function()
         local wireInformation = {}
         for k in ipairs( inputs ) do

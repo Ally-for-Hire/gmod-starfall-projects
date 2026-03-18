@@ -1,6 +1,20 @@
---@name When she Generate on my Table till I Ballistic
+--@name Ballistic Table Generation Example
 --@author Ally for Hire / Merydian9
 --@server
+
+--[[
+Purpose:
+- Standalone experimental ballistic table generator.
+- Useful as a lower-level example of simulating projectile travel and building lookup data by hand.
+
+What To Learn:
+- How drag/gravity stepping can be turned into a reusable table.
+- Why interpolation is needed when converting raw simulation points into practical ballistic lookups.
+
+[FUTURE]
+- The newer curve-fitting ballistic work supersedes this style for most real chips. Today we would build this
+  behind a proper library API, quota slicing, and cache invalidation keyed to gun changes.
+]]--
 
 TIME_STEP = game.getTickInterval()
 GRAVITY = Vector2(0, physenv.getGravity()[3])
@@ -20,6 +34,7 @@ local function interpolatePointsByDistance(low, high, val)
 end
 
 local function generateBallisticsTable(inputGun, angle, dt, maxTime)
+    -- [FUTURE] Modern ballistic generation should be quota-sliced and cached per gun/ammo configuration.
     -- Initialization of variables
     local curTime = 0
     local indices = 0

@@ -2,6 +2,20 @@
 --@author Ally for Hire / Merydian9
 --@shared
 
+--[[
+Purpose:
+- Older all-in-one jet HUD example combining wire ingestion, network sync, and client rendering.
+- Useful for seeing the rough shape of an aircraft HUD before the later helper-driven style.
+
+What To Learn:
+- How early HUD chips passed arbitrary wire state to the client.
+- The kinds of flight and weapon data a simple aircraft HUD tends to present.
+
+[FUTURE]
+- Today we would not ship `net.writeTable()` HUD state every interval; this wants an explicit schema and delta logic.
+- Fonts and static art should be created once, not inside hot draw paths.
+]]--
+
 if SERVER then
     wire.adjustInputs({"BombPos","Base","Throttle","Targets","CamPos","Altitude","Weapon","WeaponAmmo","Filter"},{"VECTOR","ENTITY","NORMAL","NORMAL","NORMAL","NORMAL","STRING","NORMAL","ARRAY"})
     wireInputs = {}
@@ -14,6 +28,7 @@ if SERVER then
     
     hook.add( "input", "", wireInput )
     
+    -- [FUTURE] Modern HUD networking would send a bounded typed packet and only when relevant state changes.
     timer.create("netSend",0.5,0,function()
         net.start("JetHud_sendWireData")
         net.writeTable(wireInputs)

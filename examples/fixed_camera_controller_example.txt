@@ -1,7 +1,21 @@
---@name Fixed-Cam Test 2
+--@name Fixed Camera Controller Example
 --@author Ally for Hire / Merydian9
 --@include ../allylib/simple_server-side_wire_helper.txt
 --@shared
+
+--[[
+Purpose:
+- Demonstrates a fixed-camera aiming flow with separate server/client state and manual camera networking.
+- Shows how to map camera input into gun-facing output for experiments with sight control.
+
+What To Learn:
+- Basic split-realm architecture for camera chips.
+- How the wire helper reduces repetitive input/output boilerplate on the server.
+
+[FUTURE]
+- Today we would centralize the custom net protocol into a small camera helper so every experimental chip
+  does not redefine the same owner-gated message flow.
+]]--
 
 require("../allylib/simple_server-side_wire_helper.txt")
 
@@ -13,6 +27,8 @@ local NET_CAM    = "[F-CT2] Cam Network"
 local NET_ANG    = "[F-CT2] Ang Network"
 local NET_ACTIVE = "[F-CT2] Active"
 local HOOK_ID    = "[F-CT2]_" .. CHIP:entIndex()
+
+-- [FUTURE] Modern naming would use a single packet namespace plus typed message ids instead of many net names.
 
 ------------------------------------------------------------
 -- SERVER
