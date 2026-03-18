@@ -1,0 +1,208 @@
+--@name PropNotSolid Detail
+--@author Ally for Hire / Merydian9
+--@server
+
+wire.adjustOutputs({ "Filter", "Count" }, { "array", "number" })
+
+local BATCH_SIZE = 12
+local MASS_THRESHOLD = 5
+local ACTIVE = true
+local PROP_SOLID = 1
+local PROP_DRAW = 1
+
+local MODEL_EXCEPTIONS = {
+    ["models/sprops/trans/miscwheels/tank30.mdl"] = true,
+    ["models/sprops/trans/miscwheels/thick_moto30.mdl"] = true,
+    ["models/sprops/trans/miscwheels/wt1_12.mdl"] = true,
+    ["models/sprops/trans/miscwheels/wt1s_12.mdl"] = true
+}
+
+local CLASS_EXCEPTIONS = {
+    acf_supply = true,
+    acf_controller = true,
+    acf_gearbox = true,
+    starfall_processor = true
+}
+
+local NAME_EXCEPTIONS = {
+    chair_plasticp1 = true,
+    plate025x025 = true,
+    sitpose = true,
+    rcube_thin = true
+}
+
+local queue = {}
+local queueIndex = 1
+local processed = 0
+local changed = 0
+local skipped = 0
+local rerunRequested = false
+
+local function gatherContraptionEntities()
+    local list = chip():getAllConstrained({ Wire = true, Parent = true }) or {}
+    list[#list + 1] = chip()
+    return list
+end
+
+local function isException(ent)
+    if not ent or not isValid(ent) then return true end
+    if CLASS_EXCEPTIONS[ent:getClass()] then return true end
+    if MODEL_EXCEPTIONS[ent:getModel() or ""] then return true end
+    if NAME_EXCEPTIONS[ent:getName() or ""] then return true end
+    return false
+end
+
+local function shouldProcess(ent, ownerPly)
+    if not ent or not isValid(ent) then return false end
+    if ent == chip() then return false end
+    if ent:getOwner() ~= ownerPly then return false end
+    if ent:getClass() ~= "prop_physics" then return false end
+    if isException(ent) then return false end
+    return true
+end
+
+local function optimizeEntity(ent)
+    local mass = ent:getMass() or 0
+    local didChange = false
+
+    if mass > MASS_THRESHOLD then
+        ent:setNoDraw(PROP_DRAW == 0)
+        didChange = true
+    else
+        ent:setSolid(PROP_SOLID ~= 0)
+        didChange = true
+    end
+
+    return didChange
+end
+
+local function finish()
+    print(string.format(
+        "[Owned Contraption Detail Optimization] complete: processed=%d changed=%d skipped=%d",
+        processed,
+        changed,
+        skipped
+    ))
+    hook.remove("think", "owned_contraption_detail_optimization")
+end
+
+local function processBatch()
+    local limit = math.min(queueIndex + BATCH_SIZE - 1, #queue)
+
+    while queueIndex <= limit do
+        local ent = queue[queueIndex]
+        processed = processed + 1
+
+        local ok = false
+        if ent and isValid(ent) then
+            ok = optimizeEntity(ent)
+        end
+
+        if ok then
+            changed = changed + 1
+        else
+            skipped = skipped + 1
+        end
+
+        queueIndex = queueIndex + 1
+    end
+
+    if queueIndex > #queue then
+        finish()
+    end
+end
+
+local function startRun()
+    if not ACTIVE then
+        wire.ports.Filter = {}
+        wire.ports.Count = 0
+        print("[Owned Contraption Detail Optimization] inactive")
+        return
+    end
+
+    queue = {}
+    queueIndex = 1
+    processed = 0
+    changed = 0
+    skipped = 0
+
+    local ownerPly = owner()
+    local allEntities = gatherContraptionEntities()
+    local seen = {}
+
+    for i = 1, #allEntities do
+        local ent = allEntities[i]
+        if ent and isValid(ent) and not seen[ent] then
+            seen[ent] = true
+            if shouldProcess(ent, ownerPly) then
+                queue[#queue + 1] = ent
+            end
+        end
+    end
+
+    wire.ports.Filter = queue
+    wire.ports.Count = #queue
+
+    if #queue == 0 then
+        print("[Owned Contraption Detail Optimization] no matching owned props found on contraption")
+        return
+    end
+
+    print(string.format(
+        "[Owned Contraption Detail Optimization] queued %d owned props on current contraption",
+        #queue
+    ))
+    hook.remove("think", "owned_contraption_detail_optimization")
+    hook.add("think", "owned_contraption_detail_optimization", processBatch)
+end
+
+hook.add("PlayerChat", "owned_contraption_detail_optimization_chat", function(ply, text)
+    if ply ~= owner() then return end
+
+    local args = string.explode(" ", string.lower(text or ""))
+    local cmd = args[1] or ""
+    local value = args[2] or ""
+
+    if cmd == "-pns" then
+        if value == "1" or value == "0" then
+            PROP_SOLID = tonumber(value) or PROP_SOLID
+            print("[Owned Contraption Detail Optimization] PropNotSolid setting updated")
+            startRun()
+        else
+            print("[Owned Contraption Detail Optimization] Invalid argument")
+        end
+        return true
+    end
+
+    if cmd == "-pd" then
+        if value == "1" or value == "0" then
+            PROP_DRAW = tonumber(value) or PROP_DRAW
+            print("[Owned Contraption Detail Optimization] PropDraw setting updated")
+            startRun()
+        else
+            print("[Owned Contraption Detail Optimization] Invalid argument")
+        end
+        return true
+    end
+
+    if cmd == "-set" then
+        print("[Owned Contraption Detail Optimization] Re-doing with new settings")
+        startRun()
+        return true
+    end
+
+    if cmd == "-ts" then
+        if PROP_SOLID == 0 then
+            PROP_SOLID = 1
+        else
+            PROP_SOLID = 0
+        end
+        print("[Owned Contraption Detail Optimization] Toggling PropNotSolid")
+        startRun()
+        return true
+    end
+end)
+
+do
+    startRun()
+end
