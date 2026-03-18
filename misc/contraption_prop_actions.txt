@@ -1,0 +1,176 @@
+--@name Contraption Prop Actions
+--@author Ally for Hire / Merydian9
+--@server
+
+local BATCH_SIZE = 24
+
+local APPLY_NOCOLLIDE = false
+local APPLY_MATERIAL = false
+local APPLY_ALPHA = false
+local APPLY_MASS = true
+local APPLY_ANGLE_ROUND = false
+local APPLY_DRAW_SHADOW = false
+local APPLY_DEPARENT = false
+local APPLY_FREEZE = false
+local APPLY_SET_SOLID = false
+local APPLY_BREAK_CONSTRAINTS = false
+
+local MATERIAL_VALUE = ""
+local ALPHA_VALUE = 255
+local MASS_VALUE = 0.1
+local ANGLE_DECIMALS = 1
+local DRAW_SHADOW = false
+local FREEZE_VALUE = true
+local SOLID_VALUE = true
+
+local queue = {}
+local queueIndex = 1
+local processed = 0
+local changed = 0
+local skipped = 0
+
+local function roundNumber(value, decimals)
+    local scale = 10 ^ (decimals or 0)
+    return math.round(value * scale) / scale
+end
+
+local function roundAngle(ang, decimals)
+    return Angle(
+        roundNumber(ang.p, decimals),
+        roundNumber(ang.y, decimals),
+        roundNumber(ang.r, decimals)
+    )
+end
+
+local function gatherContraptionEntities()
+    local list = chip():getAllConstrained({ Wire = true, Parent = true }) or {}
+    list[#list + 1] = chip()
+    return list
+end
+
+local function shouldProcess(ent, ownerPly)
+    if not ent or not isValid(ent) then return false end
+    if ent == chip() then return false end
+    if ent:getOwner() ~= ownerPly then return false end
+    return true
+end
+
+local function mutateEntity(ent)
+    local didChange = false
+
+    if APPLY_NOCOLLIDE then
+        ent:setNocollideAll(true)
+        didChange = true
+    end
+
+    if APPLY_MATERIAL then
+        ent:setMaterial(MATERIAL_VALUE)
+        didChange = true
+    end
+
+    if APPLY_ALPHA then
+        local clr = ent:getColor()
+        ent:setColor(Color(clr.r, clr.g, clr.b, ALPHA_VALUE))
+        didChange = true
+    end
+
+    if APPLY_MASS then
+        ent:setMass(MASS_VALUE)
+        didChange = true
+    end
+
+    if APPLY_ANGLE_ROUND then
+        ent:setAngles(roundAngle(ent:getAngles(), ANGLE_DECIMALS))
+        didChange = true
+    end
+
+    if APPLY_DRAW_SHADOW then
+        ent:setDrawShadow(DRAW_SHADOW)
+        didChange = true
+    end
+
+    if APPLY_SET_SOLID then
+        ent:setSolid(SOLID_VALUE)
+        didChange = true
+    end
+
+    if APPLY_BREAK_CONSTRAINTS then
+        constraint.breakAll(ent)
+        didChange = true
+    end
+
+    if APPLY_DEPARENT and ent:getParent() ~= nil then
+        ent:setParent(nil)
+        didChange = true
+    end
+
+    if APPLY_FREEZE then
+        ent:setFrozen(FREEZE_VALUE)
+        didChange = true
+    end
+
+    return didChange
+end
+
+local function finish()
+    print(string.format(
+        "[Owned Contraption Prop Actions] complete: processed=%d changed=%d skipped=%d",
+        processed,
+        changed,
+        skipped
+    ))
+    hook.remove("think", "owned_contraption_prop_actions")
+    chip():remove()
+end
+
+local function processBatch()
+    local limit = math.min(queueIndex + BATCH_SIZE - 1, #queue)
+
+    while queueIndex <= limit do
+        local ent = queue[queueIndex]
+        processed = processed + 1
+
+        local ok = false
+        if ent and isValid(ent) then
+            ok = mutateEntity(ent)
+        end
+
+        if ok then
+            changed = changed + 1
+        else
+            skipped = skipped + 1
+        end
+
+        queueIndex = queueIndex + 1
+    end
+
+    if queueIndex > #queue then
+        finish()
+    end
+end
+
+do
+    local ownerPly = owner()
+    local allEntities = gatherContraptionEntities()
+    local seen = {}
+
+    for i = 1, #allEntities do
+        local ent = allEntities[i]
+        if ent and isValid(ent) and not seen[ent] then
+            seen[ent] = true
+            if shouldProcess(ent, ownerPly) then
+                queue[#queue + 1] = ent
+            end
+        end
+    end
+
+    if #queue == 0 then
+        print("[Owned Contraption Prop Actions] no matching owned props found on contraption")
+    else
+        print(string.format(
+            "[Owned Contraption Prop Actions] queued %d owned props on current contraption",
+            #queue
+        ))
+        hook.add("think", "owned_contraption_prop_actions", processBatch)
+    end
+end
