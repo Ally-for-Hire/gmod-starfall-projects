@@ -1,6 +1,20 @@
---@name Viewcam Example 1
+--@name Viewcam Render Target Example
 --@author Merydian9
 --@client
+
+--[[
+Purpose:
+- Minimal viewcam render-target example drawing a second camera feed on the HUD.
+- Good for learning the bare minimum renderView -> RT -> textured rect flow.
+
+What To Learn:
+- How to throttle `render.renderView()` work.
+- How to present a live secondary camera inside normal HUD drawing.
+
+[FUTURE]
+- Today we would gate this more carefully on quota and resolution, and usually wrap the RT/material setup in
+  a helper so examples can focus on the camera logic itself.
+]]--
 
 if(player() != owner()) then return end
 enableHud(owner(), true)
@@ -15,6 +29,7 @@ mat:setTextureRenderTarget("$basetexture", "rt")
 
 hook.add("renderscene", "scene",function()
     local dt = (timer.curtime()-last)
+    -- [FUTURE] Modern viewcam code should also gate on quota, not just FPS cadence.
     if dt<(1/fps) then return end
 
     render.selectRenderTarget("rt")

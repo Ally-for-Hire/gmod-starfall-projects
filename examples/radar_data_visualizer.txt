@@ -4,6 +4,20 @@
 
 -- Version 1.3.0
 
+--[[
+Purpose:
+- Visualizes raw radar-style track arrays and their freshness on a HUD.
+- Serves as a compact example of stale-track handling, extrapolation, and array-aligned data flow.
+
+What To Learn:
+- How to compare incoming position/velocity arrays and only push updates when the dataset really changes.
+- How to extrapolate for short outages without pretending stale data is fresh forever.
+
+[FUTURE]
+- If scaled up today, this would want packet chunking, explicit schema versioning, and probably the same cache
+  merge patterns used in the newer tracksync work.
+]]--
+
 local UPDATE_INTERVAL = 0.05
 local POSITION_EPS = 1
 local VELOCITY_EPS = 1
@@ -27,6 +41,7 @@ if SERVER then
     local posEpsSq = POSITION_EPS * POSITION_EPS
     local velEpsSq = VELOCITY_EPS * VELOCITY_EPS
 
+    -- [FUTURE] Modern tracking systems usually hide this comparison logic behind a cache/helper module.
     local function datasetChanged(newPositions, newVelocities, newOwners, newIds)
         local count = #newPositions
         if count ~= #positions then return true end

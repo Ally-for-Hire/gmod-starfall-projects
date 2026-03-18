@@ -1,9 +1,20 @@
---@name Jet Gunsight Test 2
+--@name Jet Gunsight Minimal Example
 --@author Ally for Hire / Merydian9
 --@shared
 
--- Just a base for stuff because I'm not working on anything that would use this
--- Good luck getting text working
+--[[
+Purpose:
+- Small experimental gunsight shell with simple target forwarding and client HUD drawing.
+- Meant as a barebones sandbox for jet HUD ideas rather than a polished system.
+
+What To Learn:
+- The minimum split needed to get vector input from server to client.
+- How screen-space HUD experiments were often started before being moved into larger projects.
+
+[FUTURE]
+- `net.writeTable()` is not how we would do this now; use explicit bounded fields and packet guards.
+- Font creation, resolution handling, and cursor/screen setup would also be pulled into helpers in modern code.
+]]--
 
 if SERVER then
     -- Handling of wire inputs, since it's starfall you have to network
@@ -12,7 +23,7 @@ if SERVER then
     
     wire.adjustInputs( inputs, inputTypes )
     
-    -- This is not necessarily the most efficient way to do this, you could just update an individual element instead of the whole array
+    -- [FUTURE] Replace this whole-table resend with a tiny explicit packet that only carries the changed fields.
     hook.add("input", "", function(input, value)
         local wireInformation = {}
         for k in ipairs( inputs ) do

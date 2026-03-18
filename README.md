@@ -1,64 +1,60 @@
 # GMOD Starfall Releases
 
-Production and experimental Starfall scripts for Garry's Mod, organized to mirror `garrysmod/data/starfall/`.
+Production scripts, libraries, legacy references, and examples for Garry's Mod Starfall.
 
-This README was refreshed to match the current folder contents.
+This README reflects the current local folder state under `garrysmod/data/starfall/GMOD-Starfall-Releases/`.
 
-## What’s here
-- **Root chips**: primary release scripts (controllers, mobility, camera, targeting)
-- **`allylib/`**: shared libraries used by multiple chips
-- **`information_systems/`**: datalink/server-link families and client counterparts
-- **`examples/`**: focused demos and HUD/render experiments
-- **`misc/`**: standalone helpers and utilities
-- **`defunct/`**: archived/superseded scripts kept for reference
+## What's Here
+- Root chips: primary release scripts kept at the top level
+- `allylib/`: shared libraries used by multiple chips
+- `examples/`: curated demos, experiments, and teaching references
+- `misc/`: standalone helpers and one-off utilities
+- `defunct/`: archived or superseded scripts kept for reference
 
-## Current inventory
-- Root scripts: **5**
-- `allylib/`: **7**
-- `information_systems/`: **8**
-- `examples/`: **10**
+## Current Inventory
+- Root scripts: **6**
+- `allylib/`: **8**
+- `examples/`: **16**
 - `misc/`: **4**
 - `defunct/`: **7**
 
 ---
 
-## Root scripts
+## Root Scripts
 - `2024_physical_gun_controller.txt`
 - `ally_mobility_hours.txt`
-- `aps_auto_target_takedown.txt`
 - `merydian's_camera_chip.txt`
 - `merydian's_sf_gun_controller.txt`
+- `merydians_sensor_suite.txt`
+- `mfd_ultra.txt`
 
 ## Libraries (`allylib/`)
 - `acf_ballistics_lib.txt`
 - `animation_class.txt`
 - `curve-fitting_ballistics_algorithm.txt`
 - `general_algorithms.txt`
+- `gtable_library.txt`
 - `helpful_hud_functions.txt`
 - `projectile_library.txt`
 - `simple_server-side_wire_helper.txt`
 
-## Information systems (`information_systems/`)
-- `universal1_datalink_node.txt`
-- `universal1_datalink_root.txt`
-- UNRELEASED: `universal2_datalink_combo.txt`
-- UNRELEASED: `universal3_datalink_combo_version_2.txt`
-- UNRELEASED: `universal4_serverlink.txt`
-- UNRELEASED: `universal4_serverlink_client-end.txt`
-- UNRELEASED: `universal5_itk.txt`
-- UNRELEASED: `universal5_itk_client.txt`
-
 ## Examples (`examples/`)
-- `fixed-cam_test_2.txt`
-- `jet_gunsight_test_1.txt`
-- `jet_gunsight_test_2.txt`
-- `merydian's_hud_base.txt`
+- `ballistic_table_generation_example.txt`
+- `daktank_gamemode_example.txt`
+- `fixed_camera_controller_example.txt`
+- `gtable_example.txt`
+- `hud_base_example.txt`
+- `jet_gunsight_minimal_example.txt`
+- `jet_gunsight_screenlink_example.txt`
+- `jet_hud_example.txt`
 - `radar_data_visualizer.txt`
 - `render_target_example.txt`
-- `resizing_target_box_test.txt`
+- `simple_hud_legacy_example.txt`
+- `simple_radial_menu_example.txt`
 - `simple_tank_hud_example.txt`
-- `viewcam_example_1.txt`
-- `viewcam_example_2.txt`
+- `target_box_resizing_example.txt`
+- `viewcam_networked_target_example.txt`
+- `viewcam_render_target_example.txt`
 
 ## Misc (`misc/`)
 - `all_wheels_unhittable.txt`
@@ -78,14 +74,15 @@ This README was refreshed to match the current folder contents.
 ---
 
 ## Usage
-1. Place/keep these files under `garrysmod/data/starfall/` with the same relative paths.
-2. Spawn/open a Starfall chip in-game and load the target script.
-3. If a script uses `--@include`, make sure referenced library files are present.
-4. For paired systems (server/client), load both components.
+1. Keep these files under `garrysmod/data/starfall/` with the same relative paths.
+2. Load the target script on a Starfall chip in-game.
+3. If a script uses `--@include`, make sure the referenced files exist at the expected relative path.
+4. For paired or split-realm systems, load the matching companion files as needed.
 
 ## Notes
-- This repo includes `.git/` metadata when cloned locally; script inventories above ignore that internal VCS data.
-- Some scripts are examples or legacy references; use `defunct/` at your own discretion.
+- This local clone includes `.git/` metadata, but the inventory above only reflects script/library content.
+- The `examples/` folder is curated for learning and reference, not just polished production code.
+- The `defunct/` folder is intentionally retained for historical reference and migration work.
 
 ## Links
 - GitHub: <https://github.com/Ally-for-Hire>

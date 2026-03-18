@@ -1,7 +1,21 @@
---@name Viewcam Example 2
+--@name Viewcam Networked Target Example
 --@author 
 -- https://github.com/wrefgtzweve/starfall-e2-scripts
 --@shared
+
+--[[
+Purpose:
+- Alternate shared viewcam example with server-fed target/velocity input.
+- Useful for comparing a more networked viewcam experiment against the simpler client-only version.
+
+What To Learn:
+- How camera aim and target state can be mirrored into a renderView workflow.
+- How older examples often mixed rendering, input sync, and targeting in one file.
+
+[FUTURE]
+- `net.writeTable()` is not the modern pattern here. This should use an explicit packet schema and stricter
+  owner scoping, especially because renderView examples get expensive quickly.
+]]--
 
 if SERVER then
         
@@ -10,6 +24,7 @@ if SERVER then
     
     wire.adjustInputs( inputs, inputTypes )
     
+    -- [FUTURE] Replace this whole-table mirror with a bounded typed packet.
     hook.add("input", "", function(input, value)
         local wireInformation = {}
         for k in ipairs( inputs ) do

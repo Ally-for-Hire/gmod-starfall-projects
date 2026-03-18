@@ -1,7 +1,20 @@
---@name Resizing Target Box Test
+--@name Target Box Resizing Example
 --@author Ally for Hire / Merydian9
 --@client
--- CLIENT VARIABLES HERE
+
+--[[
+Purpose:
+- Experiment for resizing a 2D target box from 3D trace data.
+- Shows the geometric thinking needed to turn entity extents into screen-space framing.
+
+What To Learn:
+- How recursive or repeated traces can approximate on-screen bounds.
+- Why target-box sizing is more complicated than just projecting a center point.
+
+[FUTURE]
+- Today this would want stronger helperization around bounds tracing and screen projection, because the
+  repeated hull/line trace pattern is both expensive and easy to get wrong.
+]]--
 
 -- General Variables
 local WIDTH, HEIGHT, CENTER = 0, 0, Vector()
@@ -23,6 +36,7 @@ local function vectorAbs(Vec)
 end
 
 -- Recursively send traces in the given direction until it works
+-- [FUTURE] This iterative trace search works for experimentation, but a helper should own the expensive edge cases.
 local function recursiveTraceDir(STARTING_POSITION, MOVE_DIRECTION, HITPOS, FILTER, STARTING_DISTANCE) -- Starting trace, Starting Position, Direction, Starting Distance  
     -- Default value of CURRENT_TRACE simulating what a trace would return for the first run
     local CURRENT_TRACE = {Hit = true, HitPos = HITPOS}

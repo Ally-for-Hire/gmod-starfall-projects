@@ -2,17 +2,28 @@
 --@author Ally for Hire (help from LegoKidLogan)
 --@shared
 
--- This is quite old from me, and doesn't make alot of optimizations
--- I would otherwise. I've thrown a few comments around where needed,
--- as this has good examples of mistakes new people may make. 
+--[[
+Purpose:
+- Older tank HUD example with comments left in place to show beginner pitfalls.
+- Useful both as a functioning example and as a record of style/optimization mistakes from earlier work.
+
+What To Learn:
+- How a simple tank HUD can be wired and networked.
+- What kinds of patterns to question when reading older public Starfall code.
+
+[FUTURE]
+- This file is intentionally educational, so some rough edges are preserved. Today the net path would be
+  explicit and owner-scoped, and a helper would absorb most of the wire mirroring.
+]]--
 
 if SERVER then
-    local active = false -- Doesn't really need to be localized up here if you never end up using it serverside   
+    local active = false -- Doesn't really need to be localized up here if you never end up using it serverside
     local inputNames = { "Active", "MainGun"}
     local inputTypes = { "NUMBER", "ENTITY"}
     
     wire.adjustInputs( inputNames, inputTypes )
     
+    -- [FUTURE] In modern code this whole wire mirror would use a helper and explicit packet schema.
     function wireInput( name, value )
         if name == "Active" then
             active = value ~= 0

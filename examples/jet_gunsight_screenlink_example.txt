@@ -1,11 +1,25 @@
---@name Jet Gunsight Test 1
+--@name Jet Gunsight Screenlink Example
 --@author March / Ally
 --@include lib/modular_wire_helper.txt
+
+--[[
+Purpose:
+- Early jet gunsight experiment showing screen-linked rendering and manual network forwarding.
+- Useful as a snapshot of how HUD/gunsight chips were prototyped before the newer helper patterns.
+
+What To Learn:
+- How a screen-linked chip can forward camera/base/FOV state to the client.
+- How holograms and linked screen components were used for quick spatial debugging.
+
+[FUTURE]
+- Today we would replace most of this manual net forwarding and ad hoc globals with explicit packet schemas,
+  stricter owner checks, and a more modern wire helper.
+]]--
 
 if SERVER then
     local screen = chip():getLinkedComponents()[1]
     
-    if not isValid(screen) then error "Not attached to an entity at all." end -- functions where the only argument is a string can be called as function "string argument"
+    if not isValid(screen) then error "Not attached to an entity at all." end
     if screen:getClass() ~= "starfall_screen" then error "Not attached to a starfall screen." end
     
     screen:linkComponent(chip())
@@ -25,6 +39,7 @@ if SERVER then
     screenHolo = hologram.create(chip():getPos(), Angle(), "models/sprops/cuboids/height06/size_1/cube_6x6x6.mdl", Vector(0)) 
     screenHolo:setParent(chip())       
     
+    -- [FUTURE] This per-input net forwarding should be collapsed into one throttled typed packet today.
     hook.add("input","",function(name,value)
         if name == "CamPos" and value ~= nil then 
             net.start("CamPosSend")

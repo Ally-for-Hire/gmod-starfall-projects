@@ -1,9 +1,23 @@
---@name Simple Menu Test
+--@name Simple Radial Menu Example
 --@author Ally for Hire / Merydian9
 
 --@include ../allylib/helpful_hud_functions.txt
 
 --@client
+
+--[[
+Purpose:
+- Tiny radial menu/input capture example.
+- Useful for learning the cursor-toggle and draw loop parts of simple in-HUD menus.
+
+What To Learn:
+- How to toggle cursor ownership from a keybind.
+- How to keep a basic menu centered and interactive on screen.
+
+[FUTURE]
+- Today we would recompute resolution on change, avoid global vars, and probably wrap cursor/menu state in a
+  small local UI helper instead of open-coding it.
+]]--
 
 O = owner()
 P = player()
@@ -22,6 +36,7 @@ local x, y = resx / 2, resy / 2
 local function setOpen(state)
     open = state
     input.enableCursor(open)
+    -- [FUTURE] Modern UI helpers usually recenter from current resolution instead of boot-time cached values.
     if open then
         input.setCursorPos(x, y)
     end

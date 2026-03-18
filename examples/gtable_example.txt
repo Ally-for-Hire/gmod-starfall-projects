@@ -2,13 +2,23 @@
 --@include lib/gtable_library.txt
 --@server
 
---[[ Example:
-1. Save both this chip and `lib/gtable_library.txt` on the same Starfall processor.
-2. Run; each chip instance logs table updates coming from other chips.
+--[[
+Purpose:
+- Minimal example of the GTABLE replicated-table library.
+- Shows how multiple chips can share per-chip state and react to updates.
+
+What To Learn:
+- Basic GTABLE lifecycle: create, set local state, subscribe to changes, and pull a snapshot.
+- The shape of a small replicated-state workflow without any HUD or wire concerns.
+
+[FUTURE]
+- Modern multi-writer GTABLE usage should assume versioned merges and tombstones, not naive overwrite semantics.
+- If you expand this pattern, add explicit key ownership and packet-budget awareness.
 ]]--
 
 -- pull in the GTABLE library
 require("lib/gtable_library.txt")
+-- [FUTURE] In larger examples we would wrap library setup in a local factory/helper instead of open-coded globals.
 
 local PREFIX = "GTABLE_DEMO"
 local gt = GTABLE:new(PREFIX)
