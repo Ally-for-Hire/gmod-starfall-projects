@@ -1,0 +1,95 @@
+--@name Simple Hud V3
+--@author Ally for Hire 
+--@shared
+
+if SERVER then
+    if player() ~= owner() then return end
+    
+    local inputs = {"Gun", "Ammo", "Ammo2", "Ammo3", "Status", "Gear", "Chair", "Base"}
+    local inputTypes = {"ENTITY", "NUMBER", "NUMBER", "NUMBER", "STRING", "NUMBER", "ENTITY", "ENTITY"}
+    
+    wire.adjustInputs( inputs, inputTypes )
+    
+    timer.create("", 1, 0, function()
+        local wireInformation = {}
+        for k in ipairs( inputs ) do
+            local name = inputs[k]
+            wireInformation[name] = wire.ports[name]
+        end
+        
+        net.start( "STH_NetSend" )
+        net.writeTable( wireInformation )
+        net.send( find.allPlayers() )
+    end)
+
+elseif CLIENT then  
+    local hudColor = Color(255,255,255,255)
+    local inputs = {}
+    local hudFont = render.createFont("Default",18,4000)
+    local active = 0
+    inputs["Chair"] = chip()
+    inputs["Gun"] = chip()   
+    inputs["Ammo2"] = 0  
+    local gunTrace = trace.trace( inputs["Gun"]:getPos() + inputs["Gun"]:getForward() * 500, inputs["Gun"]:getPos() + inputs["Gun"]:getForward() * 100000, inputs["Gun"] )       
+    local x, y = render.getResolution()
+    local x, y = x / 2, y / 2
+    
+    timer.create("gunTraceSet",0.2,0,function()
+        gunTrace = trace.trace( inputs["Gun"]:getPos() + inputs["Gun"]:getForward() * 500, inputs["Gun"]:getPos() + inputs["Gun"]:getForward() * 100000, inputs["Gun"] )       
+    end)
+    
+    hook.add( "drawhud", "drawHud", function()
+        if player() ~= inputs["Chair"]:getChildren()[1] and player() ~= owner() then return end
+        
+        local scrPos = gunTrace["HitPos"]:toScreen()
+        
+        render.setColor(Color(0,0,0,150))
+        render.drawRoundedBox(10,x-200/2,y-50/2,200,50)
+        
+        render.setColor(hudColor)
+        render.setFont(hudFont)
+        render.drawCircle(x,y,12)
+        render.drawLine(x+12,y,x+40,y)
+        render.drawLine(x-12,y,x-40,y)
+        
+        if active == 1 then
+            baseVelocity = inputs["Base"]:getVelocity():getLength() * 0.042
+            render.drawSimpleText(x-45, y+8,tostring(inputs["Ammo2"]) .. " S", 2, 1)
+            render.drawSimpleText(x-45, y-8,tostring(inputs["Ammo3"]) .. " T", 2, 1)
+            render.drawSimpleText(x+45, y+8,tostring(math.round(baseVelocity,0) .. "MPH"), 0, 1)
+            render.drawSimpleText(x+45, y-8,tostring("Gear " .. inputs["Gear"]), 0, 1)
+        end
+        
+        if scrPos.visible then
+            local traceEnt = gunTrace["Entity"]
+            local dist = inputs["Gun"]:getPos():getDistance(gunTrace["HitPos"]) * 0.01905
+            if active == 1 then
+                if inputs["Status"] == "Loaded" then
+                    render.setColor(Color(0,255,0))
+                else
+                    render.setColor(Color(255,0,0))
+                end
+                render.drawCircle(scrPos.x, scrPos.y, 5)
+                render.setFont(hudFont)
+                render.drawText(scrPos.x+15, scrPos.y-3, tostring(inputs["Status"]), 0)
+                render.drawText(scrPos.x+15, scrPos.y-17, tostring(math.round(dist,0)) .. "m", 0)
+                render.drawText(scrPos.x-15, scrPos.y-10, tostring(inputs["Ammo"]), 2)
+            end
+            
+            if traceEnt:isValid() then
+                if traceEnt:getClass() == "prop_physics" then
+                    render.setColor(Color(0,255,0))
+                    render.setFont("TargetIDSmall")
+                    render.drawText(scrPos.x, scrPos.y + 13, traceEnt:getOwner():getName(), 1)
+                end
+            end
+        end
+    end)
+    
+    
+    net.receive("STH_NetSend", function()
+        inputs = net.readTable()
+        active = 1
+    end)
+    
+end
