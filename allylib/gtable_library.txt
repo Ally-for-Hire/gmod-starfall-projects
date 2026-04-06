@@ -1,5 +1,4 @@
 --@name GTABLE Library
---@description Expression2-style global table helper with automatic remote syncing between Starfall chips.
 --@server
 
 --[[
