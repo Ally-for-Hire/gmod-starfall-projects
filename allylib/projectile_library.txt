@@ -1,4 +1,12 @@
 --- Private Variables
+--[[
+Function index:
+- `Projectile:initialize(pos, vel, model, hitBox, scale, damage, radius, armTime, projectileType, hasGravity, adjustAngle)`: configures a projectile instance and its visuals.
+- `Projectile:fire(pos, vel)`: activates and registers the projectile for simulation.
+- `Projectile:explode()`: detonates all explosive entities owned by the projectile.
+- `projectile_tick()`: advances projectile physics, collision, visuals, and explosive setup for all active projectiles.
+]]--
+
 local allProjectiles = {}
 local explosiveQueue = {}
 local dt = game.getTickInterval()

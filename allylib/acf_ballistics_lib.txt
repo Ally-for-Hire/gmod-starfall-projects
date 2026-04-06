@@ -2,6 +2,15 @@
 --@author Ally for Hire / Merydian9
 --@server
 
+--[[
+Function index:
+- `generate_ballistics(gun, angle, simplicity, cap, time_cap, returnTable)`: core internal solver used by the public wrappers below.
+- `generate_ballistics_table(gun, angle, simplicity)`: returns a sampled trajectory table for a gun and launch angle.
+- `generate_ballistics_capped(gun, angle, cap, timeCap, simplicity)`: returns interpolated trajectory data at a capped distance/time.
+- `calculate_maximum_distance(gun)`: estimates maximum range for the gun using a fixed elevation sample.
+- `logic(gun, position, time, complexity)`: solves best firing angle and optional trajectory/time data for a world-space target.
+]]--
+
 --- Version 1.0.0
 -- Total implementation
 -- *This is basically just a re-write of the livesim project

@@ -17,6 +17,28 @@ Highlights:
 - `onChange` supports multiple listeners and returns an unsubscribe closure.
 - `setSelf` / `clearSelf` manage a per-chip entry (default key: chip():entIndex()).
 - `isReady()` becomes true once the table is usable; the first ready state triggers a change with `source == "ready"`.
+
+Function index:
+- `GTABLE:new(prefix, opts)`: creates or reuses a synchronized table group.
+- `GTABLE:isReady()`: true once the table has completed startup and can be trusted.
+- `GTABLE:isOnNetwork()`: true once a peer network has been detected.
+- `GTABLE:onChange(fn, immediate)`: registers a listener and returns an unsubscribe closure.
+- `GTABLE:modify(index, value)`: writes or updates a single key.
+- `GTABLE:modifyBulk(tbl)`: applies multiple key updates in one call.
+- `GTABLE:remove(index)`: deletes a single key.
+- `GTABLE:clear()`: clears the full table and broadcasts the clear.
+- `GTABLE:get(index)`: returns a value by key.
+- `GTABLE:exists(index)`: true when a key exists.
+- `GTABLE:getOrDefault(index, default)`: returns a value or fallback.
+- `GTABLE:ensure(index, default)`: inserts and returns a default when the key is missing.
+- `GTABLE:setSelf(val)`: stores data under this chip's self key.
+- `GTABLE:clearSelf()`: removes the self-keyed entry.
+- `GTABLE:getSelf()`: returns the self-keyed value.
+- `GTABLE:getTable()`, `GTABLE:toTable()`: return the backing table or a shallow copy.
+- `GTABLE:keys()`, `GTABLE:values()`, `GTABLE:count()`: inspection helpers for stored entries.
+- `GTABLE:setSelfKey(key)`: overrides the self-key used by `setSelf` and related helpers.
+- `GTABLE:pull()`: requests or replays a network snapshot sync.
+- `GTABLE:destroy(skipBroadcast)`: tears down hooks, timers, and optional network state.
 ]]--
 
 --[[ Quick reference

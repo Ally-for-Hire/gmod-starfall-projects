@@ -9,6 +9,20 @@ Optimized pass goals:
 - lower parse overhead (single-pass parser, no token table)
 - safer trigger execution (isolated callback failures)
 - lightweight API additions while preserving compatibility
+
+Function index:
+- `updateInputs(str)`: creates or refreshes wire inputs from a compact port string.
+- `updateOutputs(str)`: creates or refreshes wire outputs from a compact port string.
+- `syncInputCommands(enabled)`: mirrors input values into globals matching their input names.
+- `changed(value, keepChangedState, slot, epsilon)`: change detector with optional persistent dirty state.
+- `resetChanged(slot)`: clears `changed(...)` state for one slot or all slots.
+- `addInputTrigger(name, fn)`: registers a trigger callback on a named input.
+- `Inputs.<Name>:get()`: reads the cached input value.
+- `Inputs.<Name>:addTrigger(fn)`: registers a trigger callback on that input object.
+- `Inputs.<Name>:removeTrigger(idx)`: removes a previously added trigger by index.
+- `Inputs.<Name>:clearTriggers()`: removes all triggers for that input.
+- `Outputs.<Name>:update(value)`: writes a cached output value to Wire.
+- `InputValues.<Name>`: latest cached input payload for direct reads.
 ]]--
 
 -- Version 1.5.1
