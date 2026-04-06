@@ -2,6 +2,23 @@
 -- By Merydian9 / Ally for Hire
 -- A general collection of helpful functions for HUDs
 
+--[[
+Function index:
+- `sendData(name, value, safe)`: sends typed net data to the owner, optionally with retry behavior.
+- `getPoint(x1, y1, x2, y2, length)`: returns a point toward a target without overshooting.
+- `drawThickLine(x1, y1, x2, y2, thickness)`: draws a filled thick line segment.
+- `drawSpacedLine(x1, y1, x2, y2, startLength, endLength, thickness)`: draws a line inset from both ends.
+- `drawThickCircle(x, y, diameter, thickness)`: draws a thick outlined circle.
+- `drawCenterRect(x, y, width, height)`: draws a rectangle centered on a point.
+- `drawCenterRectOutline(x, y, width, height, thickness)`: draws a centered rectangle outline.
+- `drawPlus(x, y, up, down, left, right, thickness)`: draws a configurable plus symbol.
+- `drawCenterRT(x, y, rtname, divisor)`: draws a render target centered on screen.
+- `initRT(rtName)`: creates and returns a render target name.
+- `selectClearRT(rtName)`: selects and clears a render target.
+- `rect`, `centerRect`, `centerRectOutline`, `rectOutline`, `circle`, `filledCircle`, `circleFilled`, `font`, `color`, `text`, `textSimple`, `line`, `spacedLine`: convenience aliases for common draw operations.
+- `COL_BLACK`, `COL_WHITE`, `COL_RED`, `COL_GREEN`, `COL_BLUE`, `COL_GRAY`, `COL_ORANGE`, `COL_PURPLE`, `COL_GOLD`, `COL_YELLOW`, `COL_CYAN`, `COL_RENDERTARGET`: shared color constants.
+]]--
+
 --- SHARED Space
 
 --- Function interface data easily between server and client

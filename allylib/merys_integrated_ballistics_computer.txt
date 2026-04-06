@@ -2,6 +2,17 @@
 --@author Ally for Hire / Merydian9
 --@server
 
+--[[
+Function index:
+- `updateValues(token)`: refreshes gun-derived ballistic constants and (re)starts dataset generation when needed.
+- `CFBA_SetGun(value)`: sets the active gun entity used by the computer.
+- `CFBA_SetDebug(on)`: enables or disables debug logging.
+- `CFBA_SolveStatic(base, targetPos)`: solves a static firing solution and returns predicted target, aim point, and time to arrive.
+- `ballisticTime(distance)`: interpolates travel time for a ballistic distance.
+- `ballisticDistance(time)`: interpolates traveled distance for a flight time.
+- `ballisticDropScale(time)`: returns vertical drop scale for a given time of flight.
+]]--
+
 if I == nil then I = {} end
 I.Gun = nil
 

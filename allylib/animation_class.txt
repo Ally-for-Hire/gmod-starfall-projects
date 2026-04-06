@@ -2,6 +2,22 @@
 -- By Merydian9 / Ally for Hire
 -- An animation class for effects
 
+--[[
+Function index:
+- `linear(t)`: identity easing curve.
+- `easeInQuad(t)`: quadratic ease-in curve.
+- `easeInLog(t)`: logarithmic ease-in curve.
+- `makeEaseInLog(strength)`: builds a configurable logarithmic ease-in curve.
+- `easeOutLog(t)`: logarithmic ease-out curve.
+- `ANIMATION:new(params)`: creates a new animation instance from a parameter table.
+- `ANIMATION:get(params)`: returns a registry-backed animation by id, creating it if needed.
+- `ANIMATION:delete(id)`: removes a registry animation by id or deletes the current instance entry.
+- `ANIMATION:getProgress()`: returns normalized animation progress from `0` to `1`.
+- `ANIMATION:getValue()`: evaluates the current eased animation value.
+- `ANIMATION:isFinished()`: true when the animation duration has elapsed.
+- `ANIMATION:reset()`: restarts the animation timer from now.
+]]--
+
 --- SHARED space
 
 ANIMATION = {}

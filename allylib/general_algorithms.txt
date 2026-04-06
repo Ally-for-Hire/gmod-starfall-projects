@@ -2,6 +2,28 @@
 -- By Merydian9 / Ally for Hire
 -- A general collection of algorithms and functions for use in many situations
 
+--[[
+Function index:
+- `createPID(kp, ki, kd)`: builds a simple PID controller table with `:update(error)`.
+- `binarySearch(low, high, func, condition)`: bounded iterative binary search helper.
+- `clampValue(value, minValue, maxValue)`: inclusive numeric clamp.
+- `minCount(...)`: returns the shortest array length across the provided tables.
+- `nearlyEqual(a, b, absEps, relEps)`: absolute/relative float comparison.
+- `lerp(a, b, t)`: linear interpolation.
+- `vectorDeltaLen(a, b)`: vector distance.
+- `vectorDeltaLenSq(a, b)`: squared vector distance without square root cost.
+- `hasVectorValue(vec)`: true when a vector exists and is non-zero.
+- `preferTargetPos(hitPos, targetPos)`: prefers a valid target vector, otherwise falls back to hit position.
+- `advanceTargetState(pos, vel, accel, dt)`: advances target position and velocity by `dt`.
+- `predictTargetOffset(vel, accel, dt)`: returns the motion offset over `dt`.
+- `asArray(value)`: returns the table unchanged or `{}` when the value is not a table.
+- `sanitizeText(value, maxLength, fallback)`: string conversion with optional truncation and fallback.
+- `getGunOrigin(gun)`: returns mass center or entity position for a valid gun.
+- `computeMuzzleDistance(gun)`: measures muzzle offset from the gun origin when available.
+- `roundNumber(value, decimals)`: rounds a number to the requested decimal places.
+- `roundAngle(ang, decimals)`: rounds pitch, yaw, and roll components.
+]]--
+
 -- kp, ki, kd: the proportional, integral, and derivitive values
 function createPID(kp, ki, kd)
     return {
@@ -45,4 +67,169 @@ function binarySearch(low, high, func, condition)
     end
 
     return low + (high - low) / 2; 
+end
+
+-- value: number to clamp
+-- minValue, maxValue: inclusive clamp bounds
+function clampValue(value, minValue, maxValue)
+    if value < minValue then return minValue end
+    if value > maxValue then return maxValue end
+    return value
+end
+
+-- ...: arrays to compare
+-- returns the smallest array length, or 0 for nil/empty input
+function minCount(...)
+    local count = math.huge
+    local arrays = {...}
+
+    for i = 1, #arrays do
+        local array = arrays[i]
+        if array == nil then
+            return 0
+        end
+
+        local length = #array
+        if length < count then
+            count = length
+        end
+    end
+
+    if count == math.huge then return 0 end
+    return count
+end
+
+-- a, b: values to compare
+-- absEps, relEps: absolute and relative tolerances
+function nearlyEqual(a, b, absEps, relEps)
+    if a == b then return true end
+
+    local diff = math.abs(a - b)
+    if diff <= absEps then return true end
+
+    local maxAbs = math.max(math.abs(a), math.abs(b))
+    if maxAbs <= 0 then return diff <= absEps end
+
+    return diff <= maxAbs * relEps
+end
+
+-- a, b: start and end values
+-- t: interpolation factor
+function lerp(a, b, t)
+    return a + (b - a) * t
+end
+
+-- a, b: vectors to measure between
+function vectorDeltaLen(a, b)
+    return (a - b):getLength()
+end
+
+-- a, b: vectors to measure squared distance between
+function vectorDeltaLenSq(a, b)
+    local dx = a[1] - b[1]
+    local dy = a[2] - b[2]
+    local dz = a[3] - b[3]
+    return dx * dx + dy * dy + dz * dz
+end
+
+-- vec: vector to validate
+function hasVectorValue(vec)
+    return vec ~= nil and vec:getLength() > 0
+end
+
+-- hitPos: fallback position
+-- targetPos: preferred position when present
+function preferTargetPos(hitPos, targetPos)
+    if hasVectorValue(targetPos) then
+        return targetPos
+    end
+
+    return hitPos or Vector()
+end
+
+-- pos, vel, accel: current target state
+-- dt: simulation step
+function advanceTargetState(pos, vel, accel, dt)
+    if dt <= 0 then
+        return pos, vel
+    end
+
+    local nextPos = pos + vel * dt + accel * (0.5 * dt * dt)
+    local nextVel = vel + accel * dt
+    return nextPos, nextVel
+end
+
+-- vel, accel: target motion
+-- dt: prediction step
+function predictTargetOffset(vel, accel, dt)
+    if dt <= 0 then
+        return Vector()
+    end
+
+    return vel * dt + accel * (0.5 * dt * dt)
+end
+
+-- value: candidate array-like value
+function asArray(value)
+    if type(value) == "table" then
+        return value
+    end
+
+    return {}
+end
+
+-- value: text-like input
+-- maxLength: optional truncation length
+-- fallback: default text when value is nil
+function sanitizeText(value, maxLength, fallback)
+    local text = tostring(value or fallback or "")
+    if maxLength ~= nil and #text > maxLength then
+        return string.sub(text, 1, maxLength)
+    end
+
+    return text
+end
+
+-- gun: entity to sample origin from
+function getGunOrigin(gun)
+    if not gun or not gun:isValid() then return nil end
+    return gun:getMassCenterW() or gun:getPos()
+end
+
+-- gun: entity to measure muzzle offset from mass center
+function computeMuzzleDistance(gun)
+    if not gun or not gun:isValid() then return 0 end
+
+    local idx = gun:lookupAttachment("muzzle")
+    if idx and idx > 0 then
+        local attachment = gun:getAttachment(idx)
+        if attachment then
+            local muzzlePos = Vector(attachment[1], attachment[2], attachment[3])
+            local massCenter = gun:getMassCenterW()
+            if massCenter then
+                return massCenter:getDistance(muzzlePos)
+            end
+
+            return gun:localToWorld(Vector()):getDistance(muzzlePos)
+        end
+    end
+
+    return 0
+end
+
+-- value: number to round
+-- decimals: decimal places to keep
+function roundNumber(value, decimals)
+    local scale = 10 ^ (decimals or 0)
+    return math.round(value * scale) / scale
+end
+
+-- ang: angle to round
+-- decimals: decimal places to keep
+function roundAngle(ang, decimals)
+    return Angle(
+        roundNumber(ang.p, decimals),
+        roundNumber(ang.y, decimals),
+        roundNumber(ang.r, decimals)
+    )
 end
