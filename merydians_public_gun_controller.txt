@@ -1,0 +1,110 @@
+--@name Merydian's Public Gun Controller
+--@author Ally for Hire / Merydian9
+--@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/merys_integrated_ballistics_computer.txt
+--@server
+
+local curtime = timer.curtime
+require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/merys_integrated_ballistics_computer.txt")
+
+local ZERO_VEC = Vector()
+
+local ACTIVE_INTERVAL = 0.05
+local IDLE_INTERVAL = 0.2
+local LOAD_DIST = 10000
+local LOAD_PITCH = nil
+local LOAD_ENABLED = LOAD_PITCH ~= nil
+local LOAD_ANG = LOAD_ENABLED and Angle(LOAD_PITCH, 0, 0) or nil
+
+local NextThink = 0
+local LastGun = nil
+
+local function getStaticTargetPos(hit, targetPos)
+    if targetPos and targetPos:getLength() > 0 then
+        return targetPos
+    end
+    return hit or ZERO_VEC
+end
+
+local function getGunOrigin(gun)
+    if not gun or not gun:isValid() then return nil end
+    return gun:getMassCenterW() or gun:getPos()
+end
+
+local function getLoadAimPos(gun, base, targetPos, loadAng)
+    local origin = getGunOrigin(gun)
+    if not origin then return nil end
+
+    local baseAng = base:getAngles()
+    local toTarget = targetPos - origin
+    local yaw = toTarget:getAngle().y
+    local ang = Angle(baseAng.p - loadAng.p, yaw, 0)
+    return origin + ang:getForward() * LOAD_DIST
+end
+
+local function main()
+    local now = curtime()
+    local gun = Gun or I.Gun
+    local base = Base
+    local hit = HitPos or ZERO_VEC
+    local targetPos = TargetPos or ZERO_VEC
+    local manualFire = (M1 or 0) ~= 0
+    local active = (Active or 0) ~= 0
+    local gunValid = gun and gun:isValid()
+    local baseValid = base and base:isValid()
+    local rawTargetPos = getStaticTargetPos(hit, targetPos)
+    local hasTarget = rawTargetPos:getLength() > 0
+
+    if gunValid and gun ~= LastGun and CFBA_SetGun then
+        CFBA_SetGun(gun)
+        LastGun = gun
+    end
+
+    local dynamicAim = active and gunValid and baseValid and hasTarget
+    if now < NextThink and not dynamicAim then
+        Outputs.Fire:update(manualFire and 1 or 0)
+        return
+    end
+
+    local aimPos = rawTargetPos
+    local solvedTargetPos = rawTargetPos
+    local tta = 0
+
+    if dynamicAim then
+        local ready = gun:acfReady()
+        if ready and CFBA_SolveStatic then
+            local predPos, staticAimPos, staticTta = CFBA_SolveStatic(base, rawTargetPos)
+            solvedTargetPos = predPos
+            aimPos = staticAimPos
+            tta = staticTta
+        elseif LOAD_ENABLED then
+            local loadAimPos = getLoadAimPos(gun, base, rawTargetPos, LOAD_ANG)
+            if loadAimPos then
+                aimPos = loadAimPos
+            end
+        end
+    end
+
+    Outputs.TurretActive:update(active and 1 or 0)
+    Outputs.HAimPos:update(aimPos)
+    Outputs.VAimPos:update(aimPos)
+    Outputs.TargetPredPos:update(solvedTargetPos)
+    Outputs.TTA:update(tta)
+    Outputs.Elevation:update(0)
+    Outputs.Fire:update(manualFire and 1 or 0)
+
+    if dynamicAim then
+        NextThink = now
+    elseif active then
+        NextThink = now + ACTIVE_INTERVAL
+    else
+        NextThink = now + IDLE_INTERVAL
+    end
+end
+
+updateInputs("Active:NORMAL M1:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR TargetPos:VECTOR")
+updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TargetPredPos:VECTOR TTA:NORMAL Elevation:NORMAL Fire:NORMAL")
+syncInputCommands(true)
+
+hook.add("think", "SF_MPGC", main)
