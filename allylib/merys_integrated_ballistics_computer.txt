@@ -1,0 +1,594 @@
+--@name Mery's Integrated Ballistics Computer
+--@author Ally for Hire / Merydian9
+--@server
+
+if I == nil then I = {} end
+I.Gun = nil
+
+G = physenv.getGravity()
+U = 39.3701
+
+local G2D = Vector2(0, G[3])
+local GZ = -G[3]
+local TIME_STEP = game.getTickInterval()
+local VALIDGUN = false
+
+local QUOTA_RATIO_MAX = 0.92
+local STEP_INTERVAL = 0.05
+local MAX_STEPS_PER_TICK = 6
+local MAX_DISTANCE_GU = 50000
+local MAX_DATASET_POINTS = 768
+local MIN_DISTANCE_STEP = 0.5
+local LOW_ARC_EPS = 2
+local LOW_ARC_DESCENTS = 3
+
+local EPS_MV_ABS = 0.01
+local EPS_MV_REL = 1e-6
+local EPS_DRAG_ABS = 1e-6
+local EPS_DRAG_REL = 1e-4
+local EPS_MUZZLE_ABS = 0.01
+local EPS_MUZZLE_REL = 1e-6
+
+local muzzleVelocity = 0
+local dragCoef = 0
+local MUZZLE_DIST = 0
+local ammoType = ""
+
+local DATASET = {}
+local COEFFS = nil
+
+local SHOOTER_SAMPLE_ENTITY = nil
+local SHOOTER_SAMPLE_VEL = Vector()
+local SHOOTER_SAMPLE_ACCEL = Vector()
+local SHOOTER_SAMPLE_TIME = 0
+local ZERO_VEC = Vector()
+local UPDATE_TOKEN = 0
+
+local GEN_ANGLE = 0
+local GEN_STEP_DEFAULT = 0.01
+local GEN_STEP_GROWTH = 1.5
+local GEN_STEP_MAX = 0.25
+local GEN_STEP = GEN_STEP_DEFAULT
+local GEN_MAX_DISTANCE = 0
+local GEN_DONE = false
+local GEN_TOKEN = 0
+local GEN_LAST_DISTANCE = 0
+local GEN_DESCENT_COUNT = 0
+
+local D_MIN = 0
+local D_MAX = 0
+
+local MAX_TIME = 6
+local INTERCEPT_TIME_EPS = 0.005
+local GUN_UPDATE_INTERVAL = 1
+
+local DEBUG_ENABLED = false
+
+local function logStatus(...)
+    print(Color(0, 255, 255), "[C-FBA]: ", Color(255, 255, 255), ...)
+end
+
+local function dprint(...)
+    if not DEBUG_ENABLED then return end
+    logStatus(...)
+end
+
+local function nearlyEqual(a, b, absEps, relEps)
+    if a == b then return true end
+    local diff = math.abs(a - b)
+    if diff <= absEps then return true end
+    local maxAbs = math.max(math.abs(a), math.abs(b))
+    if maxAbs <= 0 then return diff <= absEps end
+    return diff <= maxAbs * relEps
+end
+
+local function lerp(a, b, t)
+    return a + (b - a) * t
+end
+
+local function simulateImpact(angleDeg, muzzleVelUnits, dragCoefUnits, muzzleDistUnits)
+    local dt = TIME_STEP
+    local angleRad = math.rad(angleDeg)
+    local dir = Vector2(math.cos(angleRad), math.sin(angleRad))
+
+    local pos = dir * muzzleDistUnits
+    local vel = dir * muzzleVelUnits
+    local time = 0
+    local prevPos = pos
+    local prevTime = time
+
+    while time < MAX_TIME and pos[2] > 0 do
+        prevPos = pos
+        prevTime = time
+
+        local speed = vel:getLength()
+        if speed <= 0 then break end
+
+        local dragNum = (dragCoefUnits * speed * speed) / 40
+        local clamp = speed * 0.9
+        dragNum = math.min(dragNum * dt, clamp)
+        local dragVec = vel:getNormalized() * dragNum
+
+        pos = pos + vel * dt
+        vel = vel + (G2D * dt - dragVec)
+        time = time + dt
+    end
+
+    if pos[2] <= 0 and prevPos[2] > 0 then
+        local denom = prevPos[2] - pos[2]
+        if math.abs(denom) > 1e-6 then
+            local frac = prevPos[2] / denom
+            local impactPos = prevPos + (pos - prevPos) * frac
+            local impactT = prevTime + (time - prevTime) * frac
+            return impactT, impactPos[1]
+        end
+    end
+
+    return nil, nil
+end
+
+local function fitCurve()
+    local n = #DATASET
+    if n < 2 then
+        COEFFS = nil
+        dprint("Not enough points to build lookup (have ", n, ")")
+        return
+    end
+
+    D_MIN = math.huge
+    D_MAX = 0
+
+    for i = 1, n do
+        local distance = DATASET[i].distance
+        if distance < D_MIN then D_MIN = distance end
+        if distance > D_MAX then D_MAX = distance end
+    end
+
+    if D_MAX <= 0 or D_MIN == math.huge then
+        COEFFS = nil
+        dprint("fitCurve: invalid distance range")
+        return
+    end
+
+    COEFFS = DATASET
+    dprint("Lookup done: points=", n, " D_MIN=", D_MIN, " D_MAX=", D_MAX)
+    logStatus("Data Generation finished for " .. I.Gun:acfAmmoType())
+end
+
+local function interpolateDistanceToTime(distance)
+    local count = #DATASET
+    if count <= 0 then return 0 end
+    if distance <= DATASET[1].distance then return DATASET[1].time end
+    if distance >= DATASET[count].distance then return DATASET[count].time end
+
+    local low = 1
+    local high = count
+    while high - low > 1 do
+        local mid = math.floor((low + high) * 0.5)
+        if DATASET[mid].distance < distance then
+            low = mid
+        else
+            high = mid
+        end
+    end
+
+    local a = DATASET[low]
+    local b = DATASET[high]
+    local span = b.distance - a.distance
+    if span <= 0 then return a.time end
+    return lerp(a.time, b.time, (distance - a.distance) / span)
+end
+
+local function interpolateTimeToDistance(time)
+    local count = #DATASET
+    if count <= 0 then return 0 end
+    if time <= DATASET[1].time then return DATASET[1].distance end
+    if time >= DATASET[count].time then return DATASET[count].distance end
+
+    local low = 1
+    local high = count
+    while high - low > 1 do
+        local mid = math.floor((low + high) * 0.5)
+        if DATASET[mid].time < time then
+            low = mid
+        else
+            high = mid
+        end
+    end
+
+    local a = DATASET[low]
+    local b = DATASET[high]
+    local span = b.time - a.time
+    if span <= 0 then return a.distance end
+    return lerp(a.distance, b.distance, (time - a.time) / span)
+end
+
+local function interpolateTimeToAngle(time)
+    local count = #DATASET
+    if count <= 0 then return 0 end
+    if time <= DATASET[1].time then return DATASET[1].angle or 0 end
+    if time >= DATASET[count].time then return DATASET[count].angle or 0 end
+
+    local low = 1
+    local high = count
+    while high - low > 1 do
+        local mid = math.floor((low + high) * 0.5)
+        if DATASET[mid].time < time then
+            low = mid
+        else
+            high = mid
+        end
+    end
+
+    local a = DATASET[low]
+    local b = DATASET[high]
+    local span = b.time - a.time
+    if span <= 0 then return a.angle or 0 end
+    return lerp(a.angle or 0, b.angle or 0, (time - a.time) / span)
+end
+
+local function getEffectiveBallisticDistance(relPos, time)
+    local x = relPos[1]
+    local y = relPos[2]
+    local z = relPos[3]
+    local horizSq = x * x + y * y
+    local effectiveSq = horizSq + z * z
+
+    if z ~= 0 and time > 0 then
+        effectiveSq = effectiveSq + z * GZ * time * time
+    end
+
+    if effectiveSq <= 0 then
+        return 0
+    end
+
+    return math.sqrt(effectiveSq)
+end
+
+local function resetShooterTracking()
+    SHOOTER_SAMPLE_ENTITY = nil
+    SHOOTER_SAMPLE_VEL = ZERO_VEC
+    SHOOTER_SAMPLE_ACCEL = ZERO_VEC
+    SHOOTER_SAMPLE_TIME = 0
+end
+
+local function updateShooterTracking(shooter, now)
+    if not shooter or not shooter:isValid() then
+        resetShooterTracking()
+        return ZERO_VEC, ZERO_VEC
+    end
+
+    local shooterVel = shooter:getVelocity() or ZERO_VEC
+    if SHOOTER_SAMPLE_ENTITY ~= shooter or SHOOTER_SAMPLE_TIME <= 0 then
+        SHOOTER_SAMPLE_ENTITY = shooter
+        SHOOTER_SAMPLE_VEL = shooterVel
+        SHOOTER_SAMPLE_ACCEL = ZERO_VEC
+        SHOOTER_SAMPLE_TIME = now
+        return shooterVel, SHOOTER_SAMPLE_ACCEL
+    end
+
+    local dt = now - SHOOTER_SAMPLE_TIME
+    if dt > 0 then
+        SHOOTER_SAMPLE_ACCEL = (shooterVel - SHOOTER_SAMPLE_VEL) / dt
+    else
+        SHOOTER_SAMPLE_ACCEL = ZERO_VEC
+    end
+
+    SHOOTER_SAMPLE_ENTITY = shooter
+    SHOOTER_SAMPLE_VEL = shooterVel
+    SHOOTER_SAMPLE_TIME = now
+    return shooterVel, SHOOTER_SAMPLE_ACCEL
+end
+
+local function buildAimPos(gunPos, futureRel, timeToArrive)
+    local horizX = futureRel[1]
+    local horizY = futureRel[2]
+    local horizLen = math.sqrt(horizX * horizX + horizY * horizY)
+
+    if horizLen > 0 then
+        local basePitch = interpolateTimeToAngle(timeToArrive)
+        local aimOffsetZ = futureRel[3] + math.tan(basePitch) * horizLen
+        return Vector(gunPos[1] + horizX, gunPos[2] + horizY, gunPos[3] + aimOffsetZ)
+    end
+
+    if futureRel[3] >= 0 then
+        return gunPos + Vector(0, 0, 10000)
+    end
+
+    return gunPos + Vector(0, 0, -10000)
+end
+
+local function solveStaticIntercept(base, targetPos)
+    if not VALIDGUN or not isValid(I.Gun) then
+        return targetPos, targetPos, 0
+    end
+    if not base or not base:isValid() then
+        return targetPos, targetPos, 0
+    end
+    if not ballisticDistance then
+        return targetPos, targetPos, 0
+    end
+
+    local gun = I.Gun
+    local gunPos = gun:getMassCenterW() or gun:getPos()
+    local relPos = targetPos - gunPos
+    local now = timer.curtime()
+    local shooterVel = updateShooterTracking(gun, now)
+    local horizLen = math.sqrt(relPos[1] * relPos[1] + relPos[2] * relPos[2])
+    local timeToArrive = ballisticTime(horizLen) or 0
+
+    if timeToArrive <= 0 then
+        return targetPos, targetPos, 0
+    end
+
+    for _ = 1, 2 do
+        local futureRel = relPos - shooterVel * timeToArrive
+        local effectiveDistance = getEffectiveBallisticDistance(futureRel, timeToArrive)
+        local nextTimeToArrive = ballisticTime(effectiveDistance) or timeToArrive
+        if math.abs(nextTimeToArrive - timeToArrive) <= INTERCEPT_TIME_EPS then
+            timeToArrive = nextTimeToArrive
+            break
+        end
+        timeToArrive = nextTimeToArrive
+    end
+
+    local futureRel = relPos - shooterVel * timeToArrive
+    local aimPos = buildAimPos(gunPos, futureRel, timeToArrive)
+    return targetPos, aimPos, timeToArrive
+end
+
+local function finishDataset()
+    GEN_DONE = true
+
+    if not VALIDGUN or not isValid(I.Gun) then
+        dprint("finishDataset: gun invalid or not valid")
+        return DATASET
+    end
+
+    if #DATASET > 0 then
+        table.sort(DATASET, function(a, b)
+            return a.distance < b.distance
+        end)
+
+        local lookup = {
+            { distance = 0, time = 0, angle = 0 }
+        }
+
+        for i = 1, #DATASET do
+            local sample = DATASET[i]
+            local last = lookup[#lookup]
+            if sample.distance > last.distance + MIN_DISTANCE_STEP and sample.time > last.time then
+                lookup[#lookup + 1] = sample
+            end
+        end
+
+        DATASET = lookup
+    end
+
+    dprint("Dataset done for ", I.Gun:acfName(),
+        " ammo=", I.Gun:acfAmmoType(),
+        " pts=", #DATASET,
+        " maxD=", math.floor(GEN_MAX_DISTANCE))
+
+    fitCurve()
+    return DATASET
+end
+
+local function isOverBudget()
+    local maxQuota = chip():getQuotaMax()
+    if maxQuota <= 0 then return false end
+    return (chip():getQuotaUsed() / maxQuota) > QUOTA_RATIO_MAX
+end
+
+local function stepDatasetGeneration(token)
+    if token ~= GEN_TOKEN then return end
+    if GEN_DONE or not VALIDGUN or not isValid(I.Gun) then return end
+
+    local mv = muzzleVelocity * U
+    local dc = dragCoef
+    local md = MUZZLE_DIST
+    if mv <= 0 then
+        GEN_DONE = true
+        return
+    end
+
+    local stepsThisTick = 0
+    while stepsThisTick < MAX_STEPS_PER_TICK and not GEN_DONE do
+        if isOverBudget() then break end
+        if #DATASET >= MAX_DATASET_POINTS then
+            GEN_DONE = true
+            break
+        end
+        if GEN_ANGLE > 89 then
+            GEN_DONE = true
+            break
+        end
+
+        local impactTime, impactDistance = simulateImpact(GEN_ANGLE, mv, dc, md)
+        if impactTime and impactDistance then
+            if impactDistance > MAX_DISTANCE_GU then
+                GEN_DONE = true
+                break
+            end
+
+            if impactDistance + LOW_ARC_EPS < GEN_MAX_DISTANCE then
+                GEN_DESCENT_COUNT = GEN_DESCENT_COUNT + 1
+                if GEN_DESCENT_COUNT >= LOW_ARC_DESCENTS then
+                    GEN_DONE = true
+                    break
+                end
+            else
+                GEN_DESCENT_COUNT = 0
+                if impactDistance > GEN_MAX_DISTANCE then
+                    GEN_MAX_DISTANCE = impactDistance
+                end
+                if impactDistance > GEN_LAST_DISTANCE + MIN_DISTANCE_STEP then
+                    DATASET[#DATASET + 1] = {
+                        distance = impactDistance,
+                        time = impactTime,
+                        angle = math.rad(GEN_ANGLE)
+                    }
+                    GEN_LAST_DISTANCE = impactDistance
+                end
+            end
+        end
+
+        GEN_ANGLE = GEN_ANGLE + GEN_STEP
+        GEN_STEP = math.min(GEN_STEP * GEN_STEP_GROWTH, GEN_STEP_MAX)
+        stepsThisTick = stepsThisTick + 1
+    end
+
+    if GEN_DONE then
+        finishDataset()
+    else
+        timer.simple(STEP_INTERVAL, function()
+            stepDatasetGeneration(token)
+        end)
+    end
+end
+
+local function generateDataset()
+    if not VALIDGUN or not isValid(I.Gun) then
+        dprint("generateDataset: no valid gun")
+        return
+    end
+
+    DATASET = {}
+    COEFFS = nil
+    GEN_ANGLE = 0
+    GEN_STEP = GEN_STEP_DEFAULT
+    GEN_MAX_DISTANCE = 0
+    GEN_DONE = false
+    GEN_LAST_DISTANCE = 0
+    GEN_DESCENT_COUNT = 0
+    D_MIN = 0
+    D_MAX = 0
+
+    dprint("Starting dataset for ", I.Gun:acfName(), " ammo=", I.Gun:acfAmmoType())
+
+    GEN_TOKEN = GEN_TOKEN + 1
+    stepDatasetGeneration(GEN_TOKEN)
+end
+
+local function computeMuzzleDistance(gun)
+    local idx = gun:lookupAttachment("muzzle")
+    if idx and idx > 0 then
+        local md = gun:getAttachment(idx)
+        if md then
+            local muzzlePos = Vector(md[1], md[2], md[3])
+            local massCenterW = gun:getMassCenterW()
+            if massCenterW then
+                return massCenterW:getDistance(muzzlePos)
+            end
+            return gun:localToWorld(Vector()):getDistance(muzzlePos)
+        end
+    end
+    return 0
+end
+
+function updateValues(token)
+    if token ~= UPDATE_TOKEN then return end
+    if not VALIDGUN then return end
+
+    local gun = I.Gun
+    if not isValid(gun) then
+        VALIDGUN = false
+        dprint("updateValues: gun invalid")
+        return
+    end
+
+    local newMV = gun:acfMuzzleVel() or 0
+    local newDrag = (gun:acfDragCoef() or 0) * U
+    local newAmmoType = gun:acfAmmoType() or ""
+    local newMuzzleDist = computeMuzzleDistance(gun)
+
+    local changed =
+        not nearlyEqual(newMV, muzzleVelocity, EPS_MV_ABS, EPS_MV_REL)
+        or not nearlyEqual(newDrag, dragCoef, EPS_DRAG_ABS, EPS_DRAG_REL)
+        or newAmmoType ~= ammoType
+        or not nearlyEqual(newMuzzleDist, MUZZLE_DIST, EPS_MUZZLE_ABS, EPS_MUZZLE_REL)
+
+    if changed then
+        muzzleVelocity = newMV
+        dragCoef = newDrag
+        ammoType = newAmmoType
+        MUZZLE_DIST = newMuzzleDist
+        generateDataset()
+    end
+
+    timer.simple(GUN_UPDATE_INTERVAL, function()
+        updateValues(token)
+    end)
+end
+
+local function initGun(value)
+    UPDATE_TOKEN = UPDATE_TOKEN + 1
+    VALIDGUN = false
+    resetShooterTracking()
+
+    if not isValid(value) then
+        dprint("initGun: value not valid")
+        return
+    end
+    if value:getClass() ~= "acf_gun" then
+        dprint("initGun: class is not acf_gun (got ", value:getClass(), ")")
+        return
+    end
+
+    VALIDGUN = true
+    I.Gun = value
+    dprint("initGun: gun set, class=", value:getClass())
+    updateValues(UPDATE_TOKEN)
+end
+
+function CFBA_SetGun(value)
+    initGun(value)
+end
+
+function CFBA_SetDebug(on)
+    DEBUG_ENABLED = (on and true) or false
+    dprint("CFBA_SetDebug: DEBUG_ENABLED=", DEBUG_ENABLED)
+end
+
+function CFBA_SolveStatic(base, targetPos)
+    return solveStaticIntercept(base, targetPos or ZERO_VEC)
+end
+
+function ballisticTime(distance)
+    if not COEFFS or not distance or distance <= 0 then
+        return 0
+    end
+    if D_MAX <= 0 then
+        return 0
+    end
+
+    if distance < D_MIN then distance = D_MIN end
+    if distance > D_MAX then distance = D_MAX end
+
+    local time = interpolateDistanceToTime(distance)
+    if time < 0 then time = 0 end
+    dprint("ballisticTime: D=", distance, " -> t=", time)
+    return time
+end
+
+function ballisticDistance(time)
+    if not COEFFS or not time or time <= 0 then
+        return 0
+    end
+    if D_MAX <= 0 then
+        return 0
+    end
+
+    local timeMax = DATASET[#DATASET].time
+    if time >= timeMax then
+        return D_MAX
+    end
+
+    local distance = interpolateTimeToDistance(time)
+    dprint("ballisticDistance: T=", time, " -> D=", distance)
+    return distance
+end
+
+function ballisticDropScale(time)
+    return 1
+end
