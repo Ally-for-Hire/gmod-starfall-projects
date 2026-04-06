@@ -1,10 +1,12 @@
 --@name Merydian's Public Gun Controller
 --@author Ally for Hire / Merydian9
+--@include allylib/general_algorithms.txt
 --@include allylib/simple_server-side_wire_helper.txt
 --@include allylib/merys_integrated_ballistics_computer.txt
 --@server
 
 local curtime = timer.curtime
+require("allylib/general_algorithms.txt")
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/merys_integrated_ballistics_computer.txt")
 
@@ -19,18 +21,6 @@ local LOAD_ANG = LOAD_ENABLED and Angle(LOAD_PITCH, 0, 0) or nil
 
 local NextThink = 0
 local LastGun = nil
-
-local function getStaticTargetPos(hit, targetPos)
-    if targetPos and targetPos:getLength() > 0 then
-        return targetPos
-    end
-    return hit or ZERO_VEC
-end
-
-local function getGunOrigin(gun)
-    if not gun or not gun:isValid() then return nil end
-    return gun:getMassCenterW() or gun:getPos()
-end
 
 local function getLoadAimPos(gun, base, targetPos, loadAng)
     local origin = getGunOrigin(gun)
@@ -53,7 +43,7 @@ local function main()
     local active = (Active or 0) ~= 0
     local gunValid = gun and gun:isValid()
     local baseValid = base and base:isValid()
-    local rawTargetPos = getStaticTargetPos(hit, targetPos)
+    local rawTargetPos = preferTargetPos(hit, targetPos)
     local hasTarget = rawTargetPos:getLength() > 0
 
     if gunValid and gun ~= LastGun and CFBA_SetGun then

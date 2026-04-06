@@ -2,6 +2,9 @@
 --@author Ally for Hire / Merydian9
 --@shared
 --@server
+--@include allylib/general_algorithms.txt
+
+require("allylib/general_algorithms.txt")
 
 wire.adjustPorts({
     Aimer = "entity",
@@ -49,14 +52,6 @@ local function negateAngle(ang)
     return Angle(-ang.pitch, -ang.yaw, -ang.roll)
 end
 
-local function getGunOrigin(currentGun)
-    return currentGun:getMassCenterW() or currentGun:getPos()
-end
-
-local function isNonZeroVector(vec)
-    return vec ~= nil and vec:getLength() > 0
-end
-
 local function updateGunState(value)
     gun = value
     if not gun or not gun:isValid() then
@@ -84,18 +79,18 @@ local function getUnlockedTargetSnapshot(currentGun)
     local leadPos = wire.ports.LeadPos or Vector()
     local targetName = wire.ports.TargetName or ""
 
-    if targetName ~= "" and isNonZeroVector(leadPos) then
-        if isNonZeroVector(targetPos) then
+    if targetName ~= "" and hasVectorValue(leadPos) then
+        if hasVectorValue(targetPos) then
             return leadPos, targetPos
         end
         return leadPos, leadPos
     end
 
-    if isNonZeroVector(hitPos) then
+    if hasVectorValue(hitPos) then
         return hitPos, hitPos
     end
 
-    if isNonZeroVector(targetPos) then
+    if hasVectorValue(targetPos) then
         return targetPos, targetPos
     end
 
@@ -149,7 +144,7 @@ hook.add("tick", "main", function()
     wire.ports.GunTarget = gunTarget
 
     local toTarget = aimPos - getGunOrigin(gun)
-    if not isNonZeroVector(toTarget) then
+    if not hasVectorValue(toTarget) then
         integral = Angle()
         return
     end
