@@ -22,6 +22,8 @@ Usage:
     local baseEnt = InputValues.Base
 ]]--
 
+if CLIENT then return end
+
 Inputs, Outputs, InputValues = Inputs or {}, Outputs or {}, InputValues or {}
 local InputTriggers = InputTriggers or {}
 
