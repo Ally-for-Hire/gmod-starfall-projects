@@ -1,4 +1,4 @@
---@name MFD Ultra
+--@name Lowlag Multi Function Displays
 --@author Ally for Hire / Merydian9
 --@include allylib/simple_server-side_wire_helper.txt
 --@include allylib/helpful_hud_functions.txt
