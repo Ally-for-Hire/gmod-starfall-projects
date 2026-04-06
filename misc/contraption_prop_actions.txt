@@ -1,6 +1,9 @@
 --@name Contraption Prop Actions
 --@author Ally for Hire / Merydian9
+--@include ../allylib/general_algorithms.txt
 --@server
+
+require("../allylib/general_algorithms.txt")
 
 local BATCH_SIZE = 24
 
@@ -28,19 +31,6 @@ local queueIndex = 1
 local processed = 0
 local changed = 0
 local skipped = 0
-
-local function roundNumber(value, decimals)
-    local scale = 10 ^ (decimals or 0)
-    return math.round(value * scale) / scale
-end
-
-local function roundAngle(ang, decimals)
-    return Angle(
-        roundNumber(ang.p, decimals),
-        roundNumber(ang.y, decimals),
-        roundNumber(ang.r, decimals)
-    )
-end
 
 local function gatherContraptionEntities()
     local list = chip():getAllConstrained({ Wire = true, Parent = true }) or {}

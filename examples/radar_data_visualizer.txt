@@ -1,8 +1,11 @@
 --@name Radar Data Visualizer
 --@author Ally for Hire / Merydian9
+--@include ../allylib/general_algorithms.txt
 --@shared
 
 -- Version 1.3.0
+
+require("../allylib/general_algorithms.txt")
 
 --[[
 Purpose:
@@ -24,13 +27,6 @@ local VELOCITY_EPS = 1
 local STALE_TRACK_TIME = 1.5
 local MAX_EXTRAPOLATION = 0.35
 local NET_ID_BITS = 16
-
-local function vectorDeltaLenSq(a, b)
-    local dx = a[1] - b[1]
-    local dy = a[2] - b[2]
-    local dz = a[3] - b[3]
-    return dx * dx + dy * dy + dz * dz
-end
 
 if SERVER then
     local positions = {}
