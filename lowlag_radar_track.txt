@@ -1,0 +1,314 @@
+--@name Lowlag Radar Track
+--@author Ally for Hire / Merydian9
+--@include GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt
+--@include GMOD-Starfall-Releases/allylib/helpful_hud_functions.txt
+--@shared
+
+require("GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt")
+require("GMOD-Starfall-Releases/allylib/helpful_hud_functions.txt")
+
+OUTPUT_UPDATE_CAP = 0.05
+FOLLOW_LAST_VELOCITY_TIME = 5
+SOUND_VOLUME = 35
+CHIP = chip()
+
+if SERVER then
+    updateInputs("Radar:ENTITY Position:ARRAY Velocity:ARRAY IDs:ARRAY Owner:ARRAY HitPos:VECTOR Lock:NORMAL")
+    updateOutputs("GimbalPos:VECTOR TargetPos:VECTOR TargetVelocity:VECTOR TargetID:NORMAL TargetName:STRING")
+    
+    ActivelyTracking = false
+    TargetInArray = false
+    LastOutputUpdate = 0
+    LastSeen = 0
+    SearchAttempts = 0
+    InternalInfo = {}
+    
+    Inputs.Radar:addTrigger(function(ent)
+        if ent == nil then return end
+        if not isValid(ent) then
+            wire.delete(CHIP, "Position")
+            wire.delete(CHIP, "Velocity")
+            wire.delete(CHIP, "IDs")
+            wire.delete(CHIP, "Owner")
+            return
+        end
+
+        local wireSuccesses = 0
+        local function safeWireCreate(entI, entO, inputName, outputName)
+            local ok = pcall(wire.create, entI, entO, inputName, outputName)
+            if ok then wireSuccesses = wireSuccesses + 1 end
+            return ok
+        end
+        local function safeWireDelete(ent, inputName)
+            local ok = pcall(wire.delete, ent, inputName)
+            return ok
+        end
+        
+        safeWireCreate(CHIP, ent, "Position", "Position")
+        safeWireCreate(CHIP, ent, "Velocity", "Velocity")
+        safeWireCreate(CHIP, ent, "IDs", "IDs")
+        safeWireCreate(CHIP, ent, "Owner", "Owner")
+        
+        if wireSuccesses != 4 then print(Color(255, 0, 0), "[ERROR]: ", Color(255, 255, 255), "Wirelinks failed to connect.") end
+        if wireSuccesses == 0 then
+            safeWireDelete(CHIP, "Position")
+            safeWireDelete(CHIP, "Velocity")
+            safeWireDelete(CHIP, "IDs")
+            safeWireDelete(CHIP, "Owner")
+        end
+    end)
+    
+    Inputs.HitPos:addTrigger(function(vec)
+        -- Updating outputs is lag-heavy, so we want to limit it when possible
+        if ActivelyTracking then return end
+        if (timer.curtime() - LastOutputUpdate) < OUTPUT_UPDATE_CAP then return end
+        
+        Outputs.GimbalPos:update(vec)
+        LastOutputUpdate = timer.curtime()
+    end)
+    
+    Inputs.Position:addTrigger(function(vec)
+        if not ActivelyTracking then return end
+        if (timer.curtime() - LastOutputUpdate) < OUTPUT_UPDATE_CAP then return end
+        
+        local targPos = Inputs.Position:get()
+        local targVel = Inputs.Velocity:get()
+        local targID = Inputs.IDs:get()
+        local targName = Inputs.Owner:get()
+        
+        -- if the arrays are miss-matched we dip
+        if (#targPos + #targVel + #targID + #targName) != #targPos * 4 then return end
+        
+        local searchIndex = InternalInfo[5]
+        
+        -- if it's at the same place in the array we can skip searching for it
+        -- otherwise we need to find it
+        if targID[searchIndex] == InternalInfo[3] then
+            InternalInfo = {targPos[searchIndex], targVel[searchIndex], targID[searchIndex], targName[searchIndex], searchIndex}
+            LastSeen = timer.curtime()
+            SearchAttempts = 0
+            TargetInArray = true
+        else
+            TargetInArray = false
+            for i = 1, #targID do
+                if targID[i] != InternalInfo[3] then continue end
+                
+                InternalInfo = {targPos[i], targVel[i], targID[i], targName[i], i}
+                LastSeen = timer.curtime()
+                SearchAttempts = 0
+                TargetInArray = true
+                break
+            end
+        end
+        
+        -- InternalInfo = {pos, vel, id, name, arrayindex}
+        Outputs.TargetPos:update(InternalInfo[1])
+        Outputs.TargetVelocity:update(InternalInfo[2])
+        Outputs.TargetID:update(InternalInfo[3])
+        Outputs.TargetName:update(InternalInfo[4])
+        
+        local searchPosition = InternalInfo[1]
+        local dt = (timer.curtime() - LastSeen)
+        if not TargetInArray and dt < FOLLOW_LAST_VELOCITY_TIME then
+            if SearchAttempts % 2 == 0 then
+                searchPosition = InternalInfo[1] + InternalInfo[2] * dt
+            end
+            
+            SearchAttempts = SearchAttempts + 1
+        end
+        
+        Outputs.GimbalPos:update(searchPosition)
+        LastOutputUpdate = timer.curtime()
+        
+        -- uses roughly 64 bytes on average
+        if net.getBytesLeft() > 64 then
+            net.start("ST_syncClientTargetData")
+                net.writeVector(InternalInfo[1])
+                net.writeUInt(InternalInfo[3], 3) 
+                net.writeString(InternalInfo[4])
+                net.writeBool(TargetInArray)
+            net.send()
+        end
+    end)
+    
+    Inputs.Lock:addTrigger(function(num)
+        if num == 0 then return end
+        
+        if ActivelyTracking then
+            ActivelyTracking = false
+            net.start("ST_syncClientTrackingBool")
+                net.writeBool(false)
+            net.send()
+            
+            return
+        end
+        
+        -- Grab these from the inputs
+        local targPos = Inputs.Position:get()
+        if #targPos == 0 then return end -- if we can't lock anything, avoid extra work
+        local targVel = Inputs.Velocity:get()
+        local targID = Inputs.IDs:get()
+        local targName = Inputs.Owner:get()
+        local hitPos = Inputs.HitPos:get()
+        local targInfo = {targPos[1], targVel[1], targID[1], targName[1], 1}
+        
+        local minDistance = targPos[1]:getDistance(hitPos)
+        local testDistance = 0
+
+        for i = 2, #targPos do
+            testDistance = targPos[i]:getDistance(hitPos)
+            
+            if testDistance < minDistance then
+                targInfo = {targPos[i], targVel[i], targID[i], targName[i], i}
+                minDistance = testDistance
+            end
+        end
+        
+        InternalInfo = targInfo
+        ActivelyTracking = true
+        TargetInArray = true
+        net.start("ST_syncClientTrackingBool")
+            net.writeBool(true)
+        net.send()
+    end)
+end
+
+if CLIENT then
+    TargetPos = Vector()
+    TargetID = 0
+    TargetName = "Merydian9"
+    ActivelyTracking = false
+    TargetInArray = false
+    NewTargetPeriod = false
+    InitSounds = true
+    P = player()
+    
+    FONT_MAIN = render.createFont("Default", 12, nil, nil, nil, true, nil)
+    LOCK_INDICATOR = initRT("Tracking Indicator")
+    LOST_INDICATOR = initRT("Lost Track Indicator")
+    resx, resy = render.getResolution()
+    resx = resx / 2
+    resy = resy / 2
+    
+    SOUND_track = nil
+    SOUND_lock = nil
+
+    hook.add("drawhud", "ST_mainDrawLoop", function()
+        if not ActivelyTracking or NewTargetPeriod then return end
+        
+        local c = TargetPos:toScreen()
+        if NewTargetPeriod then
+            c.x = resx
+            c.y = resy
+        end
+        local x = c.x
+        local y = c.y
+        
+        if TargetInArray then
+            drawCenterRT(x, y, LOCK_INDICATOR, 2)
+        else
+            drawCenterRT(x, y, LOST_INDICATOR, 2)
+        end
+        
+        font(FONT_MAIN)
+        textSimple(x, y + 30, TargetName, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+        textSimple(x, y + 40, "ID " .. TargetID, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+    end)
+    
+    hook.add("renderoffscreen", "ST_drawStaticElements", function()
+        local x, y = 512, 512
+        
+        selectClearRT(LOCK_INDICATOR)    
+            color(Color(0, 0, 0, 255))
+            --centerRect(x, y, 30, 6)
+            --centerRect(x, y, 6, 30)
+            --centerRect(x + 30, y, 30, 6)
+            --centerRect(x - 30, y, 30, 6)
+            --centerRect(x, y + 22, 6, 15)
+            --centerRect(x, y - 22, 6, 15)
+            centerRectOutline(x, y, 82, 82, 4)
+            
+            color(COL_WHITE)
+            --centerRect(x, y, 26, 2)
+            --centerRect(x, y, 2, 26)
+            --centerRect(x + 30, y, 26, 2)
+            --centerRect(x - 30, y, 26, 2)
+            --centerRect(x, y + 22, 2, 11)
+            --centerRect(x, y - 22, 2, 11)
+            centerRectOutline(x, y, 80, 80, 2)
+            
+        selectClearRT(LOST_INDICATOR)
+            local size = 40
+            local distOuter = 24
+            local distInner = 22
+            
+            color(Color(0, 0, 0, 255))
+            line(x + size, y + size, x + distOuter, y + size, 4)
+            line(x + size, y + size, x + size, y + distOuter, 4)
+            
+            line(x + size, y - size, x + distOuter, y - size, 4)
+            line(x + size, y - size, x + size, y - distOuter, 4)
+            
+            line(x - size, y + size, x - distOuter, y + size, 4)
+            line(x - size, y + size, x - size, y + distOuter, 4)
+            
+            line(x - size, y - size, x - distOuter, y - size, 4)
+            line(x - size, y - size, x - size, y - distOuter, 4)
+            
+            color(COL_WHITE)
+            line(x + size, y + size, x + distInner, y + size, 2)
+            line(x + size, y + size, x + size, y + distInner, 2)
+            
+            line(x - size, y + size, x - distInner, y + size, 2)
+            line(x - size, y + size, x - size, y + distInner, 2)
+            
+            line(x + size, y - size, x + distInner, y - size, 2)
+            line(x + size, y - size, x + size, y - distInner, 2)
+            
+            line(x - size, y - size, x - distInner, y - size, 2)
+            line(x - size, y - size, x - size, y - distInner, 2)
+            
+        hook.remove("renderoffscreen", "ST_drawStaticElements")
+    end)
+
+    net.receive("ST_syncClientTargetData", function()
+        TargetPos = net.readVector()
+        TargetID = net.readUInt(3)
+        TargetName = net.readString()
+        TargetInArray = net.readBool()
+        NewTargetPeriod = false
+        
+        if TargetInArray then
+            SOUND_track:play()
+            SOUND_lock:stop()
+        else
+            SOUND_track:stop()
+            SOUND_lock:play()
+        end
+    end)
+    
+    net.receive("ST_syncClientTrackingBool", function()
+        ActivelyTracking = net.readBool()
+        NewTargetPeriod = true
+        
+        if InitSounds then
+            SOUND_track = sound.create(P, "acf_extra/airfx/hominglockaquired1.wav")
+            SOUND_track:setSoundLevel(SOUND_VOLUME)
+            SOUND_dropTrack = sound.create(P, "acf_extra/airfx/hominglocksequence1.wav")
+            SOUND_dropTrack:setSoundLevel(SOUND_VOLUME)
+            SOUND_lock = sound.create(P, "acf_extra/airfx/satellite_target.wav")
+            SOUND_lock:setSoundLevel(SOUND_VOLUME)
+            InitSounds = false
+        end
+        
+        SOUND_lock:stop()
+        SOUND_track:stop()
+        SOUND_dropTrack:stop()
+        
+        if not ActivelyTracking then
+            SOUND_dropTrack:play()
+        end
+    end)
+end
+
+ 
