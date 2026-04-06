@@ -24,14 +24,14 @@ This README reflects the current local folder state under `garrysmod/data/starfa
 - `2024_physical_gun_controller.txt`
 - `ally_mobility_hours.txt`
 - `merydian's_camera_chip.txt`
-- `merydian's_sf_gun_controller.txt`
+- `merys_public_gun_controller.txt`
 - `merydians_sensor_suite.txt`
 - `mfd_ultra.txt`
 
 ## Libraries (`allylib/`)
 - `acf_ballistics_lib.txt`
 - `animation_class.txt`
-- `curve-fitting_ballistics_algorithm.txt`
+- `merys_integrated_ballistics_computer.txt`
 - `general_algorithms.txt`
 - `gtable_library.txt`
 - `helpful_hud_functions.txt`
