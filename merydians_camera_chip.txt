@@ -2,368 +2,432 @@
 --@author Ally for Hire / Merydian9
 --@model models/jaanus/wiretool/wiretool_range.mdl
 --@shared
+--@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/general_algorithms.txt
 
--- Version 1.1.0
--- TOP PRIORITY NET SEND: Allocate 10 bytes
--- Made Filter built in
+-- Version 1.2.0
+-- Built-in filter support enabled and net payloads condensed.
 
-INPUTS = {}
-SHARED = {}
-SETTINGS = {}
+INPUTS = INPUTS or {}
+SHARED = SHARED or {}
+SETTINGS = SETTINGS or {}
 
-INPUTS.Chair           = chip()
-INPUTS.MainParent      = chip()
+INPUTS.Chair = chip()
+INPUTS.MainParent = chip()
 INPUTS.SecondaryParent = chip()
 INPUTS.TertiaryParent = chip()
-INPUTS.Filter          = {}
-SHARED.Driver          = nil
-SHARED.O               = owner()
-SHARED.P               = player()
-SHARED.ENTID           = chip():entIndex()
+INPUTS.Filter = {}
 
 -- This will be relative to MainParent
-SETTINGS.CamWorldPos1  = Vector(0, 0, 120)
-SETTINGS.CamRelPos1    = Vector(0, 0, 0) 
-SETTINGS.CamDist1      = 300
+SETTINGS.CamWorldPos1 = Vector(0, 0, 120)
+SETTINGS.CamRelPos1 = Vector(0, 0, 0)
+SETTINGS.CamDist1 = 300
 
 -- This will be relative to SecondaryParent
-SETTINGS.CamWorldPos2  = Vector(0, 0, 0)
-SETTINGS.CamRelPos2    = Vector(0, 12, 13)
-SETTINGS.CamDist2      = 0
+SETTINGS.CamWorldPos2 = Vector(0, 0, 0)
+SETTINGS.CamRelPos2 = Vector(0, 12, 13)
+SETTINGS.CamDist2 = 0
 
 -- This will be relative to TertiaryParent
-SETTINGS.CamWorldPos3  = Vector(0, 0, 0)
-SETTINGS.CamRelPos3    = Vector(250, 0, 0)
-SETTINGS.CamDist3      = 0
+SETTINGS.CamWorldPos3 = Vector(0, 0, 0)
+SETTINGS.CamRelPos3 = Vector(250, 0, 0)
+SETTINGS.CamDist3 = 0
+
+SHARED.Driver = nil
+SHARED.Owner = owner()
+SHARED.Player = player()
+SHARED.EntId = chip():entIndex()
+
+MSG_MAIN_OUTPUTS = 1
+MSG_STATE = 2
+MSG_FOV = 3
+
+require("allylib/general_algorithms.txt")
+
+local function normalizeAngleCopy(ang)
+    local pitch = ang.pitch
+    local yaw = ang.yaw
+    local roll = ang.roll
+
+    if pitch > 180 then pitch = pitch - 360 end
+    if pitch < -180 then pitch = pitch + 360 end
+    if yaw > 180 then yaw = yaw - 360 end
+    if yaw < -180 then yaw = yaw + 360 end
+    if roll > 180 then roll = roll - 360 end
+    if roll < -180 then roll = roll + 360 end
+
+    return Angle(pitch, yaw, roll)
+end
+
+local function hasEntries(tbl)
+    if type(tbl) ~= "table" then return false end
+    return next(tbl) ~= nil
+end
 
 if SERVER then
-    wire.adjustInputs({"Chair", "MainParent", "SecondaryParent", "TertiaryParent"}, {"Entity", "Entity", "Entity", "Entity"}, {"Vehicle Chair", "Camera Main Parent", "Camera Secondary Parent", "Tertiary Camera Parent"})
-    wire.adjustOutputs({"HitPos", "CamDir", "CamAng", "CamState", "CamFOV"}, {"Vector", "Vector", "Angle", "Number", "Number"}, {"Camera's HitPos", "Camera's Aim Direction", "Camera's Aim Angle", "Camera Number State", "Camera FOV"})
-    
-    wire.ports.CamState = 1
-    wire.ports.CamFOV = 100
+    require("allylib/simple_server-side_wire_helper.txt")
 
-    local function enteredVehicleHandler(ply, vehicle, num)
-        if vehicle ~= INPUTS.Chair then return end
-        
-        SHARED.Driver = ply
-        net.start(SHARED.ENTID .. " Driver Update")
-            net.writeEntity(ply)
-        net.send()
+    syncInputCommands(true)
+    updateInputs("Chair:ENTITY MainParent:ENTITY SecondaryParent:ENTITY TertiaryParent:ENTITY Filter:ARRAY")
+    updateOutputs("HitPos:VECTOR CamDir:VECTOR CamAng:ANGLE CamPos:VECTOR CamState:NORMAL CamFOV:NORMAL")
+
+    Outputs.CamState:update(1)
+    Outputs.CamFOV:update(100)
+
+    local function sanitizeFilter(value)
+        local filter = asArray(value)
+        local clean = {}
+        local count = 0
+
+        for i = 1, #filter do
+            local ent = filter[i]
+            if isValid(ent) then
+                count = count + 1
+                clean[count] = ent
+            end
+        end
+
+        return clean
     end
-    
-    local function leftVehicleHandler(ply, vehicle)
-        if vehicle ~= INPUTS.Chair then return end
-        
-        net.start(SHARED.ENTID .. " Driver Update")
-            net.writeEntity(SHARED.Driver)
-        net.send()
-        SHARED.Driver = chip()
-    end
-    
-    local function wireHandler(name, value)
-        if value == nil then return end
-        
-        if name == "Chair" then 
-            if not isValid(value) then value = chip() end
-            
-            INPUTS.Chair = value 
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("Chair")
-                net.writeEntity(value)
-            net.send()
-            
-        elseif name == "MainParent" then 
-            if not isValid(value) then value = chip() end
-            
-            INPUTS.MainParent = value 
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("MainParent")
-                net.writeEntity(value)
-            net.send()
-            
-        elseif name == "SecondaryParent" then 
-            if not isValid(value) then value = chip() end
-            
-            INPUTS.SecondaryParent = value 
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("SecondaryParent")
-                net.writeEntity(value)
-            net.send()
-            
-        elseif name == "TertiaryParent" then 
-            if not isValid(value) then value = chip() end
-            
-            INPUTS.TertiaryParent = value 
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("TertiaryParent")
-                net.writeEntity(value)
-            net.send()
-            
-        elseif name == "Filter" then 
-            INPUTS.Filter = value 
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("Filter")
-                net.writeTable(value)
-            net.send()
+
+    local function writeFilterPayload(filter)
+        local count = math.min(#filter, 255)
+        net.writeInt(count, 8)
+        for i = 1, count do
+            net.writeEntity(filter[i])
         end
     end
-    
-    local function clientInitializedHandler(ply)
+
+    local function sendWireUpdate(kind, value, recipient)
+        tryNetSend(SHARED.EntId .. " Wire Update", function()
+            net.writeInt(kind, 8)
+
+            if kind == 5 then
+                writeFilterPayload(value)
+            else
+                net.writeEntity(value)
+            end
+        end, recipient)
+    end
+
+    local function sendClientSnapshot(recipient)
         if INPUTS.Chair ~= chip() then
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("Chair")
-                net.writeEntity(INPUTS.Chair)
-            net.send()
+            sendWireUpdate(1, INPUTS.Chair, recipient)
         end
         if INPUTS.MainParent ~= chip() then
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("MainParent")
-                net.writeEntity(INPUTS.MainParent)
-            net.send()
+            sendWireUpdate(2, INPUTS.MainParent, recipient)
         end
         if INPUTS.SecondaryParent ~= chip() then
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("SecondaryParent")
-                net.writeEntity(INPUTS.SecondaryParent)
-            net.send()
+            sendWireUpdate(3, INPUTS.SecondaryParent, recipient)
         end
         if INPUTS.TertiaryParent ~= chip() then
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("TertiaryParent")
-                net.writeEntity(INPUTS.TertiaryParent)
-            net.send()
+            sendWireUpdate(4, INPUTS.TertiaryParent, recipient)
         end
-        if INPUTS.Filter ~= {} then
-            net.start(SHARED.ENTID .. " Wire Update")
-                net.writeString("Filter")
-                net.writeTable(INPUTS.Filter)
-            net.send()
+        if hasEntries(INPUTS.Filter) then
+            sendWireUpdate(5, INPUTS.Filter, recipient)
         end
     end
-    
+
+    local function enteredVehicleHandler(ply, vehicle)
+        if vehicle ~= INPUTS.Chair then return end
+
+        SHARED.Driver = ply
+        tryNetSend(SHARED.EntId .. " Driver Update", function()
+            net.writeEntity(ply)
+        end)
+    end
+
+    local function leftVehicleHandler(ply, vehicle)
+        if vehicle ~= INPUTS.Chair then return end
+
+        SHARED.Driver = chip()
+        tryNetSend(SHARED.EntId .. " Driver Update", function()
+            net.writeEntity(chip())
+        end)
+    end
+
+    Inputs.Chair:addTrigger(function(value)
+        INPUTS.Chair = sanitizeEntityInput(value, chip())
+        sendWireUpdate(1, INPUTS.Chair)
+    end)
+
+    Inputs.MainParent:addTrigger(function(value)
+        INPUTS.MainParent = sanitizeEntityInput(value, chip())
+        sendWireUpdate(2, INPUTS.MainParent)
+    end)
+
+    Inputs.SecondaryParent:addTrigger(function(value)
+        INPUTS.SecondaryParent = sanitizeEntityInput(value, chip())
+        sendWireUpdate(3, INPUTS.SecondaryParent)
+    end)
+
+    Inputs.TertiaryParent:addTrigger(function(value)
+        INPUTS.TertiaryParent = sanitizeEntityInput(value, chip())
+        sendWireUpdate(4, INPUTS.TertiaryParent)
+    end)
+
+    Inputs.Filter:addTrigger(function(value)
+        INPUTS.Filter = sanitizeFilter(value)
+        sendWireUpdate(5, INPUTS.Filter)
+    end)
+
+    local function clientInitializedHandler(ply)
+        sendClientSnapshot(ply)
+    end
+
     local function clientInfoHandler()
-        local name = net.readString()
-        
-        if name == "MainOutputs" then
-            wire.ports.HitPos = net.readVector()   
-            wire.ports.CamDir = net.readVector()   
-            wire.ports.CamAng = net.readAngle()
-        elseif name == "State" then
-            wire.ports.CamState = net.readInt(8)
-        elseif name == "FOV" then
-            wire.ports.CamFOV = net.readInt(8)
-        end
-    end 
-    
-    net.receive(SHARED.ENTID .. " Server Update", clientInfoHandler)
-    hook.add("PlayerEnteredVehicle", SHARED.ENTID .. " PlayerEnteredVehicle", enteredVehicleHandler)
-    hook.add("PlayerLeaveVehicle", SHARED.ENTID .. " PlayerLeaveVehicle", leftVehicleHandler)
-    hook.add("ClientInitialized", SHARED.ENTID .. " ClientInitialized", clientInitializedHandler)
-    hook.add("Input", SHARED.ENTID .. " Input", wireHandler)
+        pcall(function()
+            if net.getBytesLeft() < 1 then return end
+
+            local msgType = net.readInt(8)
+
+            if msgType == MSG_MAIN_OUTPUTS then
+                Outputs.HitPos:update(net.readVector())
+                Outputs.CamDir:update(net.readVector())
+                Outputs.CamAng:update(net.readAngle())
+                Outputs.CamPos:update(net.readVector())
+            elseif msgType == MSG_STATE then
+                Outputs.CamState:update(net.readInt(8))
+            elseif msgType == MSG_FOV then
+                Outputs.CamFOV:update(net.readInt(8))
+            end
+        end)
+    end
+
+    net.receive(SHARED.EntId .. " Server Update", clientInfoHandler)
+    hook.add("PlayerEnteredVehicle", SHARED.EntId .. " PlayerEnteredVehicle", enteredVehicleHandler)
+    hook.add("PlayerLeaveVehicle", SHARED.EntId .. " PlayerLeaveVehicle", leftVehicleHandler)
+    hook.add("ClientInitialized", SHARED.EntId .. " ClientInitialized", clientInitializedHandler)
 end
 
 if CLIENT then
-    camWorldPos    = SETTINGS.CamWorldPos1
-    camRelPos      = SETTINGS.CamRelPos1
-    camDist        = SETTINGS.CamDist1
-    camParent      = INPUTS.MainParent
-    camFOV         = 100
-    
-    camAng         = Angle()
-    camHitPos      = Vector()
-    prevCamState   = 1
-    camState       = 1
-    
-    lastScroll     = timer.curtime()
-    nextSend       = timer.curtime()
-    
-    bPressed       = false
-    panMul         = 1
-    
-    local function normalizeAngle(ang) --merydian: thank you poly, poly:thank you tymkbong
-        if ang.pitch > 180 then
-            ang.pitch = ang.pitch - 360
-        end
-    
-        if ang.yaw > 180 then
-            ang.yaw = ang.yaw - 360
-        end
-    
-        if ang.roll > 180 then
-            ang.roll = ang.roll - 360
-        end
-    
-        return ang
-    end
-    
+    CamWorldPos = SETTINGS.CamWorldPos1
+    CamRelPos = SETTINGS.CamRelPos1
+    CamDist = SETTINGS.CamDist1
+    CamParent = INPUTS.MainParent
+    CamFOV = 100
+
+    CamAng = Angle()
+    CamHitPos = Vector()
+    PrevCamState = 1
+    CamState = 1
+
+    LastScroll = timer.curtime()
+    NextSend = timer.curtime()
+
+    ZoomHeld = false
+    PanMul = 1
+
     local function active()
-        return SHARED.Driver == SHARED.P and SHARED.Driver != chip() and INPUTS.MainParent ~= chip()
+        return SHARED.Driver == SHARED.Player and SHARED.Driver ~= chip() and INPUTS.MainParent ~= chip()
+    end
+
+    local function shouldHit(ent)
+        if not isValid(ent) then return false end
+        if ent:getOwner() == SHARED.Owner then return false end
+
+        local filter = INPUTS.Filter
+        for i = 1, #filter do
+            if filter[i] == ent then
+                return false
+            end
+        end
+
+        return true
+    end
+
+    local function sendState(msgType, valueA, valueB, valueC, valueD)
+        return pcall(function()
+            net.start(SHARED.EntId .. " Server Update")
+                net.writeInt(msgType, 8)
+
+                if msgType == MSG_MAIN_OUTPUTS then
+                    net.writeVector(valueA)
+                    net.writeVector(valueB)
+                    net.writeAngle(valueC)
+                    net.writeVector(valueD)
+                else
+                    net.writeInt(valueA, 8)
+                end
+
+            net.send(owner())
+        end)
+    end
+
+    local function applyState(state)
+        if state == 1 then
+            CamWorldPos = SETTINGS.CamWorldPos1
+            CamRelPos = SETTINGS.CamRelPos1
+            CamDist = SETTINGS.CamDist1
+            CamParent = INPUTS.MainParent
+        elseif state == 2 then
+            CamWorldPos = SETTINGS.CamWorldPos2
+            CamRelPos = SETTINGS.CamRelPos2
+            CamDist = SETTINGS.CamDist2
+            CamParent = INPUTS.SecondaryParent
+        elseif state == 3 then
+            CamWorldPos = SETTINGS.CamWorldPos3
+            CamRelPos = SETTINGS.CamRelPos3
+            CamDist = SETTINGS.CamDist3
+            CamParent = INPUTS.TertiaryParent
+        end
     end
 
     local function resetCam()
-        camWorldPos    = SETTINGS.CamWorldPos1
-        camRelPos      = SETTINGS.CamRelPos1
-        camDist        = SETTINGS.CamDist1
-        camParent      = INPUTS.MainParent
-        camFOV         = 100
-        
-        camDistToggle  = true
-        camState       = 1
+        CamFOV = 100
+        CamState = 1
+        PanMul = 1
+        ZoomHeld = false
+        applyState(CamState)
     end
-    
+
     local function modifyState()
-        if camState == 1 then
-            camWorldPos    = SETTINGS.CamWorldPos1
-            camRelPos      = SETTINGS.CamRelPos1
-            camDist        = SETTINGS.CamDist1
-            camParent      = INPUTS.MainParent
-        elseif camState == 2 then
-            camWorldPos    = SETTINGS.CamWorldPos2
-            camRelPos      = SETTINGS.CamRelPos2
-            camDist        = SETTINGS.CamDist2
-            camParent      = INPUTS.SecondaryParent
-        elseif camState == 3 then
-            camWorldPos    = SETTINGS.CamWorldPos3
-            camRelPos      = SETTINGS.CamRelPos3
-            camDist        = SETTINGS.CamDist3
-            camParent      = INPUTS.TertiaryParent
-        end
-
-        if net.getBytesLeft() > 2 then 
-            net.start(SHARED.ENTID .. " Server Update")
-                net.writeString("State")
-                net.writeInt(camState, 8)
-            net.send(owner())
-        end
+        applyState(CamState)
+        sendState(MSG_STATE, CamState)
     end
 
-    local function calcViewHandler(pos, ang, fov, znear, zfar)
-        if not active() or not isValid(camParent) then return end
-        
-        local origin = camParent:localToWorld(camRelPos) + camWorldPos
-        origin = origin - camAng:getForward() * camDist
-        
-        if nextSend < timer.curtime() then
-            nextSend = timer.curtime() + 0.05 -- 50ms delay.. i know... horrible..
-            local sendTable = {}
-            local hitPos = Vector()
-            
-            hitPos = trace.line(origin, origin + camAng:getForward() * 999999, function(ent) return ent:getOwner() != SHARED.O end)["HitPos"]
-            
-            if net.getBytesLeft() > 5 then -- Tends to take 3 bytes but i'd rather play it safe. never use writeTable kids.
-                net.start(SHARED.ENTID .. " Server Update")
-                    net.writeString("MainOutputs")
-                    net.writeVector(hitPos)
-                    net.writeVector(camAng:getForward())
-                    net.writeAngle(normalizeAngle(camAng))
-                net.send(owner())
-            end
+    local function calcViewHandler()
+        if not active() or not isValid(CamParent) then return end
+
+        local now = timer.curtime()
+        local forward = CamAng:getForward()
+        local origin = CamParent:localToWorld(CamRelPos) + CamWorldPos - forward * CamDist
+
+        if NextSend < now then
+            NextSend = now + 0.05
+
+            local traceData = trace.line(origin, origin + forward * 999999, shouldHit)
+            CamHitPos = traceData.HitPos or origin
+            sendState(MSG_MAIN_OUTPUTS, CamHitPos, forward, normalizeAngleCopy(CamAng), origin)
         end
 
         return {
             origin = origin,
-            angles = camAng,
-            fov    = camFOV
+            angles = CamAng,
+            fov = CamFOV
         }
     end
-    
+
     local function inputPressHandler(button)
         if not active() then return end
-        
+
         if button == 79 then
             if INPUTS.TertiaryParent == chip() then return end
-            
-            if camState != 3 then
-                prevCamState = camState
-                camState = 3
+
+            if CamState ~= 3 then
+                PrevCamState = CamState
+                CamState = 3
             else
-                camState = prevCamState
+                CamState = PrevCamState
             end
-            
+
             modifyState()
         elseif button == 32 then
-            if camState + 1 == 2 and INPUTS.SecondaryParent == chip() or camState == 3 then 
-                return 
+            if (CamState + 1 == 2 and INPUTS.SecondaryParent == chip()) or CamState == 3 then
+                return
             end
-            
-            camState = camState + 1
-            if camState > 2 then camState = 1 end
-            
+
+            CamState = CamState + 1
+            if CamState > 2 then CamState = 1 end
+
             modifyState()
         elseif button == 12 then
-            camFOV = 27.27
-            panMul = camFOV / 100 * 2
-            bPressed = true
+            CamFOV = 27.27
+            PanMul = CamFOV / 100 * 2
+            ZoomHeld = true
         end
     end
-    
+
     local function inputReleaseHandler(button)
         if not active() then return end
-        
+
         if button == 12 then
-            bPressed = false
-            camFOV = 100
-            panMul = camFOV / 100
+            ZoomHeld = false
+            CamFOV = 100
+            PanMul = 1
         end
     end
 
     local function mouseMovedHandler(x, y)
         if not active() then return end
-        camAng.pitch = math.clamp(camAng.pitch + (y / 40) * panMul, -89, 89)
-        camAng.yaw   = camAng.yaw - (x / 40) * panMul
+
+        CamAng.pitch = clampValue(CamAng.pitch + (y / 40) * PanMul, -89, 89)
+        CamAng.yaw = CamAng.yaw - (x / 40) * PanMul
     end
 
     local function mouseWheeledHandler(delta)
-        if not active() or (timer.curtime() - lastScroll) < 0.01 then return end
-        
-        if not bPressed then 
-            camFOV = math.clamp(camFOV / 4^delta, 1, 100)
-            panMul = camFOV / 100
+        local now = timer.curtime()
+        if not active() or (now - LastScroll) < 0.01 then return end
+
+        if not ZoomHeld then
+            CamFOV = clampValue(CamFOV / 4 ^ delta, 1, 100)
+            PanMul = CamFOV / 100
         end
-        lastScroll = timer.curtime()
-        
-        if net.getBytesLeft() > 2 then 
-            net.start(SHARED.ENTID .. " Server Update")
-                net.writeString("FOV")
-                net.writeInt(camFOV, 8)
-            net.send(owner())
-        end
+
+        LastScroll = now
+        sendState(MSG_FOV, math.round(CamFOV))
     end
 
     local function driverUpdateHandler()
-        local newDriver = net.readEntity()
-        if newDriver == SHARED.Driver then
-            SHARED.Driver = chip()
-            return
-        end
-        
-        if newDriver != SHARED.P then return end
-        SHARED.Driver = newDriver
-        resetCam()
+        pcall(function()
+            if net.getBytesLeft() < 1 then return end
+
+            local newDriver = net.readEntity()
+            if newDriver ~= SHARED.Player then
+                SHARED.Driver = chip()
+                return
+            end
+
+            SHARED.Driver = newDriver
+            resetCam()
+        end)
+    end
+
+    local function readFilterPayload()
+        local filter = {}
+
+        pcall(function()
+            if net.getBytesLeft() < 1 then return end
+
+            local count = net.readInt(8)
+            for i = 1, count do
+                local ent = net.readEntity()
+                if isValid(ent) then
+                    filter[#filter + 1] = ent
+                end
+            end
+        end)
+
+        return filter
     end
 
     local function wireHandler()
-        local name = net.readString()
+        pcall(function()
+            if net.getBytesLeft() < 1 then return end
 
-        if name == "Chair" then
-            INPUTS.Chair = net.readEntity()
-        elseif name == "MainParent" then
-            INPUTS.MainParent = net.readEntity()
-        elseif name == "SecondaryParent" then
-            INPUTS.SecondaryParent = net.readEntity()
-        elseif name == "TertiaryParent" then
-            INPUTS.TertiaryParent = net.readEntity()
-        elseif name == "Filter" then
-            INPUTS.Filter = net.readTable()
-        end
+            local kind = net.readInt(8)
+
+            if kind == 1 then
+                INPUTS.Chair = net.readEntity()
+            elseif kind == 2 then
+                INPUTS.MainParent = net.readEntity()
+            elseif kind == 3 then
+                INPUTS.SecondaryParent = net.readEntity()
+            elseif kind == 4 then
+                INPUTS.TertiaryParent = net.readEntity()
+            elseif kind == 5 then
+                INPUTS.Filter = readFilterPayload()
+            end
+
+            applyState(CamState)
+        end)
     end
 
-    hook.add("CalcView",     SHARED.ENTID .. " CalcView",     calcViewHandler)
-    hook.add("MouseMoved",   SHARED.ENTID .. " MouseMoved",   mouseMovedHandler)
-    hook.add("MouseWheeled", SHARED.ENTID .. " MouseWheeled", mouseWheeledHandler)
-    hook.add("InputPressed", SHARED.ENTID .. " InputPressed", inputPressHandler)
-    hook.add("InputReleased",SHARED.ENTID .. " InputReleased", inputReleaseHandler)
-    net.receive(SHARED.ENTID .. " Driver Update", driverUpdateHandler)
-    net.receive(SHARED.ENTID .. " Wire Update",   wireHandler)
+    hook.add("CalcView", SHARED.EntId .. " CalcView", calcViewHandler)
+    hook.add("MouseMoved", SHARED.EntId .. " MouseMoved", mouseMovedHandler)
+    hook.add("MouseWheeled", SHARED.EntId .. " MouseWheeled", mouseWheeledHandler)
+    hook.add("InputPressed", SHARED.EntId .. " InputPressed", inputPressHandler)
+    hook.add("InputReleased", SHARED.EntId .. " InputReleased", inputReleaseHandler)
+    net.receive(SHARED.EntId .. " Driver Update", driverUpdateHandler)
+    net.receive(SHARED.EntId .. " Wire Update", wireHandler)
 end
