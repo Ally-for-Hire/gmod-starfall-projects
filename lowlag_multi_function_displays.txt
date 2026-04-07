@@ -6,11 +6,13 @@
 
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/helpful_hud_functions.txt")
+
+PI =  3.14159265359
+RWR_RANGE = 400
+
 C = chip()
 O = owner()
 P = player()
-PI =  3.14159265359
-RWR_RANGE = 400
 
 if SERVER then
     updateInputs("Base:ENTITY RWR:ENTITY RWR_Angles:ARRAY MWR_Positions:ARRAY MWR_Velocities:array WEP:ENTITY HORZ:ENTITY WYPT:ENTITY")
