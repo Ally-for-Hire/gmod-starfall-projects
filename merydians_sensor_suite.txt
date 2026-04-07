@@ -1,9 +1,9 @@
 --@name Merydian's Sensor Suite
 --@author Ally for Hire / Merydian9
---@include GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_server-side_wire_helper.txt
 --@server
 
-require("GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_server-side_wire_helper.txt")
 
 updateInputs("Sensors:ARRAY")
 updateOutputs("Position:ARRAY Velocity:ARRAY Owner:ARRAY IDs:ARRAY Times:ARRAY")
