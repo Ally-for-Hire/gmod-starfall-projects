@@ -25,7 +25,7 @@ Function index:
 - `InputValues.<Name>`: latest cached input payload for direct reads.
 ]]--
 
--- Version 1.5.1
+-- Version 1.6.0
 
 --[[
 Usage:
@@ -43,6 +43,7 @@ local InputTriggers = InputTriggers or {}
 
 local LastInputNames, LastInputTypes = LastInputNames or {}, LastInputTypes or {}
 local LastOutputNames, LastOutputTypes = LastOutputNames or {}, LastOutputTypes or {}
+local LastOutputValues = LastOutputValues or {}
 local ChangedState = ChangedState or {}
 local SyncInputCommandsEnabled = SyncInputCommandsEnabled or false
 local SyncedInputCommandNames = SyncedInputCommandNames or {}
@@ -110,8 +111,95 @@ end
 local outputProto = {}
 outputProto.__index = outputProto
 
+local function isSequentialTable(tbl)
+    local count = 0
+    for key in _pairs(tbl) do
+        if _type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+            return false, 0
+        end
+
+        count = count + 1
+    end
+
+    return true, count
+end
+
+local function cloneOutputValue(value)
+    if _type(value) ~= "table" then
+        return value
+    end
+
+    local clone = {}
+    for key, innerValue in _pairs(value) do
+        clone[key] = cloneOutputValue(innerValue)
+    end
+
+    return clone
+end
+
+local function outputValuesEqual(a, b)
+    if a == b and _type(a) ~= "table" then
+        return true
+    end
+
+    local typeA = _type(a)
+    if typeA ~= _type(b) then
+        return false
+    end
+
+    if typeA == "vector" then
+        return a.x == b.x and a.y == b.y and a.z == b.z
+    end
+
+    if typeA == "angle" then
+        return a.pitch == b.pitch and a.yaw == b.yaw and a.roll == b.roll
+    end
+
+    if typeA ~= "table" then
+        return a == b
+    end
+
+    local sequentialA, countA = isSequentialTable(a)
+    local sequentialB, countB = isSequentialTable(b)
+    if sequentialA ~= sequentialB or countA ~= countB then
+        return false
+    end
+
+    if sequentialA then
+        for i = 1, countA do
+            if not outputValuesEqual(a[i], b[i]) then
+                return false
+            end
+        end
+
+        return true
+    end
+
+    for key, valueA in _pairs(a) do
+        if not outputValuesEqual(valueA, b[key]) then
+            return false
+        end
+    end
+
+    for key in _pairs(b) do
+        if a[key] == nil then
+            return false
+        end
+    end
+
+    return true
+end
+
 function outputProto:update(value)
-    _wire_ports[self.name] = value
+    local name = self.name
+    local lastValue = LastOutputValues[name]
+    if lastValue ~= nil and outputValuesEqual(value, lastValue) then
+        return false
+    end
+
+    LastOutputValues[name] = cloneOutputValue(value)
+    _wire_ports[name] = value
+    return true
 end
 
 -- Parse helpers ------------------------------------------------------------
@@ -354,6 +442,10 @@ function updateOutputs(str)
 
     for key in _pairs(Outputs) do
         Outputs[key] = nil
+    end
+
+    for key in _pairs(LastOutputValues) do
+        LastOutputValues[key] = nil
     end
 
     for i = 1, #names do
