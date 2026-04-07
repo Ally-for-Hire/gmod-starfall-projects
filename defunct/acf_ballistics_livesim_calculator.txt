@@ -5,11 +5,11 @@
 -- Version 1.2.0
 
 -- Constants go here, we get most of these from ACF itself
-local GRAVITY = physenv.getGravity()
-local TIMESTEP = game.getTickInterval()
-local UNITS = 39.37 -- This is what we multiply game units by to get to meters
-local MAXTIME = 999999
-local DRAGDIV = 40
+GRAVITY = physenv.getGravity()
+TIMESTEP = game.getTickInterval()
+UNITS = 39.3701 -- This is what we multiply game units by to get to meters
+MAXTIME = 999999
+DRAGDIV = 40
 
 -- This will return a table of the shell's positions starting at the guns base
 -- taking angle as the pitch, the following function will visualize any given
