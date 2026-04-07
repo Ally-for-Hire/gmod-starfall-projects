@@ -17,7 +17,9 @@ Function index:
 - `advanceTargetState(pos, vel, accel, dt)`: advances target position and velocity by `dt`.
 - `predictTargetOffset(vel, accel, dt)`: returns the motion offset over `dt`.
 - `asArray(value)`: returns the table unchanged or `{}` when the value is not a table.
+- `sanitizeEntityInput(value, fallback)`: returns `value` when it is a valid entity, otherwise a fallback entity/value.
 - `sanitizeText(value, maxLength, fallback)`: string conversion with optional truncation and fallback.
+- `tryNetSend(name, writer, recipient)`: protected `net.start`/write/send wrapper that returns whether the send succeeded.
 - `getGunOrigin(gun)`: returns mass center or entity position for a valid gun.
 - `computeMuzzleDistance(gun)`: measures muzzle offset from the gun origin when available.
 - `roundNumber(value, decimals)`: rounds a number to the requested decimal places.
@@ -178,6 +180,16 @@ function asArray(value)
     return {}
 end
 
+-- value: candidate entity-like value
+-- fallback: returned when value is invalid
+function sanitizeEntityInput(value, fallback)
+    if value ~= nil and isValid(value) then
+        return value
+    end
+
+    return fallback
+end
+
 -- value: text-like input
 -- maxLength: optional truncation length
 -- fallback: default text when value is nil
@@ -188,6 +200,24 @@ function sanitizeText(value, maxLength, fallback)
     end
 
     return text
+end
+
+-- name: net message name
+-- writer: callback that writes payload fields
+-- recipient: optional target
+function tryNetSend(name, writer, recipient)
+    return pcall(function()
+        net.start(name)
+        if writer ~= nil then
+            writer()
+        end
+
+        if recipient ~= nil then
+            net.send(recipient)
+        else
+            net.send()
+        end
+    end)
 end
 
 -- gun: entity to sample origin from
