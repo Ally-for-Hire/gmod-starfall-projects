@@ -124,7 +124,7 @@ if SERVER then
         if net.getBytesLeft() > 64 then
             net.start("ST_syncClientTargetData")
                 net.writeVector(InternalInfo[1])
-                net.writeUInt(InternalInfo[3], 3) 
+                net.writeUInt(InternalInfo[3], 32)
                 net.writeString(InternalInfo[4])
                 net.writeBool(TargetInArray)
             net.send()
@@ -192,6 +192,19 @@ if CLIENT then
     
     SOUND_track = nil
     SOUND_lock = nil
+    SOUND_dropTrack = nil
+
+    local function ensureSounds()
+        if not InitSounds then return end
+
+        SOUND_track = sound.create(P, "acf_extra/airfx/hominglockaquired1.wav")
+        SOUND_track:setSoundLevel(SOUND_VOLUME)
+        SOUND_dropTrack = sound.create(P, "acf_extra/airfx/hominglocksequence1.wav")
+        SOUND_dropTrack:setSoundLevel(SOUND_VOLUME)
+        SOUND_lock = sound.create(P, "acf_extra/airfx/satellite_target.wav")
+        SOUND_lock:setSoundLevel(SOUND_VOLUME)
+        InitSounds = false
+    end
 
     hook.add("drawhud", "ST_mainDrawLoop", function()
         if not ActivelyTracking or NewTargetPeriod then return end
@@ -272,8 +285,9 @@ if CLIENT then
     end)
 
     net.receive("ST_syncClientTargetData", function()
+        ensureSounds()
         TargetPos = net.readVector()
-        TargetID = net.readUInt(3)
+        TargetID = net.readUInt(32)
         TargetName = net.readString()
         TargetInArray = net.readBool()
         NewTargetPeriod = false
@@ -291,15 +305,7 @@ if CLIENT then
         ActivelyTracking = net.readBool()
         NewTargetPeriod = true
         
-        if InitSounds then
-            SOUND_track = sound.create(P, "acf_extra/airfx/hominglockaquired1.wav")
-            SOUND_track:setSoundLevel(SOUND_VOLUME)
-            SOUND_dropTrack = sound.create(P, "acf_extra/airfx/hominglocksequence1.wav")
-            SOUND_dropTrack:setSoundLevel(SOUND_VOLUME)
-            SOUND_lock = sound.create(P, "acf_extra/airfx/satellite_target.wav")
-            SOUND_lock:setSoundLevel(SOUND_VOLUME)
-            InitSounds = false
-        end
+        ensureSounds()
         
         SOUND_lock:stop()
         SOUND_track:stop()
