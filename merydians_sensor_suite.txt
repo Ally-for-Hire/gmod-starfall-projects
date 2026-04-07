@@ -1,463 +1,119 @@
 --@name Merydian's Sensor Suite
 --@author Ally for Hire / Merydian9
---@include allylib/helpful_hud_functions.txt
---@include allylib/simple_server-side_wire_helper.txt
+--@include GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt
 --@server
 
-require("allylib/helpful_hud_functions.txt")
-require("allylib/simple_server-side_wire_helper.txt")
+require("GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt")
 
 updateInputs("Sensors:ARRAY")
 updateOutputs("Position:ARRAY Velocity:ARRAY Owner:ARRAY IDs:ARRAY Times:ARRAY")
 
-local POLL_RATE = 0.02
-local SENSOR_PRUNE_RATE = 0.5
-local TIMER_NAME = "MerydianSensorSuite_Poll"
-local IRST_ID_OFFSET = 200
-local IRST_TRACE_RANGE = 999999
-local IRST_TRACE_START = 300
-local IRST_HULL_EXTENT = 10
-local MATRIX_EPSILON = 0.000001
-local ZERO_VEC = Vector()
-local IRST_HULL_MIN = Vector(-IRST_HULL_EXTENT, -IRST_HULL_EXTENT, -IRST_HULL_EXTENT)
-local IRST_HULL_MAX = Vector(IRST_HULL_EXTENT, IRST_HULL_EXTENT, IRST_HULL_EXTENT)
+POLL_RATE = 0.02
+PUBLISH_RATE = 0.05
+CONTACT_TTL = 0.15
+PRUNE_INTERVAL = 0.5
+TIMER_NAME = "MerydianSensorSuite_Poll"
+ZERO_VEC = Vector()
 
-local cachedRadars = {}
-local cachedIrsts = {}
-local radarStates = {}
-local irstStates = {}
-local contraptions = {}
-local irstRanges = {}
-local irstPositions = {}
-local outputsActive = false
-local outputsInitialized = false
-local nextSensorPrune = 0
+CachedRadars = {}
+Contacts = {}
+OutputsActive = false
+OutputsInitialized = false
+NextPrune = 0
+NextPublish = 0
+SnapshotDirty = true
 
 local pollSensors
 
-local function isAceRadar(ent)
+local function isRadar(ent)
+    if not isValid(ent) then return false end
+
     local class = ent:getClass()
-    return class == "ace_searchradar" or class == "ace_trackingradar"
-end
-
-local function schedulePoll()
-    timer.remove(TIMER_NAME)
-
-    if #cachedRadars + #cachedIrsts == 0 then
-        return
-    end
-
-    timer.create(TIMER_NAME, POLL_RATE, 1, pollSensors)
-end
-
-local function hasEntries(tbl)
-    return tbl ~= nil and next(tbl) ~= nil
-end
-
-local function sameValue(a, b)
-    if a == b then
-        return true
-    end
-
-    if a == nil or b == nil then
-        return false
-    end
-
-    local valueType = type(a)
-    if valueType ~= type(b) then
-        return false
-    end
-
-    if valueType == "Vector" or valueType == "vector" then
-        return a.x == b.x and a.y == b.y and a.z == b.z
-    end
-
-    if valueType == "Angle" or valueType == "angle" then
-        return a.p == b.p and a.y == b.y and a.r == b.r
-    end
-
-    return false
-end
-
-local function sameSnapshot(a, b)
-    for id, data in pairs(a) do
-        local other = b[id]
-        if other == nil or not sameValue(data, other) then
-            return false
-        end
-    end
-
-    for id in pairs(b) do
-        if a[id] == nil then
-            return false
-        end
-    end
-
-    return true
+    return class == "ace_searchradar" or class == "ace_trackingradar" or class == "acf_radar"
 end
 
 local function clearOutputs()
-    if outputsInitialized and not outputsActive then return end
+    if OutputsInitialized and not OutputsActive then return end
 
     Outputs.Position:update({})
     Outputs.Velocity:update({})
     Outputs.Owner:update({})
     Outputs.IDs:update({})
     Outputs.Times:update({})
-    outputsActive = false
-    outputsInitialized = true
+    OutputsActive = false
+    OutputsInitialized = true
+    SnapshotDirty = false
 end
 
-local function updateContact(id, pos, vel, owner, time)
-    if id == nil or pos == nil then return end
-    contraptions[id] = {pos, vel or ZERO_VEC, owner, time}
-end
+local function schedulePoll()
+    timer.remove(TIMER_NAME)
 
-local function clearRadarSensorState(state)
-    state.changeSnapshot = {}
-    state.contacts = {}
-end
-
-local function clearIrstSensorState(state)
-    state.changeSnapshot = {}
-    state.lastOrigin = nil
-    state.tracks = {}
-end
-
-local function buildRadarChangeSnapshot(state)
-    local snapshot = {}
-    local indexById = {}
-    local ent = state.ent
-    if not isValid(ent) then
-        return snapshot, indexById, false
+    if #CachedRadars == 0 then
+        clearOutputs()
+        return
     end
 
-    local wl = ent:getWirelink()
-    if not wl then
-        return snapshot, indexById, false
-    end
+    timer.create(TIMER_NAME, POLL_RATE, 1, pollSensors)
+end
 
-    local positions = wl.Position
-    local ids = state.useAceIds and wl.ID or wl.IDs
-    if positions == nil or ids == nil then
-        return snapshot, indexById, true
-    end
+local function cacheSensors(arr)
+    local nextRadars = {}
 
-    for index, pos in pairs(positions) do
-        local id = ids[index]
-        if id ~= nil and pos ~= nil then
-            snapshot[id] = pos
-            indexById[id] = index
+    if type(arr) == "table" then
+        for i = 1, #arr do
+            local ent = arr[i]
+            if not isRadar(ent) then continue end
+            if not ent:getWirelink() then continue end
+
+            nextRadars[#nextRadars + 1] = ent
         end
     end
 
-    return snapshot, indexById, true
+    CachedRadars = nextRadars
+    NextPrune = 0
+    pollSensors()
 end
 
-local function buildIrstChangeSnapshot(state)
-    local snapshot = {}
-    local ent = state.ent
-    if not isValid(ent) then
-        return snapshot, false
-    end
+local function pruneRadars()
+    local changed = false
 
-    local wl = ent:getWirelink()
-    if not wl then
-        return snapshot, false
-    end
-
-    local ids = wl.ID
-    local angles = wl.Angle
-    local origin = ent:getPos()
-
-    if ids == nil or angles == nil then
-        return snapshot, true
-    end
-
-    for index, id in pairs(ids) do
-        local ang = angles[index]
-        if id ~= nil and ang ~= nil then
-            local trackId = id + IRST_ID_OFFSET
-            snapshot[trackId] = ang
-        end
-    end
-
-    return snapshot, true, origin
-end
-
-local function processRadarSensor(state, time)
-    local snapshot, indexById, valid = buildRadarChangeSnapshot(state)
-    if not valid then
-        local hadData = hasEntries(state.changeSnapshot) or hasEntries(state.contacts)
-        clearRadarSensorState(state)
-        return hadData
-    end
-
-    if sameSnapshot(snapshot, state.changeSnapshot) then
-        return false
-    end
-
-    state.changeSnapshot = snapshot
-
-    local wl = state.ent:getWirelink()
-    local ids = state.useAceIds and wl.ID or wl.IDs
-    local velocities = wl.Velocity
-    local owners = wl.Owner
-    local contacts = {}
-    for id, data in pairs(snapshot) do
-        local index = indexById[id]
-
-        contacts[id] = {
-            data,
-            index and velocities and velocities[index] or ZERO_VEC,
-            index and owners and owners[index] or nil,
-            time,
-        }
-    end
-    state.contacts = contacts
-
-    return true
-end
-
-local function processIrstSensor(state, time)
-    local snapshot, valid, origin = buildIrstChangeSnapshot(state)
-    if not valid then
-        local hadData = hasEntries(state.changeSnapshot) or hasEntries(state.tracks)
-        clearIrstSensorState(state)
-        return hadData
-    end
-
-    if sameSnapshot(snapshot, state.changeSnapshot) and sameValue(origin, state.lastOrigin) then
-        return false
-    end
-
-    state.changeSnapshot = snapshot
-    state.lastOrigin = origin
-
-    local ent = state.ent
-    local tracks = {}
-    for id, data in pairs(snapshot) do
-        local dir = ent:localToWorldAngles(-data):getForward()
-        if dir:getLength() > 0 then
-            dir = dir:getNormalized()
+    for i = #CachedRadars, 1, -1 do
+        local ent = CachedRadars[i]
+        if isRadar(ent) and ent:getWirelink() then
+            continue
         end
 
-        tracks[id] = {origin = origin, dir = dir, time = time}
+        table.remove(CachedRadars, i)
+        changed = true
     end
-    state.tracks = tracks
 
-    return true
+    return changed
 end
 
-local function projectPointToRay(origin, dir, point)
-    local distance = (point - origin):dot(dir)
-    if distance < IRST_TRACE_START then
-        distance = IRST_TRACE_START
-    end
-
-    return origin + dir * distance, distance
-end
-
-local function solveLinear3x3(a11, a12, a13, a21, a22, a23, a31, a32, a33, bx, by, bz)
-    local det = a11 * (a22 * a33 - a23 * a32)
-        - a12 * (a21 * a33 - a23 * a31)
-        + a13 * (a21 * a32 - a22 * a31)
-
-    if math.abs(det) <= MATRIX_EPSILON then
-        return nil
-    end
-
-    local detX = bx * (a22 * a33 - a23 * a32)
-        - a12 * (by * a33 - a23 * bz)
-        + a13 * (by * a32 - a22 * bz)
-
-    local detY = a11 * (by * a33 - a23 * bz)
-        - bx * (a21 * a33 - a23 * a31)
-        + a13 * (a21 * bz - by * a31)
-
-    local detZ = a11 * (a22 * bz - by * a32)
-        - a12 * (a21 * bz - by * a31)
-        + bx * (a21 * a32 - a22 * a31)
-
-    return Vector(detX / det, detY / det, detZ / det)
-end
-
-local function solveRayIntersection(observations)
-    local a11, a12, a13 = 0, 0, 0
-    local a21, a22, a23 = 0, 0, 0
-    local a31, a32, a33 = 0, 0, 0
-    local bx, by, bz = 0, 0, 0
-
-    for i = 1, #observations do
-        local origin = observations[i].origin
-        local dir = observations[i].dir
-
-        local dx = dir.x
-        local dy = dir.y
-        local dz = dir.z
-
-        local m11 = 1 - dx * dx
-        local m12 = -dx * dy
-        local m13 = -dx * dz
-        local m22 = 1 - dy * dy
-        local m23 = -dy * dz
-        local m33 = 1 - dz * dz
-
-        a11 = a11 + m11
-        a12 = a12 + m12
-        a13 = a13 + m13
-        a21 = a21 + m12
-        a22 = a22 + m22
-        a23 = a23 + m23
-        a31 = a31 + m13
-        a32 = a32 + m23
-        a33 = a33 + m33
-
-        bx = bx + m11 * origin.x + m12 * origin.y + m13 * origin.z
-        by = by + m12 * origin.x + m22 * origin.y + m23 * origin.z
-        bz = bz + m13 * origin.x + m23 * origin.y + m33 * origin.z
-    end
-
-    local point = solveLinear3x3(a11, a12, a13, a21, a22, a23, a31, a32, a33, bx, by, bz)
-    if point == nil then
-        return nil
-    end
-
-    local alignedPoint = Vector()
-    local averageDistance = 0
-
-    for i = 1, #observations do
-        local projectedPoint, distance = projectPointToRay(observations[i].origin, observations[i].dir, point)
-        alignedPoint = alignedPoint + projectedPoint
-        averageDistance = averageDistance + distance
-    end
-
-    return alignedPoint * (1 / #observations), averageDistance / #observations
-end
-
-local function traceIrstTrack(origin, dir, traceRange)
-    if traceRange < IRST_TRACE_START then
-        traceRange = IRST_TRACE_START
-    end
-
-    local startPos = origin + dir * IRST_TRACE_START
-    local endPos = origin + dir * traceRange
-    local tr = trace.hull(startPos, endPos, IRST_HULL_MIN, IRST_HULL_MAX, nil, nil, nil, true)
-    local hitPos = tr.HitPos + dir * IRST_HULL_EXTENT
-
-    return hitPos, origin:getDistance(hitPos)
-end
-
-local function resolveIrstTrack(id, observations)
-    local observationCount = #observations
-    if observationCount == 0 then
-        return nil
-    end
-
-    if observationCount > 1 then
-        local intersection, averageDistance = solveRayIntersection(observations)
-        if intersection ~= nil then
-            irstPositions[id] = intersection
-            irstRanges[id] = averageDistance
-            return intersection
-        end
-    end
-
-    local observation = observations[1]
-    local cachedPosition = irstPositions[id]
-    if cachedPosition ~= nil then
-        local projectedPoint, distance = projectPointToRay(observation.origin, observation.dir, cachedPosition)
-        irstPositions[id] = projectedPoint
-        irstRanges[id] = distance
-        return projectedPoint
-    end
-
-    local hitPos, distance = traceIrstTrack(observation.origin, observation.dir, irstRanges[id] or IRST_TRACE_RANGE)
-    if hitPos == nil then
-        return nil
-    end
-
-    irstPositions[id] = hitPos
-    irstRanges[id] = distance
-    return hitPos
-end
-
-local function clearInactiveIrstState(activeTracks)
-    for id in pairs(irstPositions) do
-        if not activeTracks[id] then
-            irstPositions[id] = nil
-            irstRanges[id] = nil
-        end
-    end
-end
-
-local function rebuildContacts()
-    contraptions = {}
-
-    for _, state in pairs(cachedRadars) do
-        for id, data in pairs(state.contacts) do
-            local existing = contraptions[id]
-            if existing == nil or existing[4] <= data[4] then
-                updateContact(id, data[1], data[2], data[3], data[4])
-            end
-        end
-    end
-
-    local groupedIrstTracks = {}
-    for _, state in pairs(cachedIrsts) do
-        for id, observation in pairs(state.tracks) do
-            local bucket = groupedIrstTracks[id]
-            if bucket == nil then
-                bucket = {}
-                groupedIrstTracks[id] = bucket
-            end
-
-            bucket[#bucket + 1] = observation
-        end
-    end
-
-    local activeIrstTracks = {}
-    for id, observations in pairs(groupedIrstTracks) do
-        local pos = resolveIrstTrack(id, observations)
-        if pos ~= nil then
-            local newestTime = observations[1].time
-            for i = 2, #observations do
-                if observations[i].time > newestTime then
-                    newestTime = observations[i].time
-                end
-            end
-
-            activeIrstTracks[id] = true
-            updateContact(id, pos, ZERO_VEC, "IRST TRACK", newestTime)
-        end
-    end
-
-    clearInactiveIrstState(activeIrstTracks)
-end
-
-local function publishContacts()
-    local outPosition = nil
-    local outVelocity = nil
-    local outOwner = nil
-    local outIDs = nil
-    local outTimes = nil
+local function publishContacts(time)
+    local outPosition = {}
+    local outVelocity = {}
+    local outOwner = {}
+    local outIDs = {}
+    local outTimes = {}
+    local sortedIDs = {}
     local count = 0
 
-    for id, data in pairs(contraptions) do
-        if count == 0 then
-            outPosition = {}
-            outVelocity = {}
-            outOwner = {}
-            outIDs = {}
-            outTimes = {}
-        end
+    for id in pairs(Contacts) do
+        sortedIDs[#sortedIDs + 1] = id
+    end
 
-        count = count + 1
+    table.sort(sortedIDs)
+
+    for i = 1, #sortedIDs do
+        local id = sortedIDs[i]
+        local data = Contacts[id]
+        count = i
         outPosition[count] = data[1]
-        outVelocity[count] = data[2] or ZERO_VEC
+        outVelocity[count] = data[2]
         outOwner[count] = data[3]
         outIDs[count] = id
-        outTimes[count] = data[4]
+        outTimes[count] = data[4] or time
     end
 
     if count == 0 then
@@ -470,127 +126,95 @@ local function publishContacts()
     Outputs.Owner:update(outOwner)
     Outputs.IDs:update(outIDs)
     Outputs.Times:update(outTimes)
-    outputsActive = true
-    outputsInitialized = true
+    OutputsActive = true
+    OutputsInitialized = true
+    SnapshotDirty = false
+    NextPublish = time + PUBLISH_RATE
 end
 
-local function pruneInvalidSensors(list, stateStore, clearState)
-    local changed = false
-
-    for i = #list, 1, -1 do
-        local state = list[i]
-        if not isValid(state.ent) then
-            clearState(state)
-            stateStore[state.ent] = nil
-            table.remove(list, i)
-            changed = true
-        end
+local function updateContact(id, pos, vel, ownerName, time)
+    local existing = Contacts[id]
+    if existing == nil then
+        Contacts[id] = {pos, vel, ownerName, time}
+        SnapshotDirty = true
+        return
     end
 
-    return changed
+    if existing[1] ~= pos or existing[2] ~= vel or existing[3] ~= ownerName then
+        SnapshotDirty = true
+    end
+
+    existing[1] = pos
+    existing[2] = vel
+    existing[3] = ownerName
+    existing[4] = time
 end
 
-pollSensors = function(force)
+local function pruneContacts(time)
+    local removed = false
+
+    for id, data in pairs(Contacts) do
+        if (time - data[4]) <= CONTACT_TTL then continue end
+
+        Contacts[id] = nil
+        removed = true
+    end
+
+    if removed then
+        SnapshotDirty = true
+    end
+end
+
+pollSensors = function()
     local time = timer.curtime()
-    local changed = force == true
 
-    if time >= nextSensorPrune then
-        if pruneInvalidSensors(cachedRadars, radarStates, clearRadarSensorState) then
-            changed = true
-        end
-
-        if pruneInvalidSensors(cachedIrsts, irstStates, clearIrstSensorState) then
-            changed = true
-        end
-
-        nextSensorPrune = time + SENSOR_PRUNE_RATE
+    if time >= NextPrune then
+        pruneRadars()
+        NextPrune = time + PRUNE_INTERVAL
     end
 
-    for _, state in pairs(cachedRadars) do
-        if processRadarSensor(state, time) then
-            changed = true
+    if #CachedRadars == 0 then
+        Contacts = {}
+        clearOutputs()
+        schedulePoll()
+        return
+    end
+
+    for i = 1, #CachedRadars do
+        local ent = CachedRadars[i]
+        local wl = ent:getWirelink()
+        if not wl then continue end
+
+        local positions = wl.Position
+        local ids = wl.ID or wl.IDs
+        local velocities = wl.Velocity
+        local owners = wl.Owner
+
+        if type(positions) ~= "table" or type(ids) ~= "table" then
+            continue
+        end
+
+        for index, pos in pairs(positions) do
+            local id = ids[index]
+            if id == nil or pos == nil then continue end
+
+            updateContact(
+                id,
+                pos,
+                type(velocities) == "table" and velocities[index] or ZERO_VEC,
+                type(owners) == "table" and owners[index] or "",
+                time
+            )
         end
     end
 
-    for _, state in pairs(cachedIrsts) do
-        if processIrstSensor(state, time) then
-            changed = true
-        end
-    end
+    pruneContacts(time)
 
-    if changed then
-        rebuildContacts()
-        publishContacts()
+    if SnapshotDirty and time >= NextPublish then
+        publishContacts(time)
     end
 
     schedulePoll()
-end
-
-local function cacheSensors(arr)
-    local nextRadars = {}
-    local nextIrsts = {}
-    local keepRadars = {}
-    local keepIrsts = {}
-
-    if arr ~= nil then
-        for _, ent in pairs(arr) do
-            if not isValid(ent) then continue end
-
-            local wl = ent:getWirelink()
-            if not wl then continue end
-
-            if ent:getClass() == "ace_irst" then
-                local state = irstStates[ent]
-                if state == nil then
-                    state = {
-                        ent = ent,
-                        changeSnapshot = {},
-                        lastOrigin = nil,
-                        tracks = {},
-                    }
-                    irstStates[ent] = state
-                end
-
-                nextIrsts[#nextIrsts + 1] = state
-                keepIrsts[ent] = true
-            else
-                local state = radarStates[ent]
-                if state == nil then
-                    state = {
-                        ent = ent,
-                        useAceIds = isAceRadar(ent),
-                        changeSnapshot = {},
-                        contacts = {},
-                    }
-                    radarStates[ent] = state
-                end
-
-                state.useAceIds = isAceRadar(ent)
-                nextRadars[#nextRadars + 1] = state
-                keepRadars[ent] = true
-            end
-        end
-    end
-
-    for ent, state in pairs(radarStates) do
-        if not keepRadars[ent] then
-            clearRadarSensorState(state)
-            radarStates[ent] = nil
-        end
-    end
-
-    for ent, state in pairs(irstStates) do
-        if not keepIrsts[ent] then
-            clearIrstSensorState(state)
-            irstStates[ent] = nil
-        end
-    end
-
-    cachedRadars = nextRadars
-    cachedIrsts = nextIrsts
-    nextSensorPrune = 0
-
-    pollSensors(true)
 end
 
 Inputs.Sensors:addTrigger(cacheSensors)
