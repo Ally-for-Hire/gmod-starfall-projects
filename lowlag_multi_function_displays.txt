@@ -6,7 +6,6 @@
 
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/helpful_hud_functions.txt")
-syncInputCommands(true)
 C = chip()
 O = owner()
 P = player()
@@ -15,6 +14,23 @@ RWR_RANGE = 400
 
 if SERVER then
     updateInputs("Base:ENTITY RWR:ENTITY RWR_Angles:ARRAY MWR_Positions:ARRAY MWR_Velocities:array WEP:ENTITY HORZ:ENTITY WYPT:ENTITY")
+    syncInputCommands(true)
+
+    local function syncMWRContacts(ply)
+        local positions = InputValues.MWR_Positions
+        local velocities = InputValues.MWR_Velocities
+
+        if type(positions) ~= "table" or type(velocities) ~= "table" then return end
+        if #positions ~= #velocities then return end
+
+        net.start("MFDU_MWRPositionsSync")
+        net.writeInt(#positions, 16)
+        for i = 1, #positions do
+            net.writeVector(positions[i])
+            net.writeVector(velocities[i])
+        end
+        net.send(ply)
+    end
 
     Inputs.RWR_Angles:addTrigger(function(array)
         net.start("MFDU_RWRAnglesSync")
@@ -25,16 +41,12 @@ if SERVER then
         net.send(ply)
     end)
     
-    Inputs.MWR_Positions:addTrigger(function(array)
-        if #array != #MWR_Velocities then return end
-    
-        net.start("MFDU_MWRPositionsSync")
-        net.writeInt(#array, 16)
-        for i = 1, #array do
-            net.writeVector(array[i])
-            net.writeVector(MWR_Velocities[i])
-        end
-        net.send(ply)
+    Inputs.MWR_Positions:addTrigger(function()
+        syncMWRContacts(ply)
+    end)
+
+    Inputs.MWR_Velocities:addTrigger(function()
+        syncMWRContacts(ply)
     end)
 
     hook.add("ClientInitialized", "MFDU_sendWireData", function(ply)
@@ -45,6 +57,7 @@ if SERVER then
         net.writeEntity(WYPT:isValid() and WYPT or C)
         net.writeEntity(Base:isValid() and Base or C)
         net.send(ply)
+        syncMWRContacts(ply)
     end)
 end
 
