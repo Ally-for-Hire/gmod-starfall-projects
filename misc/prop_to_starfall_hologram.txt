@@ -3,25 +3,24 @@
 --@server
 
 CHIP = chip()
-
-props = find.byClass("prop_physics")
+Props = find.byClass("prop_physics")
 
 print("local currentHolo = nil\nlocal chip = chip()\nlocal parent = chip")
 
-for _,val in pairs(props) do
-    localPos = CHIP:worldToLocal(val:getPos())  
-    localAng = CHIP:worldToLocalAngles(val:getAngles())
-    model = val:getModel()
-    scale = val:getManipulateBoneScale()
+for _, ent in pairs(Props) do
+    local chipLocalPos = CHIP:worldToLocal(ent:getPos())  
+    local chipLocalAng = CHIP:worldToLocalAngles(ent:getAngles())
+
+    local propModel = ent:getModel()
+    local propScale = ent:getManipulateBoneScale()
+    local propMaterial = ent:getMaterial()
+    local propColor = ent:getColor()
+    local propAlpha = 255 
     
-    propMaterial = val:getMaterial()
-    propColor = val:getColor()
-    propAlpha = 255 
-    
-    print("currentHolo = hologram.create(chip:localToWorld(Vector(" .. localPos[1] .. ", " .. localPos[2] .. ", " .. localPos[3]  .. ")), chip:localToWorldAngles(Angle(" 
-                                     .. localAng[1] .. ", " .. localAng[2] .. ", " .. localAng[3]  .. ")), '"
-                                     .. model .. "', Vector(" .. scale[1] .. ", " .. scale[2] .. ", " .. scale[3] .. ")) " 
-                                     .. "currentHolo:setParent(parent) " 
+    print("currentHolo = hologram.create(chip:localToWorld(Vector(" .. chipLocalPos[1] .. ", " .. chipLocalPos[2] .. ", " .. chipLocalPos[3]  .. ")), chip:localToWorldAngles(Angle(" 
+                                     .. chipLocalAng[1] .. ", " .. chipLocalAng[2] .. ", " .. chipLocalAng[3]  .. ")), '"
+                                     .. propModel .. "', Vector(" .. propScale[1] .. ", " .. propScale[2] .. ", " .. propScale[3] .. ")) " 
+                                     .. "currentHolo:setParent(chip) " 
                                      .. "currentHolo:setColor(Color(" .. propColor[1] .. ", " .. propColor[2] .. ", " .. propColor[3] .. ", " .. propAlpha .. ")) "
                                      .. "currentHolo:setMaterial('" .. propMaterial .. "')")
 end
