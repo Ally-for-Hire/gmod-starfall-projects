@@ -17,6 +17,8 @@ Function index:
 - `changed(value, keepChangedState, slot, epsilon)`: change detector with optional persistent dirty state.
 - `resetChanged(slot)`: clears `changed(...)` state for one slot or all slots.
 - `addInputTrigger(name, fn)`: registers a trigger callback on a named input.
+- `safeWireCreate(entI, entO, inputName, outputName)`: protected `wire.create(...)`.
+- `safeWireDelete(ent, inputName)`: protected `wire.delete(...)`.
 - `Inputs.<Name>:get()`: reads the cached input value.
 - `Inputs.<Name>:addTrigger(fn)`: registers a trigger callback on that input object.
 - `Inputs.<Name>:removeTrigger(idx)`: removes a previously added trigger by index.
@@ -462,6 +464,16 @@ function addInputTrigger(name, fn)
     local inputObj = Inputs[name]
     if not inputObj then return nil end
     return inputObj:addTrigger(fn)
+end
+
+function safeWireCreate(entI, entO, inputName, outputName)
+    local ok = pcall(_wire.create, entI, entO, inputName, outputName)
+    return ok
+end
+
+function safeWireDelete(ent, inputName)
+    local ok = pcall(_wire.delete, ent, inputName)
+    return ok
 end
 
 hook.add("input", "SS-SWH_input", doWireInput)
