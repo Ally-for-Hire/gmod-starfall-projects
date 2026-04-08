@@ -33,7 +33,6 @@ Main release folder for my Garry's Mod Starfall chips and shared libraries.
 ## Notes
 - `examples/` is for reference, not all of it is production style.
 - `defunct/` is archived on purpose.
-- Some systems depend on companion chips outside this folder, especially under `information_systems/`.
 
 ## Links
 - GitHub: <https://github.com/Ally-for-Hire>
