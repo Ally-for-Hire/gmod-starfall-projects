@@ -7,7 +7,7 @@
 require("allylib/general_algorithms.txt")
 require("allylib/simple_server-side_wire_helper.txt")
 
-updateInputs("Aimer:ENTITY HitPos:VECTOR LockTurret:NORMAL TargetPos:VECTOR LeadPos:VECTOR TargetName:STRING")
+updateInputs("Aimer:ENTITY HitPos:VECTOR R:NORMAL TargetPos:VECTOR LeadPos:VECTOR TargetName:STRING")
 updateOutputs("GunTarget:VECTOR")
 
 DT = game.getTickInterval()
@@ -110,7 +110,7 @@ Inputs.Aimer:addTrigger(function(value)
     updateGunState(value)
 end)
 
-Inputs.LockTurret:addTrigger(function(value)
+Inputs.R:addTrigger(function(value)
     local pressed = value ~= 0 and LastLockValue == 0
     LastLockValue = value
     if not pressed then return end
