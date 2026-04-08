@@ -6,7 +6,7 @@ GTABLE emulates Wiremod's Expression2 gTable for Starfall.
 
 Usage:
   local gt = GTABLE:new("SCOREBOARD")
-  gt:modify("round", {kills = 3, deaths = 1})
+  gt:set("round", {kills = 3, deaths = 1})
   gt:onChange(function(data, key, value, source)
       print("[GTABLE]", source, key, value and type(value) or "<nil>")
   end)
@@ -19,24 +19,16 @@ Highlights:
 
 Function index:
 - `GTABLE:new(prefix, opts)`: creates or reuses a synchronized table group.
-- `GTABLE:isReady()`: true once the table has completed startup and can be trusted.
-- `GTABLE:isOnNetwork()`: true once a peer network has been detected.
+- `GTABLE:set(key, value)`: writes a value. `nil` removes the key.
+- `GTABLE:setBulk(tbl)`: applies multiple key updates in one call.
+- `GTABLE:get(key, default)`: returns a value by key or a fallback.
+- `GTABLE:has(key)`: true when a key exists.
+- `GTABLE:table()`: returns a shallow copy of the current table.
 - `GTABLE:onChange(fn, immediate)`: registers a listener and returns an unsubscribe closure.
-- `GTABLE:modify(index, value)`: writes or updates a single key.
-- `GTABLE:modifyBulk(tbl)`: applies multiple key updates in one call.
-- `GTABLE:remove(index)`: deletes a single key.
 - `GTABLE:clear()`: clears the full table and broadcasts the clear.
-- `GTABLE:get(index)`: returns a value by key.
-- `GTABLE:exists(index)`: true when a key exists.
-- `GTABLE:getOrDefault(index, default)`: returns a value or fallback.
-- `GTABLE:ensure(index, default)`: inserts and returns a default when the key is missing.
-- `GTABLE:setSelf(val)`: stores data under this chip's self key.
-- `GTABLE:clearSelf()`: removes the self-keyed entry.
-- `GTABLE:getSelf()`: returns the self-keyed value.
-- `GTABLE:getTable()`, `GTABLE:toTable()`: return the backing table or a shallow copy.
-- `GTABLE:keys()`, `GTABLE:values()`, `GTABLE:count()`: inspection helpers for stored entries.
-- `GTABLE:setSelfKey(key)`: overrides the self-key used by `setSelf` and related helpers.
-- `GTABLE:pull()`: requests or replays a network snapshot sync.
+- `GTABLE:count()`: returns the current number of stored entries.
+- `GTABLE:setSelf(val)`, `GTABLE:getSelf()`, `GTABLE:clearSelf()`: per-chip helpers.
+- `GTABLE:isReady()`: true once the table has completed startup and can be trusted.
 - `GTABLE:destroy(skipBroadcast)`: tears down hooks, timers, and optional network state.
 ]]--
 
@@ -45,17 +37,17 @@ Function index:
    local gt = GTABLE:new("MY_GROUP")
 
 2) Local writes:
-   gt:modify("score", 10)
-   gt:modifyBulk({mode = "live", maxPlayers = 8})
+   gt:set("score", 10)
+   gt:setBulk({mode = "live", maxPlayers = 8})
 
 3) Per-chip storage:
    gt:setSelf({hp = 100})
    gt:clearSelf()
 
 4) Inspection helpers:
-   gt:get("score")
-   gt:exists("score")
-   gt:keys()
+   gt:get("score", 0)
+   gt:has("score")
+   gt:table()
    gt:count()
 
 5) Reacting to updates:
@@ -73,6 +65,9 @@ GTABLE.__index = GTABLE
 GTABLE._registry = GTABLE._registry or {}
 GTABLE._idCounter = GTABLE._idCounter or 0
 GTABLE._nodeIdCounter = GTABLE._nodeIdCounter or 0
+
+local VERSION_PRUNE_INTERVAL = 10
+local VERSION_RETENTION = 30
 
 local function nextId()
     GTABLE._idCounter = GTABLE._idCounter + 1
@@ -103,6 +98,13 @@ local function deepeq(a, b, depth)
         if a[k] == nil then return false end
     end
     return true
+end
+
+local function valuesEqual(self, a, b)
+    if a == b then return true end
+    if not self._deepCompare then return false end
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    return deepeq(a, b)
 end
 
 local function wipeTable(tbl)
@@ -178,6 +180,37 @@ local function notify(self, key, value, source)
     end
 end
 
+local function markSnapshotDirty(self)
+    self._snapshotDirty = true
+end
+
+local function refreshCount(self)
+    local count = 0
+    for _ in pairs(self.internalValues) do
+        count = count + 1
+    end
+    self._count = count
+end
+
+local function pruneVersions(self, now)
+    now = now or timer.curtime()
+    if now < self._nextVersionPrune then return end
+    self._nextVersionPrune = now + VERSION_PRUNE_INTERVAL
+
+    local cutoff = now - VERSION_RETENTION
+    local clearStamp = self._clearStamp
+
+    for key, stamp in pairs(self._versions) do
+        if self.internalValues[key] == nil then
+            local stampTime = tonumber(stamp and stamp.time) or 0
+            local coveredByClear = clearStamp ~= nil and compareStamp(clearStamp, stamp) >= 0
+            if coveredByClear or stampTime <= cutoff then
+                self._versions[key] = nil
+            end
+        end
+    end
+end
+
 function GTABLE:new(prefix, opts)
     assert(type(prefix) == "string" and prefix ~= "", "GTABLE:new() expects a non-empty string prefix")
     opts = opts or {}
@@ -208,6 +241,11 @@ function GTABLE:new(prefix, opts)
     obj._seq = 0
     obj._chip = chip()
     obj._chipIndex = obj._chip:entIndex()
+    obj._count = 0
+    obj._deepCompare = opts.deepCompare == true
+    obj._snapshotCache = nil
+    obj._snapshotDirty = true
+    obj._nextVersionPrune = timer.curtime() + VERSION_PRUNE_INTERVAL
 
     if opts.selfKey ~= nil then
         if type(opts.selfKey) == "function" then
@@ -319,21 +357,28 @@ function GTABLE:_applyIncoming(key, value, stamp, source)
     end
 
     self._versions[key] = incomingStamp
+    local hadValue = self.internalValues[key] ~= nil
 
     if value == nil then
-        if self.internalValues[key] == nil then
-            return true
+        if not hadValue then
+            return false
         end
         self.internalValues[key] = nil
+        self._count = self._count - 1
+        markSnapshotDirty(self)
         notify(self, key, nil, source or "remoteRemove")
         return true
     end
 
-    if deepeq(self.internalValues[key], value) then
-        return true
+    if hadValue and valuesEqual(self, self.internalValues[key], value) then
+        return false
     end
 
     self.internalValues[key] = value
+    if not hadValue then
+        self._count = self._count + 1
+    end
+    markSnapshotDirty(self)
     notify(self, key, value, source or "remote")
     return true
 end
@@ -355,10 +400,20 @@ function GTABLE:_applyClear(stamp, source)
         end
     end
 
+    if changed then
+        refreshCount(self)
+        markSnapshotDirty(self)
+    end
+
     return changed
 end
 
 function GTABLE:_buildSnapshot()
+    pruneVersions(self)
+    if not self._snapshotDirty and self._snapshotCache ~= nil then
+        return self._snapshotCache
+    end
+
     local values = {}
     local versions = {}
 
@@ -370,11 +425,14 @@ function GTABLE:_buildSnapshot()
         end
     end
 
-    return {
+    self._snapshotCache = {
         values = values,
         versions = versions,
         clearStamp = copyStamp(self._clearStamp)
     }
+    self._snapshotDirty = false
+
+    return self._snapshotCache
 end
 
 function GTABLE:_mergeSnapshot(snapshot, source)
@@ -439,6 +497,10 @@ function GTABLE:onRemote(sender, owner, message, ...)
 
     if message == self.bulkDataUpdateMessage then
         local payload, versions = ...
+        if versions == nil and type(payload) == "table" then
+            versions = payload.versions
+            payload = payload.values
+        end
         local changed = false
         for key, stamp in pairs(versions or {}) do
             if self:_applyIncoming(key, (payload or {})[key], stamp, "remoteBulk") then
@@ -473,13 +535,16 @@ function GTABLE:onRemove()
     local key = self:_selfKey()
     if key ~= nil and self.internalValues[key] ~= nil then
         self.internalValues[key] = nil
+        self._count = self._count - 1
         self._versions[key] = makeStamp(self)
+        markSnapshotDirty(self)
         notify(self, key, nil, "localRemove")
         self:safeSend(self.removeMessage, key, self._versions[key])
     else
         local stamp = makeStamp(self)
         if key ~= nil then
             self._versions[key] = stamp
+            markSnapshotDirty(self)
         end
         self:safeSend(self.removeMessage, key, stamp)
     end
@@ -527,8 +592,9 @@ function GTABLE:onChange(fn, immediate)
     end
 end
 
-function GTABLE:modify(index, value)
+function GTABLE:set(index, value)
     assertAlive(self)
+    pruneVersions(self)
     if value == nil then
         return self:remove(index)
     end
@@ -536,21 +602,26 @@ function GTABLE:modify(index, value)
         self:_markReady("localWrite")
     end
     local old = self.internalValues[index]
-    if deepeq(old, value) then
+    if valuesEqual(self, old, value) then
         return old
     end
     local stamp = makeStamp(self)
+    if old == nil then
+        self._count = self._count + 1
+    end
     self.internalValues[index] = value
     self._versions[index] = stamp
+    markSnapshotDirty(self)
     self:safeSend(self.dataUpdateMessage, index, value, stamp)
     notify(self, index, value, "local")
     return value
 end
 
-function GTABLE:modifyBulk(tbl)
+function GTABLE:setBulk(tbl)
     assertAlive(self)
+    pruneVersions(self)
     if type(tbl) ~= "table" then
-        error("GTABLE:modifyBulk() expects a table", 2)
+        error("GTABLE:setBulk() expects a table", 2)
     end
     if next(tbl) == nil then return false end
     if not self._ready then
@@ -559,7 +630,6 @@ function GTABLE:modifyBulk(tbl)
 
     local payload = {}
     local versions = {}
-    local removePayload = {}
     local changed = false
 
     for key, value in pairs(tbl) do
@@ -568,13 +638,18 @@ function GTABLE:modifyBulk(tbl)
             if old ~= nil then
                 local stamp = makeStamp(self)
                 self.internalValues[key] = nil
+                self._count = self._count - 1
                 self._versions[key] = stamp
-                removePayload[key] = stamp
+                payload[key] = nil
+                versions[key] = stamp
                 changed = true
             end
         else
-            if not deepeq(old, value) then
+            if not valuesEqual(self, old, value) then
                 local stamp = makeStamp(self)
+                if old == nil then
+                    self._count = self._count + 1
+                end
                 self.internalValues[key] = value
                 self._versions[key] = stamp
                 payload[key] = value
@@ -584,12 +659,9 @@ function GTABLE:modifyBulk(tbl)
         end
     end
 
-    if next(payload) ~= nil then
-        self:safeSend(self.bulkDataUpdateMessage, payload, versions)
-    end
-
-    if next(removePayload) ~= nil then
-        self:safeSend(self.bulkDataUpdateMessage, {}, removePayload)
+    if changed then
+        markSnapshotDirty(self)
+        self:safeSend(self.bulkDataUpdateMessage, {values = payload, versions = versions})
     end
 
     if changed then
@@ -601,6 +673,7 @@ end
 
 function GTABLE:remove(index)
     assertAlive(self)
+    pruneVersions(self)
     local old = self.internalValues[index]
     if old == nil then
         return nil
@@ -610,7 +683,9 @@ function GTABLE:remove(index)
     end
     local stamp = makeStamp(self)
     self.internalValues[index] = nil
+    self._count = self._count - 1
     self._versions[index] = stamp
+    markSnapshotDirty(self)
     self:safeSend(self.removeMessage, index, stamp)
     notify(self, index, nil, "localRemove")
     return old
@@ -618,6 +693,7 @@ end
 
 function GTABLE:clear()
     assertAlive(self)
+    pruneVersions(self)
     if next(self.internalValues) == nil then return false end
     if not self._ready then
         self:_markReady("localWrite")
@@ -628,24 +704,14 @@ function GTABLE:clear()
         self._versions[key] = stamp
     end
     wipeTable(self.internalValues)
+    self._count = 0
+    markSnapshotDirty(self)
     self:safeSend(self.clearMessage, stamp)
     notify(self, nil, nil, "localClear")
     return true
 end
 
-function GTABLE:get(index)
-    assertAlive(self)
-    return self.internalValues[index]
-end
-
-function GTABLE:exists(index)
-    assertAlive(self)
-    return self.internalValues[index] ~= nil
-end
-
-GTABLE.has = GTABLE.exists
-
-function GTABLE:getOrDefault(index, default)
+function GTABLE:get(index, default)
     assertAlive(self)
     local value = self.internalValues[index]
     if value == nil then
@@ -654,11 +720,16 @@ function GTABLE:getOrDefault(index, default)
     return value
 end
 
+function GTABLE:has(index)
+    assertAlive(self)
+    return self.internalValues[index] ~= nil
+end
+
 function GTABLE:ensure(index, default)
     assertAlive(self)
     local value = self.internalValues[index]
     if value == nil and default ~= nil then
-        self:modify(index, default)
+        self:set(index, default)
         return default
     end
     return value
@@ -670,7 +741,7 @@ function GTABLE:setSelf(val)
     if key == nil then
         error("GTABLE:setSelf() self key resolved to nil", 2)
     end
-    return self:modify(key, val)
+    return self:set(key, val)
 end
 
 function GTABLE:clearSelf()
@@ -687,12 +758,12 @@ function GTABLE:getSelf()
     return self.internalValues[key]
 end
 
-function GTABLE:getTable()
+function GTABLE:rawTable()
     assertAlive(self)
     return self.internalValues
 end
 
-function GTABLE:toTable()
+function GTABLE:table()
     assertAlive(self)
     return shallow_copy(self.internalValues)
 end
@@ -721,14 +792,17 @@ end
 
 function GTABLE:count()
     assertAlive(self)
-    local n = 0
-    for _ in pairs(self.internalValues) do
-        n = n + 1
-    end
-    return n
+    return self._count
 end
 
 function GTABLE:pull()
     assertAlive(self)
     self:safeSend(self.establishMessage, self._chipIndex)
 end
+
+GTABLE.modify = GTABLE.set
+GTABLE.modifyBulk = GTABLE.setBulk
+GTABLE.exists = GTABLE.has
+GTABLE.getOrDefault = GTABLE.get
+GTABLE.getTable = GTABLE.rawTable
+GTABLE.toTable = GTABLE.table
