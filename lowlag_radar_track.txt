@@ -111,11 +111,11 @@ if SERVER then
         Outputs.GimbalPos:update(searchPosition)
         LastOutputUpdate = timer.curtime()
         
-        -- uses roughly 64 bytes on average
+        -- uses roughly 64 bits on average, most things in lua are 16 bits
         if net.getBytesLeft() > 64 then
-            net.start("ST_syncClientTargetData")
+            net.start("LRT_syncClientTargetData")
                 net.writeVector(InternalInfo[1])
-                net.writeUInt(InternalInfo[3], 32)
+                net.writeUInt(InternalInfo[3], 16)
                 net.writeString(InternalInfo[4])
                 net.writeBool(TargetInArray)
             net.send()
@@ -127,7 +127,7 @@ if SERVER then
         
         if ActivelyTracking then
             ActivelyTracking = false
-            net.start("ST_syncClientTrackingBool")
+            net.start("LRT_syncClientTrackingBool")
                 net.writeBool(false)
             net.send()
             
@@ -158,7 +158,7 @@ if SERVER then
         InternalInfo = targInfo
         ActivelyTracking = true
         TargetInArray = true
-        net.start("ST_syncClientTrackingBool")
+        net.start("LRT_syncClientTrackingBool")
             net.writeBool(true)
         net.send()
     end)
@@ -207,6 +207,10 @@ if CLIENT then
         end
         local x = c.x
         local y = c.y
+        local vis = c.visible
+
+        -- if not visible, don't render it
+        if not vis then return end
         
         if TargetInArray then
             drawCenterRT(x, y, LOCK_INDICATOR, 2)
@@ -219,7 +223,7 @@ if CLIENT then
         textSimple(x, y + 40, "ID " .. TargetID, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
     end)
     
-    hook.add("renderoffscreen", "ST_drawStaticElements", function()
+    hook.add("renderoffscreen", "LRT_drawStaticElements", function()
         local x, y = 512, 512
         
         selectClearRT(LOCK_INDICATOR)    
@@ -230,43 +234,43 @@ if CLIENT then
             centerRectOutline(x, y, 80, 80, 2)
             
         selectClearRT(LOST_INDICATOR)
-            local size = 40
-            local distOuter = 24
-            local distInner = 22
+            local halfLength = 40
+            local distOuter = 14
+            local distInner = 12
             
             color(COL_BLACK)
-            line(x + size, y + size, x + distOuter, y + size, 4)
-            line(x + size, y + size, x + size, y + distOuter, 4)
+            line(x + halfLength, y + halfLength, x + distOuter, y + halfLength, 4)
+            line(x + halfLength, y + halfLength, x + halfLength, y + distOuter, 4)
             
-            line(x + size, y - size, x + distOuter, y - size, 4)
-            line(x + size, y - size, x + size, y - distOuter, 4)
+            line(x + halfLength, y - halfLength, x + distOuter, y - halfLength, 4)
+            line(x + halfLength, y - halfLength, x + halfLength, y - distOuter, 4)
             
-            line(x - size, y + size, x - distOuter, y + size, 4)
-            line(x - size, y + size, x - size, y + distOuter, 4)
+            line(x - halfLength, y + halfLength, x - distOuter, y + halfLength, 4)
+            line(x - halfLength, y + halfLength, x - halfLength, y + distOuter, 4)
             
-            line(x - size, y - size, x - distOuter, y - size, 4)
-            line(x - size, y - size, x - size, y - distOuter, 4)
+            line(x - halfLength, y - halfLength, x - distOuter, y - halfLength, 4)
+            line(x - halfLength, y - halfLength, x - halfLength, y - distOuter, 4)
             
             color(COL_WHITE)
-            line(x + size, y + size, x + distInner, y + size, 2)
-            line(x + size, y + size, x + size, y + distInner, 2)
+            line(x + halfLength, y + halfLength, x + distInner, y + halfLength, 2)
+            line(x + halfLength, y + halfLength, x + halfLength, y + distInner, 2)
             
-            line(x - size, y + size, x - distInner, y + size, 2)
-            line(x - size, y + size, x - size, y + distInner, 2)
+            line(x - halfLength, y + halfLength, x - distInner, y + halfLength, 2)
+            line(x - halfLength, y + halfLength, x - halfLength, y + distInner, 2)
             
-            line(x + size, y - size, x + distInner, y - size, 2)
-            line(x + size, y - size, x + size, y - distInner, 2)
+            line(x + halfLength, y - halfLength, x + distInner, y - halfLength, 2)
+            line(x + halfLength, y - halfLength, x + halfLength, y - distInner, 2)
             
-            line(x - size, y - size, x - distInner, y - size, 2)
-            line(x - size, y - size, x - size, y - distInner, 2)
+            line(x - halfLength, y - halfLength, x - distInner, y - halfLength, 2)
+            line(x - halfLength, y - halfLength, x - halfLength, y - distInner, 2)
             
-        hook.remove("renderoffscreen", "ST_drawStaticElements")
+        hook.remove("renderoffscreen", "LRT_drawStaticElements")
     end)
 
-    net.receive("ST_syncClientTargetData", function()
+    net.receive("LRT_syncClientTargetData", function()
         ensureSounds()
         TargetPos = net.readVector()
-        TargetID = net.readUInt(32)
+        TargetID = net.readUInt(16)
         TargetName = net.readString()
         TargetInArray = net.readBool()
         NewTargetPeriod = false
@@ -280,7 +284,7 @@ if CLIENT then
         end
     end)
     
-    net.receive("ST_syncClientTrackingBool", function()
+    net.receive("LRT_syncClientTrackingBool", function()
         ActivelyTracking = net.readBool()
         NewTargetPeriod = true
         
@@ -295,5 +299,3 @@ if CLIENT then
         end
     end)
 end
-
- 
