@@ -9,19 +9,34 @@ require("allylib/general_algorithms.txt")
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/merys_integrated_ballistics_computer.txt")
 
-updateInputs("Active:NORMAL M1:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR")
-updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TTA:NORMAL Fire:NORMAL")
+updateInputs("Lock:NORMAL Active:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR")
+updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TTA:NORMAL")
 
 CurTime = timer.curtime
 ZERO_VEC = Vector()
 
 ACTIVE_INTERVAL = 0.05
 IDLE_INTERVAL = 0.2
+LOAD_PITCH = nil
 
 NextThink = 0
+Locked = false
+LockedAimPos = ZERO_VEC
+LastAimPos = ZERO_VEC
 
 local function wakeThink()
     NextThink = 0
+end
+
+local function getLoadAimPos(gun, base, targetPos, loadAng)
+    local origin = getGunOrigin(gun)
+    if not origin then return nil end
+
+    local baseAng = base:getAngles()
+    local toTarget = targetPos - origin
+    local yaw = toTarget:getAngle().y
+    local ang = Angle(baseAng.p - loadAng.p, yaw, 0)
+    return origin + ang:getForward() * 10000
 end
 
 Inputs.Gun:addTrigger(function(gun)
@@ -35,23 +50,32 @@ end)
 Inputs.Base:addTrigger(wakeThink)
 Inputs.HitPos:addTrigger(wakeThink)
 Inputs.Active:addTrigger(wakeThink)
+Inputs.Lock:addTrigger(function(value)
+    if value == 0 then return end
+
+    Locked = not Locked
+    if Locked then
+        LockedAimPos = LastAimPos
+    end
+
+    wakeThink()
+end)
 
 local function main()
     local now = CurTime()
     local gun = InputValues.Gun
     local base = InputValues.Base
     local hitPos = InputValues.HitPos or ZERO_VEC
-    local manualFire = (InputValues.M1 or 0) ~= 0
     local active = (InputValues.Active or 0) ~= 0
     local gunValid = gun and gun:isValid()
+    local turretActive = active or Locked
     local canSolve = active
         and gunValid
         and base
         and base:isValid()
         and hitPos:getLength() > 0
 
-    Outputs.TurretActive:update(active and 1 or 0)
-    Outputs.Fire:update(manualFire and 1 or 0)
+    Outputs.TurretActive:update(turretActive and 1 or 0)
 
     if now < NextThink then
         return
@@ -60,7 +84,9 @@ local function main()
     local aimPos = hitPos
     local tta = 0
 
-    if canSolve and gun:acfReady() and CFBA_SolveStatic then
+    if Locked then
+        aimPos = LockedAimPos
+    elseif canSolve and gun:acfReady() and CFBA_SolveStatic then
         local _, staticAimPos, staticTta = CFBA_SolveStatic(base, hitPos)
         if hasVectorValue(staticAimPos) then
             aimPos = staticAimPos
@@ -68,13 +94,19 @@ local function main()
         if type(staticTta) == "number" then
             tta = staticTta
         end
+    elseif canSolve and LOAD_PITCH ~= nil then
+        local loadAimPos = getLoadAimPos(gun, base, hitPos, Angle(LOAD_PITCH, 0, 0))
+        if hasVectorValue(loadAimPos) then
+            aimPos = loadAimPos
+        end
     end
 
+    LastAimPos = aimPos
     Outputs.HAimPos:update(aimPos)
     Outputs.VAimPos:update(aimPos)
     Outputs.TTA:update(tta)
 
-    NextThink = now + (active and ACTIVE_INTERVAL or IDLE_INTERVAL)
+    NextThink = now + (turretActive and ACTIVE_INTERVAL or IDLE_INTERVAL)
 end
 
 hook.add("think", "SF_MPGC", main)
