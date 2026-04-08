@@ -3,7 +3,7 @@
 --@include allylib/simple_server-side_wire_helper.txt
 --@server
 
---- Version 0.13.1
+--- Version 0.13.2
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/ally_mobility_hours.txt
 -- GITHUB: https://github.com/Ally-for-Hire/gmod-starfall-projects/tree/main
 -- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
@@ -29,9 +29,9 @@ Every tunable sits in the "Customizable Variables" block and includes inline des
 Key notes:
 - "GEARING_TYPE": "1" uses RPM-based shifts, "2" uses speed gates, and "3" blends both. Hybrid is the recommended default.
 - "WHEEL_DIAMETER" and "FINAL_RATIO" should match your physical wheel diameter and combined gearbox ratios so the shift map stays accurate. Example: (1/1.5) * (1/1.4).
-- Flip "showDebug" on to review gear-speed targets; nudge "WHEEL_DIAMETER" if the speeds feel off.
+- Flip "SHOW_DEBUG" on to review gear-speed targets; nudge "WHEEL_DIAMETER" if the speeds feel off.
 - Counter-steer defaults are tuned for general use. Only tweak them for exceptionally unusual drivetrains.
-- "clutchStart" comes from Cheezus' clutch curve; leave it at "0.8" unless you have a specific low-RPM behaviour to chase.
+- "DUAL_CLUTCH" comes from Cheezus' clutch curve; leave it at "0.8" unless you have a specific low-RPM behaviour to chase.
 
 Need a hand tailoring it to a particular rig? Ping @allyfh and I'll walk you through it.
 */
@@ -69,6 +69,8 @@ YAW_DEADZONE = 15
 COUNTERSTEER_STRENGTH = 1.5 -- legacy P gain (kept for compatibility)
 COUNTERSTEER_KI = 0
 COUNTERSTEER_KD = 0.05 -- small D term for easier damping tuning
+ACTUAL_COUNTERSTEER_THRESHOLD = 0.65 -- start feeding reverse into the correcting side once brake-only correction is close to saturated; requires split-transfer side gear control, not driver neutral steer
+ACTUAL_COUNTERSTEER_ENGAGEMENT = 0.2 -- 0 disables it; keep this low because 1 is a full reverse bite
 
 -- Steering Setup
 INVERT_STEER = false
@@ -168,6 +170,39 @@ end
 local function resetCounterSteer()
     CounterSteerI = 0
     CounterSteerPrevError = 0
+end
+
+local function canActualCounterSteer()
+    return CanNeutralSteer and ACTUAL_COUNTERSTEER_ENGAGEMENT > 0 and ACTUAL_COUNTERSTEER_THRESHOLD < 1
+end
+
+local function getActualCounterSteerAssist(pidNorm)
+    if not canActualCounterSteer() then
+        return 0
+    end
+
+    return math.clamp((pidNorm - ACTUAL_COUNTERSTEER_THRESHOLD) / (1 - ACTUAL_COUNTERSTEER_THRESHOLD), 0, 1)
+end
+
+local function applyCounterSteerSide(useLeft, brakeWeight, actualAssist)
+    if useLeft then
+        OutputLeftBrake = math.max(OutputLeftBrake, brakeWeight)
+        if actualAssist > 0 then
+            OutputLeftGear = OutputLeftGear == 1 and 2 or 1
+            OutputLeftClutch = math.max(OutputLeftClutch, 1 - actualAssist * math.clamp(ACTUAL_COUNTERSTEER_ENGAGEMENT, 0, 1))
+        else
+            OutputLeftClutch = math.max(OutputLeftClutch, CLUTCH_TURN)
+        end
+        return
+    end
+
+    OutputRightBrake = math.max(OutputRightBrake, brakeWeight)
+    if actualAssist > 0 then
+        OutputRightGear = OutputRightGear == 1 and 2 or 1
+        OutputRightClutch = math.max(OutputRightClutch, 1 - actualAssist * math.clamp(ACTUAL_COUNTERSTEER_ENGAGEMENT, 0, 1))
+    else
+        OutputRightClutch = math.max(OutputRightClutch, CLUTCH_TURN)
+    end
 end
 
 local function applySafeState()
@@ -536,7 +571,8 @@ local function think()
             local d = ((err - CounterSteerPrevError) / THINK_DT / MAX_YAW_RATE) * COUNTERSTEER_KD
 
             local pidNorm = math.min(math.max(p + i + d, 0), 1)
-            local counterSteerWeight = pidNorm * brakePower
+            local actualAssist = getActualCounterSteerAssist(pidNorm)
+            local counterSteerWeight = pidNorm * brakePower * (1 - actualAssist)
 
             CounterSteerPrevError = err
 
@@ -546,11 +582,9 @@ local function think()
             end
 
             if yawRate * direction < 0 then
-                OutputLeftBrake = math.max(OutputLeftBrake, counterSteerWeight)
-                OutputLeftClutch = math.max(OutputLeftClutch, CLUTCH_TURN)
+                applyCounterSteerSide(true, counterSteerWeight, actualAssist)
             else
-                OutputRightBrake = math.max(OutputRightBrake, counterSteerWeight)
-                OutputRightClutch = math.max(OutputRightClutch, CLUTCH_TURN)
+                applyCounterSteerSide(false, counterSteerWeight, actualAssist)
             end
         else
             resetCounterSteer()
@@ -563,4 +597,4 @@ local function think()
 end
 
 --- Hooks
-timer.create("Main Logic Loop", THINK_DT, 0, think)
+timer.create("AMH_mainLogicLoop", THINK_DT, 0, think)
