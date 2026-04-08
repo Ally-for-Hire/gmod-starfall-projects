@@ -26,28 +26,19 @@ if SERVER then
     Inputs.Radar:addTrigger(function(ent)
         if ent == nil then return end
         if not isValid(ent) then
-            wire.delete(CHIP, "Position")
-            wire.delete(CHIP, "Velocity")
-            wire.delete(CHIP, "IDs")
-            wire.delete(CHIP, "Owner")
+            safeWireDelete(CHIP, "Position")
+            safeWireDelete(CHIP, "Velocity")
+            safeWireDelete(CHIP, "IDs")
+            safeWireDelete(CHIP, "Owner")
             return
         end
 
         local wireSuccesses = 0
-        local function safeWireCreate(entI, entO, inputName, outputName)
-            local ok = pcall(wire.create, entI, entO, inputName, outputName)
-            if ok then wireSuccesses = wireSuccesses + 1 end
-            return ok
-        end
-        local function safeWireDelete(ent, inputName)
-            local ok = pcall(wire.delete, ent, inputName)
-            return ok
-        end
         
-        safeWireCreate(CHIP, ent, "Position", "Position")
-        safeWireCreate(CHIP, ent, "Velocity", "Velocity")
-        safeWireCreate(CHIP, ent, "IDs", "IDs")
-        safeWireCreate(CHIP, ent, "Owner", "Owner")
+        if safeWireCreate(CHIP, ent, "Position", "Position") then wireSuccesses = wireSuccesses + 1 end
+        if safeWireCreate(CHIP, ent, "Velocity", "Velocity") then wireSuccesses = wireSuccesses + 1 end
+        if safeWireCreate(CHIP, ent, "IDs", "IDs") then wireSuccesses = wireSuccesses + 1 end
+        if safeWireCreate(CHIP, ent, "Owner", "Owner") then wireSuccesses = wireSuccesses + 1 end
         
         if wireSuccesses != 4 then print(Color(255, 0, 0), "[ERROR]: ", Color(255, 255, 255), "Wirelinks failed to connect.") end
         if wireSuccesses == 0 then
@@ -232,22 +223,10 @@ if CLIENT then
         local x, y = 512, 512
         
         selectClearRT(LOCK_INDICATOR)    
-            color(Color(0, 0, 0, 255))
-            --centerRect(x, y, 30, 6)
-            --centerRect(x, y, 6, 30)
-            --centerRect(x + 30, y, 30, 6)
-            --centerRect(x - 30, y, 30, 6)
-            --centerRect(x, y + 22, 6, 15)
-            --centerRect(x, y - 22, 6, 15)
+            color(COL_BLACK)
             centerRectOutline(x, y, 82, 82, 4)
             
             color(COL_WHITE)
-            --centerRect(x, y, 26, 2)
-            --centerRect(x, y, 2, 26)
-            --centerRect(x + 30, y, 26, 2)
-            --centerRect(x - 30, y, 26, 2)
-            --centerRect(x, y + 22, 2, 11)
-            --centerRect(x, y - 22, 2, 11)
             centerRectOutline(x, y, 80, 80, 2)
             
         selectClearRT(LOST_INDICATOR)
@@ -255,7 +234,7 @@ if CLIENT then
             local distOuter = 24
             local distInner = 22
             
-            color(Color(0, 0, 0, 255))
+            color(COL_BLACK)
             line(x + size, y + size, x + distOuter, y + size, 4)
             line(x + size, y + size, x + size, y + distOuter, 4)
             
