@@ -70,7 +70,7 @@ COUNTERSTEER_STRENGTH = 1.5 -- legacy P gain (kept for compatibility)
 COUNTERSTEER_KI = 0
 COUNTERSTEER_KD = 0.05 -- small D term for easier damping tuning
 ACTUAL_COUNTERSTEER_THRESHOLD = 0.65 -- start feeding reverse into the correcting side once brake-only correction is close to saturated; requires split-transfer side gear control, not driver neutral steer
-ACTUAL_COUNTERSTEER_ENGAGEMENT = 0.2 -- 0 disables it; keep this low because 1 is a full reverse bite
+ACTUAL_COUNTERSTEER_ENGAGEMENT = 1.0 -- 0 disables it; keep this low because 1 is a full reverse bite
 
 -- Steering Setup
 INVERT_STEER = false
