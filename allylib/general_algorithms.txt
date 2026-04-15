@@ -20,6 +20,7 @@ Function index:
 - `sanitizeEntityInput(value, fallback)`: returns `value` when it is a valid entity, otherwise a fallback entity/value.
 - `sanitizeText(value, maxLength, fallback)`: string conversion with optional truncation and fallback.
 - `tryNetSend(name, writer, recipient)`: protected `net.start`/write/send wrapper that returns whether the send succeeded.
+- `safeRunRemote(target, ...)`: protected `hook.runRemote` wrapper that returns the remote result or `nil`.
 - `getGunOrigin(gun)`: returns mass center or entity position for a valid gun.
 - `computeMuzzleDistance(gun)`: measures muzzle offset from the gun origin when available.
 - `roundNumber(value, decimals)`: rounds a number to the requested decimal places.
@@ -218,6 +219,17 @@ function tryNetSend(name, writer, recipient)
             net.send()
         end
     end)
+end
+
+-- target: remote target chip or nil for broadcast
+-- ...: remote payload arguments
+function safeRunRemote(target, ...)
+    local ok, result = pcall(hook.runRemote, target, ...)
+    if ok then
+        return result
+    end
+
+    return nil
 end
 
 -- gun: entity to sample origin from
