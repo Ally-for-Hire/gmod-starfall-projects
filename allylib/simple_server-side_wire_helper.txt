@@ -476,4 +476,7 @@ function safeWireDelete(ent, inputName)
     return ok
 end
 
+_G.safeWireCreate = safeWireCreate
+_G.safeWireDelete = safeWireDelete
+
 hook.add("input", "SS-SWH_input", doWireInput)
