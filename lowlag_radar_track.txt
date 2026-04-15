@@ -8,7 +8,7 @@ require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/helpful_hud_functions.txt")
 
 OUTPUT_UPDATE_CAP = 0.05
-FOLLOW_LAST_VELOCITY_TIME = 5
+FOLLOW_LAST_VELOCITY_TIME = 3
 SOUND_VOLUME = 35
 CHIP = chip()
 
