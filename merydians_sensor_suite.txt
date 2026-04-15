@@ -1,221 +1,150 @@
 --@name Merydian's Sensor Suite
 --@author Ally for Hire / Merydian9
 --@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/general_algorithms.txt
 --@server
 
 require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/general_algorithms.txt")
 
-updateInputs("Sensors:ARRAY")
+updateInputs("Radar1:entity Poll1:array Radar2:entity Poll2:array Radar3:entity Poll3:array Radar4:entity Poll4:array")
 updateOutputs("Position:ARRAY Velocity:ARRAY Owner:ARRAY IDs:ARRAY Times:ARRAY")
 
-POLL_RATE = 0.02
-PUBLISH_RATE = 0.05
-CONTACT_TTL = 0.15
-PRUNE_INTERVAL = 0.5
-TIMER_NAME = "MerydianSensorSuite_Poll"
-ZERO_VEC = Vector()
+SELF = chip()
+THINK_DELAY = 0.15
+UPDATE_CAP = 0.05
+NextThink = 0
+Sensors = {}
+NextUpdate = 0
+ValuesQueued = false
 
-CachedRadars = {}
 Contacts = {}
-OutputsActive = false
-OutputsInitialized = false
-NextPrune = 0
-NextPublish = 0
-SnapshotDirty = true
+OutPosition = {}
+OutVelocity = {}
+OutOwner = {}
+OutIDs = {}
+OutTimes = {}
 
-local pollSensors
+curtime = timer.curtime
 
-local function isRadar(ent)
-    if not isValid(ent) then return false end
+local handleWirelinkData, publicContacts
 
-    local class = ent:getClass()
-    return class == "ace_searchradar" or class == "ace_trackingradar" or class == "acf_radar"
-end
+hook.add("think", "MSS_main", function()
+    local time = curtime()
+    if time < NextThink then return end
+    NextThink = time + THINK_DELAY
 
-local function clearOutputs()
-    if OutputsInitialized and not OutputsActive then return end
-
-    Outputs.Position:update({})
-    Outputs.Velocity:update({})
-    Outputs.Owner:update({})
-    Outputs.IDs:update({})
-    Outputs.Times:update({})
-    OutputsActive = false
-    OutputsInitialized = true
-    SnapshotDirty = false
-end
-
-local function schedulePoll()
-    timer.remove(TIMER_NAME)
-
-    if #CachedRadars == 0 then
-        clearOutputs()
-        return
-    end
-
-    timer.create(TIMER_NAME, POLL_RATE, 1, pollSensors)
-end
-
-local function cacheSensors(arr)
-    local nextRadars = {}
-
-    if type(arr) == "table" then
-        for i = 1, #arr do
-            local ent = arr[i]
-            if not isRadar(ent) then continue end
-            if not ent:getWirelink() then continue end
-
-            nextRadars[#nextRadars + 1] = ent
+    local changed = false
+    for id, contact in pairs(Contacts) do
+        if time - contact.Time >= (THINK_DELAY * 2) then
+            Contacts[id] = nil
+            changed = true
         end
     end
 
-    CachedRadars = nextRadars
-    NextPrune = 0
-    pollSensors()
+    if changed or ValuesQueued then
+        publishContacts()
+    end
+end)
+
+local function handlePositionInput(posWl, num)
+    if Sensors[num] == nil then return end
+
+    handleWirelinkData(posWl, Sensors[num])
+    publishContacts()
 end
 
-local function pruneRadars()
-    local changed = false
+function handleWirelinkData(posWl, wl)
+    if #posWl == 0 then return end
 
-    for i = #CachedRadars, 1, -1 do
-        local ent = CachedRadars[i]
-        if isRadar(ent) and ent:getWirelink() then
+    local velWl = wl.Velocity
+    local ownerWl = wl.Owner
+    local idsWl = wl.IDs
+
+    if (#velWl + #ownerWl + #idsWl) != #posWl * 3 then return end
+
+    local time = curtime()
+
+    for i = 1, #posWl do
+        local id = idsWl[i]
+        if id == nil then continue end
+
+        local contact = Contacts[id]
+
+        if contact == nil then
+            contact = {}
+            Contacts[id] = contact
+        elseif contact.Position == posWl[i] and contact.Velocity == velWl[i] and contact.Owner == ownerWl[i] then
+            contact.Time = time
             continue
         end
 
-        table.remove(CachedRadars, i)
-        changed = true
+        contact.Position = posWl[i]
+        contact.Velocity = velWl[i]
+        contact.Owner = ownerWl[i]
+        contact.Time = time
     end
-
-    return changed
 end
 
-local function publishContacts(time)
-    local outPosition = {}
-    local outVelocity = {}
-    local outOwner = {}
-    local outIDs = {}
-    local outTimes = {}
-    local sortedIDs = {}
+local function handleRadarInput(ent, num)
+    if ent == nil or not isValid(ent) or ent:getClass() != "acf_radar" then
+        Sensors[num] = nil
+        safeWireDelete(SELF, "Poll" .. num)
+        return
+    end
+
+    Sensors[num] = ent:getWirelink()
+    safeWireCreate(SELF, ent, "Poll" .. num, "Position")
+end
+
+function publishContacts()
+    OutPosition = {}
+    OutVelocity = {}
+    OutOwner = {}
+    OutIDs = {}
+    OutTimes = {}
+
+    local idList = {}
     local count = 0
 
-    for id in pairs(Contacts) do
-        sortedIDs[#sortedIDs + 1] = id
+    for id, _ in pairs(Contacts) do
+        count = count + 1
+        idList[count] = id
     end
 
-    table.sort(sortedIDs)
+    table.sort(idList)
 
-    for i = 1, #sortedIDs do
-        local id = sortedIDs[i]
-        local data = Contacts[id]
-        count = i
-        outPosition[count] = data[1]
-        outVelocity[count] = data[2]
-        outOwner[count] = data[3]
-        outIDs[count] = id
-        outTimes[count] = data[4] or time
+    for i = 1, count do
+        local id = idList[i]
+        local contact = Contacts[id]
+
+        OutPosition[i] = contact.Position
+        OutVelocity[i] = contact.Velocity
+        OutOwner[i] = contact.Owner
+        OutIDs[i] = id
+        OutTimes[i] = contact.Time
     end
-
-    if count == 0 then
-        clearOutputs()
+    
+    if curtime() > NextUpdate then
+        Outputs.Position:update(OutPosition)
+        Outputs.Velocity:update(OutVelocity)
+        Outputs.Owner:update(OutOwner)
+        Outputs.IDs:update(OutIDs)
+        Outputs.Times:update(OutTimes)
+        NextUpdate = curtime() + UPDATE_CAP
+        ValuesQueued = false
         return
     end
-
-    Outputs.Position:update(outPosition)
-    Outputs.Velocity:update(outVelocity)
-    Outputs.Owner:update(outOwner)
-    Outputs.IDs:update(outIDs)
-    Outputs.Times:update(outTimes)
-    OutputsActive = true
-    OutputsInitialized = true
-    SnapshotDirty = false
-    NextPublish = time + PUBLISH_RATE
+    
+    ValuesQueued = true
 end
 
-local function updateContact(id, pos, vel, ownerName, time)
-    local existing = Contacts[id]
-    if existing == nil then
-        Contacts[id] = {pos, vel, ownerName, time}
-        SnapshotDirty = true
-        return
-    end
+Inputs.Radar1:addTrigger(function(ent) handleRadarInput(ent, 1) end)
+Inputs.Radar2:addTrigger(function(ent) handleRadarInput(ent, 2) end)
+Inputs.Radar3:addTrigger(function(ent) handleRadarInput(ent, 3) end)
+Inputs.Radar4:addTrigger(function(ent) handleRadarInput(ent, 4) end)
 
-    if existing[1] ~= pos or existing[2] ~= vel or existing[3] ~= ownerName then
-        SnapshotDirty = true
-    end
-
-    existing[1] = pos
-    existing[2] = vel
-    existing[3] = ownerName
-    existing[4] = time
-end
-
-local function pruneContacts(time)
-    local removed = false
-
-    for id, data in pairs(Contacts) do
-        if (time - data[4]) <= CONTACT_TTL then continue end
-
-        Contacts[id] = nil
-        removed = true
-    end
-
-    if removed then
-        SnapshotDirty = true
-    end
-end
-
-pollSensors = function()
-    local time = timer.curtime()
-
-    if time >= NextPrune then
-        pruneRadars()
-        NextPrune = time + PRUNE_INTERVAL
-    end
-
-    if #CachedRadars == 0 then
-        Contacts = {}
-        clearOutputs()
-        schedulePoll()
-        return
-    end
-
-    for i = 1, #CachedRadars do
-        local ent = CachedRadars[i]
-        local wl = ent:getWirelink()
-        if not wl then continue end
-
-        local positions = wl.Position
-        local ids = wl.ID or wl.IDs
-        local velocities = wl.Velocity
-        local owners = wl.Owner
-
-        if type(positions) ~= "table" or type(ids) ~= "table" then
-            continue
-        end
-
-        for index, pos in pairs(positions) do
-            local id = ids[index]
-            if id == nil or pos == nil then continue end
-
-            updateContact(
-                id,
-                pos,
-                type(velocities) == "table" and velocities[index] or ZERO_VEC,
-                type(owners) == "table" and owners[index] or "",
-                time
-            )
-        end
-    end
-
-    pruneContacts(time)
-
-    if SnapshotDirty and time >= NextPublish then
-        publishContacts(time)
-    end
-
-    schedulePoll()
-end
-
-Inputs.Sensors:addTrigger(cacheSensors)
-cacheSensors(Inputs.Sensors:get())
+Inputs.Poll1:addTrigger(function(ent) handlePositionInput(ent, 1) end)
+Inputs.Poll2:addTrigger(function(ent) handlePositionInput(ent, 2) end)
+Inputs.Poll3:addTrigger(function(ent) handlePositionInput(ent, 3) end)
+Inputs.Poll4:addTrigger(function(ent) handlePositionInput(ent, 4) end)
