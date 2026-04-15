@@ -58,7 +58,7 @@ if SERVER then
         LastOutputUpdate = timer.curtime()
     end)
     
-    Inputs.Position:addTrigger(function(vec)
+    local function logic(vec)
         if not ActivelyTracking then return end
         if (timer.curtime() - LastOutputUpdate) < OUTPUT_UPDATE_CAP then return end
         
@@ -98,7 +98,7 @@ if SERVER then
         Outputs.TargetID:update(InternalInfo[3])
         Outputs.TargetName:update(InternalInfo[4])
         
-        local searchPosition = InternalInfo[1]
+        local searchPosition = InternalInfo[1] + InternalInfo[2] * 0.1
         local dt = (timer.curtime() - LastSeen)
         if not TargetInArray and dt < FOLLOW_LAST_VELOCITY_TIME then
             if SearchAttempts % 2 == 0 then
@@ -120,7 +120,10 @@ if SERVER then
                 net.writeBool(TargetInArray)
             net.send()
         end
-    end)
+    end
+    
+    Inputs.Position:addTrigger(logic)
+    timer.create("LRT_downtimeUpdateLoop", 0.1, 0, function() logic(Inputs.Position:get()) end)
     
     Inputs.Lock:addTrigger(function(num)
         if num == 0 then return end
@@ -168,13 +171,14 @@ if CLIENT then
     TargetPos = Vector()
     TargetID = 0
     TargetName = "Merydian9"
+    TargetRange = 0
     ActivelyTracking = false
     TargetInArray = false
     NewTargetPeriod = false
     InitSounds = true
     P = player()
     
-    FONT_MAIN = render.createFont("Default", 12, nil, nil, nil, true, nil)
+    FONT_MAIN = render.createFont("", 13, 1600, nil, nil, nil, true)
     LOCK_INDICATOR = initRT("Tracking Indicator")
     LOST_INDICATOR = initRT("Lost Track Indicator")
     resx, resy = render.getResolution()
@@ -211,16 +215,19 @@ if CLIENT then
 
         -- if not visible, don't render it
         if not vis then return end
+        color(Color(100, 255, 100))
         
         if TargetInArray then
             drawCenterRT(x, y, LOCK_INDICATOR, 2)
+            drawCenterRT(x, y, LOST_INDICATOR, 2)
         else
             drawCenterRT(x, y, LOST_INDICATOR, 2)
         end
         
         font(FONT_MAIN)
-        textSimple(x, y + 30, TargetName, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
-        textSimple(x, y + 40, "ID " .. TargetID, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+        textSimple(x, y - 30, TargetName, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+        textSimple(x, y + 30, "DIST " .. TargetRange .. "hu", TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+        textSimple(x, y + 42, "ID " .. TargetID, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
     end)
     
     hook.add("renderoffscreen", "LRT_drawStaticElements", function()
@@ -228,41 +235,41 @@ if CLIENT then
         
         selectClearRT(LOCK_INDICATOR)    
             color(COL_BLACK)
-            centerRectOutline(x, y, 82, 82, 4)
+            centerRectOutline(x, y, 84, 84, 8)
             
             color(COL_WHITE)
-            centerRectOutline(x, y, 80, 80, 2)
+            centerRectOutline(x, y, 80, 80, 3)
             
         selectClearRT(LOST_INDICATOR)
-            local halfLength = 40
-            local distOuter = 14
-            local distInner = 12
+            local halfLength = 39
+            local distOuter = 12
+            local distInner = 15
             
             color(COL_BLACK)
-            line(x + halfLength, y + halfLength, x + distOuter, y + halfLength, 4)
-            line(x + halfLength, y + halfLength, x + halfLength, y + distOuter, 4)
+            line(x + halfLength, y + halfLength, x + distOuter, y + halfLength, 8)
+            line(x + halfLength, y + halfLength, x + halfLength, y + distOuter, 8)
             
-            line(x + halfLength, y - halfLength, x + distOuter, y - halfLength, 4)
-            line(x + halfLength, y - halfLength, x + halfLength, y - distOuter, 4)
+            line(x + halfLength, y - halfLength, x + distOuter, y - halfLength, 8)
+            line(x + halfLength, y - halfLength, x + halfLength, y - distOuter, 8)
             
-            line(x - halfLength, y + halfLength, x - distOuter, y + halfLength, 4)
-            line(x - halfLength, y + halfLength, x - halfLength, y + distOuter, 4)
+            line(x - halfLength, y + halfLength, x - distOuter, y + halfLength, 8)
+            line(x - halfLength, y + halfLength, x - halfLength, y + distOuter, 8)
             
-            line(x - halfLength, y - halfLength, x - distOuter, y - halfLength, 4)
-            line(x - halfLength, y - halfLength, x - halfLength, y - distOuter, 4)
+            line(x - halfLength, y - halfLength, x - distOuter, y - halfLength, 8)
+            line(x - halfLength, y - halfLength, x - halfLength, y - distOuter, 8)
             
             color(COL_WHITE)
-            line(x + halfLength, y + halfLength, x + distInner, y + halfLength, 2)
-            line(x + halfLength, y + halfLength, x + halfLength, y + distInner, 2)
+            line(x + halfLength, y + halfLength, x + distInner, y + halfLength, 3)
+            line(x + halfLength, y + halfLength, x + halfLength, y + distInner, 3)
             
-            line(x - halfLength, y + halfLength, x - distInner, y + halfLength, 2)
-            line(x - halfLength, y + halfLength, x - halfLength, y + distInner, 2)
+            line(x - halfLength, y + halfLength, x - distInner, y + halfLength, 3)
+            line(x - halfLength, y + halfLength, x - halfLength, y + distInner, 3)
             
-            line(x + halfLength, y - halfLength, x + distInner, y - halfLength, 2)
-            line(x + halfLength, y - halfLength, x + halfLength, y - distInner, 2)
+            line(x + halfLength, y - halfLength, x + distInner, y - halfLength, 3)
+            line(x + halfLength, y - halfLength, x + halfLength, y - distInner, 3)
             
-            line(x - halfLength, y - halfLength, x - distInner, y - halfLength, 2)
-            line(x - halfLength, y - halfLength, x - halfLength, y - distInner, 2)
+            line(x - halfLength, y - halfLength, x - distInner, y - halfLength, 3)
+            line(x - halfLength, y - halfLength, x - halfLength, y - distInner, 3)
             
         hook.remove("renderoffscreen", "LRT_drawStaticElements")
     end)
@@ -297,5 +304,9 @@ if CLIENT then
         if not ActivelyTracking then
             SOUND_dropTrack:play()
         end
+    end)
+    
+    timer.create("LRT_targetRangeUpdateLoop", 0.1, 0, function()
+        TargetRange = math.round(TargetPos:getDistance(P:getPos()))
     end)
 end
