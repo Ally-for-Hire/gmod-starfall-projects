@@ -17,7 +17,9 @@ Function index:
 - `advanceTargetState(pos, vel, accel, dt)`: advances target position and velocity by `dt`.
 - `predictTargetOffset(vel, accel, dt)`: returns the motion offset over `dt`.
 - `asArray(value)`: returns the table unchanged or `{}` when the value is not a table.
+- `normalizeAngleCopy(ang)`: returns a copied angle normalized to the `[-180, 180]` range.
 - `sanitizeEntityInput(value, fallback)`: returns `value` when it is a valid entity, otherwise a fallback entity/value.
+- `sanitizeTraceFilter(value)`: returns a dense array containing only valid entities from a filter-like input.
 - `sanitizeText(value, maxLength, fallback)`: string conversion with optional truncation and fallback.
 - `tryNetSend(name, writer, recipient)`: protected `net.start`/write/send wrapper that returns whether the send succeeded.
 - `safeRunRemote(target, ...)`: protected `hook.runRemote` wrapper that returns the remote result or `nil`.
@@ -181,6 +183,22 @@ function asArray(value)
     return {}
 end
 
+-- ang: angle to normalize and copy
+function normalizeAngleCopy(ang)
+    local pitch = ang.pitch
+    local yaw = ang.yaw
+    local roll = ang.roll
+
+    if pitch > 180 then pitch = pitch - 360 end
+    if pitch < -180 then pitch = pitch + 360 end
+    if yaw > 180 then yaw = yaw - 360 end
+    if yaw < -180 then yaw = yaw + 360 end
+    if roll > 180 then roll = roll - 360 end
+    if roll < -180 then roll = roll + 360 end
+
+    return Angle(pitch, yaw, roll)
+end
+
 -- value: candidate entity-like value
 -- fallback: returned when value is invalid
 function sanitizeEntityInput(value, fallback)
@@ -189,6 +207,23 @@ function sanitizeEntityInput(value, fallback)
     end
 
     return fallback
+end
+
+-- value: trace-filter-like input containing entities
+function sanitizeTraceFilter(value)
+    local filter = asArray(value)
+    local clean = {}
+    local count = 0
+
+    for i = 1, #filter do
+        local ent = filter[i]
+        if isValid(ent) then
+            count = count + 1
+            clean[count] = ent
+        end
+    end
+
+    return clean
 end
 
 -- value: text-like input
