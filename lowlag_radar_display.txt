@@ -19,13 +19,15 @@ if SERVER then
     Inputs.IDs:enableNetworking(true)
 
     Inputs.Radar:addTrigger(function(ent)
-        if ent ~= nil and isValid(ent) and ent:getClass() == "acf_radar" then
-            safeWireCreate(CHIP, ent, "Position", "Position")
-            safeWireCreate(CHIP, ent, "Owner", "Owner")
-            safeWireCreate(CHIP, ent, "IDs", "IDs")
-            return
+        if ent ~= nil and isValid(ent) then
+            local successes = 0
+            successes = successes + (safeWireCreate(CHIP, ent, "Position", "Position") and 1 or 0)
+            successes = successes + (safeWireCreate(CHIP, ent, "Owner", "Owner") and 1 or 0)
+            successes = successes + (safeWireCreate(CHIP, ent, "IDs", "IDs") and 1 or 0)
+            
+            if successes == 3 then return end
         end
-
+        
         safeWireDelete(CHIP, "Position")
         safeWireDelete(CHIP, "Owner")
         safeWireDelete(CHIP, "IDs")
