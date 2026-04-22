@@ -15,38 +15,42 @@ CHIP = chip()
 if SERVER then
     updateInputs("Radar:ENTITY Position:ARRAY Velocity:ARRAY IDs:ARRAY Owner:ARRAY HitPos:VECTOR Lock:NORMAL")
     updateOutputs("GimbalPos:VECTOR TargetPos:VECTOR TargetVelocity:VECTOR TargetID:NORMAL TargetName:STRING")
+    addNetworkedVariable("TrackData")
     
     ActivelyTracking = false
     TargetInArray = false
     LastOutputUpdate = 0
     LastSeen = 0
     SearchAttempts = 0
+    TrackRevision = 0
     InternalInfo = {}
+
+    local function publishTrackData()
+        updateNetworkedVariable("TrackData", {
+            pos = InternalInfo[1] or Vector(),
+            id = InternalInfo[3] or 0,
+            name = InternalInfo[4] or "Merydian9",
+            inArray = TargetInArray == true,
+            active = ActivelyTracking == true,
+            revision = TrackRevision
+        })
+    end
     
     Inputs.Radar:addTrigger(function(ent)
-        if ent == nil then return end
-        if not isValid(ent) then
-            safeWireDelete(CHIP, "Position")
-            safeWireDelete(CHIP, "Velocity")
-            safeWireDelete(CHIP, "IDs")
-            safeWireDelete(CHIP, "Owner")
-            return
+        if ent ~= nil and isValid(ent) then
+            local successes = 0
+            successes = successes + (safeWireCreate(CHIP, ent, "Position", "Position") and 1 or 0)
+            successes = successes + (safeWireCreate(CHIP, ent, "Velocity", "Velocity") and 1 or 0)
+            successes = successes + (safeWireCreate(CHIP, ent, "Owner", "Owner") and 1 or 0)
+            successes = successes + (safeWireCreate(CHIP, ent, "IDs", "IDs") and 1 or 0)
+            
+            if successes == 4 then return end
         end
-
-        local wireSuccesses = 0
         
-        if safeWireCreate(CHIP, ent, "Position", "Position") then wireSuccesses = wireSuccesses + 1 end
-        if safeWireCreate(CHIP, ent, "Velocity", "Velocity") then wireSuccesses = wireSuccesses + 1 end
-        if safeWireCreate(CHIP, ent, "IDs", "IDs") then wireSuccesses = wireSuccesses + 1 end
-        if safeWireCreate(CHIP, ent, "Owner", "Owner") then wireSuccesses = wireSuccesses + 1 end
-        
-        if wireSuccesses != 4 then print(Color(255, 0, 0), "[ERROR]: ", Color(255, 255, 255), "Wirelinks failed to connect.") end
-        if wireSuccesses == 0 then
-            safeWireDelete(CHIP, "Position")
-            safeWireDelete(CHIP, "Velocity")
-            safeWireDelete(CHIP, "IDs")
-            safeWireDelete(CHIP, "Owner")
-        end
+        safeWireDelete(CHIP, "Position")
+        safeWireDelete(CHIP, "Velocity")
+        safeWireDelete(CHIP, "IDs")
+        safeWireDelete(CHIP, "Owner")
     end)
     
     Inputs.HitPos:addTrigger(function(vec)
@@ -97,6 +101,8 @@ if SERVER then
         Outputs.TargetVelocity:update(InternalInfo[2])
         Outputs.TargetID:update(InternalInfo[3])
         Outputs.TargetName:update(InternalInfo[4])
+        TrackRevision = TrackRevision + 1
+        publishTrackData()
         
         local searchPosition = InternalInfo[1] + InternalInfo[2] * 0.1
         local dt = (timer.curtime() - LastSeen)
@@ -110,16 +116,6 @@ if SERVER then
         
         Outputs.GimbalPos:update(searchPosition)
         LastOutputUpdate = timer.curtime()
-        
-        -- uses roughly 64 bits on average, most things in lua are 16 bits
-        if net.getBytesLeft() > 64 then
-            net.start("LRT_syncClientTargetData")
-                net.writeVector(InternalInfo[1])
-                net.writeUInt(InternalInfo[3], 16)
-                net.writeString(InternalInfo[4])
-                net.writeBool(TargetInArray)
-            net.send()
-        end
     end
     
     Inputs.Position:addTrigger(logic)
@@ -130,9 +126,9 @@ if SERVER then
         
         if ActivelyTracking then
             ActivelyTracking = false
-            net.start("LRT_syncClientTrackingBool")
-                net.writeBool(false)
-            net.send()
+            TargetInArray = false
+            TrackRevision = TrackRevision + 1
+            publishTrackData()
             
             return
         end
@@ -161,9 +157,8 @@ if SERVER then
         InternalInfo = targInfo
         ActivelyTracking = true
         TargetInArray = true
-        net.start("LRT_syncClientTrackingBool")
-            net.writeBool(true)
-        net.send()
+        TrackRevision = TrackRevision + 1
+        publishTrackData()
     end)
 end
 
@@ -178,7 +173,8 @@ if CLIENT then
     InitSounds = true
     P = player()
     
-    FONT_MAIN = render.createFont("", 13, 1600, nil, nil, nil, true)
+    FONT_MAIN = render.createFont("Default", 16, 400, nil, nil, true)
+    COLOR_MAIN = Color(50, 255, 50)
     LOCK_INDICATOR = initRT("Tracking Indicator")
     LOST_INDICATOR = initRT("Lost Track Indicator")
     resx, resy = render.getResolution()
@@ -201,6 +197,46 @@ if CLIENT then
         InitSounds = false
     end
 
+    local function refreshTrackedTarget()
+        local data = NetworkedVariables.TrackData:get() or {}
+        local previousActive = ActivelyTracking
+
+        ensureSounds()
+        TargetPos = data.pos or Vector()
+        TargetID = data.id or 0
+        TargetName = data.name or "Merydian9"
+        TargetInArray = data.inArray == true
+        ActivelyTracking = data.active == true
+
+        if not ActivelyTracking then
+            NewTargetPeriod = true
+            SOUND_lock:stop()
+            SOUND_track:stop()
+
+            if previousActive then
+                SOUND_dropTrack:stop()
+                SOUND_dropTrack:play()
+            end
+
+            return
+        end
+
+        if not previousActive then
+            NewTargetPeriod = true
+            SOUND_dropTrack:stop()
+        else
+            NewTargetPeriod = false
+        end
+
+        if TargetInArray then
+            SOUND_track:play()
+            SOUND_lock:stop()
+        else
+            SOUND_track:stop()
+            SOUND_lock:play()
+        end
+    end
+
     hook.add("drawhud", "ST_mainDrawLoop", function()
         if not ActivelyTracking or NewTargetPeriod then return end
         
@@ -215,7 +251,7 @@ if CLIENT then
 
         -- if not visible, don't render it
         if not vis then return end
-        color(Color(100, 255, 100))
+        color(COLOR_MAIN)
         
         if TargetInArray then
             drawCenterRT(x, y, LOCK_INDICATOR, 2)
@@ -227,84 +263,68 @@ if CLIENT then
         font(FONT_MAIN)
         textSimple(x, y - 30, TargetName, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
         textSimple(x, y + 30, "DIST " .. TargetRange .. "hu", TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
-        textSimple(x, y + 42, "ID " .. TargetID, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+        textSimple(x, y + 46, TargetID, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
     end)
     
     hook.add("renderoffscreen", "LRT_drawStaticElements", function()
-        local x, y = 512, 512
+        local x, y = 0, 0
         
         selectClearRT(LOCK_INDICATOR)    
+            local m = Matrix()
+            m:translate(Vector(512, 512, 0))
+            m:rotate(Angle(0, 45, 0))
+            render.pushMatrix(m)
+            
             color(COL_BLACK)
-            centerRectOutline(x, y, 84, 84, 8)
+            centerRectOutline(x, y, 58, 58, 4)
             
             color(COL_WHITE)
-            centerRectOutline(x, y, 80, 80, 3)
+            centerRectOutline(x, y, 56, 56, 2)
+            
+            render.popMatrix()
             
         selectClearRT(LOST_INDICATOR)
-            local halfLength = 39
-            local distOuter = 12
+            local halfLength = 26
+            local distOuter = 13
             local distInner = 15
             
+            local m = Matrix()
+            m:translate(Vector(512, 512, 0))
+            m:rotate(Angle(0, 45, 0))
+            render.pushMatrix(m)
+
             color(COL_BLACK)
-            line(x + halfLength, y + halfLength, x + distOuter, y + halfLength, 8)
-            line(x + halfLength, y + halfLength, x + halfLength, y + distOuter, 8)
+            line(x + halfLength, y + halfLength, x + distOuter, y + halfLength, 4)
+            line(x + halfLength, y + halfLength, x + halfLength, y + distOuter, 4)
             
-            line(x + halfLength, y - halfLength, x + distOuter, y - halfLength, 8)
-            line(x + halfLength, y - halfLength, x + halfLength, y - distOuter, 8)
+            line(x + halfLength, y - halfLength, x + distOuter, y - halfLength, 4)
+            line(x + halfLength, y - halfLength, x + halfLength, y - distOuter, 4)
             
-            line(x - halfLength, y + halfLength, x - distOuter, y + halfLength, 8)
-            line(x - halfLength, y + halfLength, x - halfLength, y + distOuter, 8)
+            line(x - halfLength, y + halfLength, x - distOuter, y + halfLength, 4)
+            line(x - halfLength, y + halfLength, x - halfLength, y + distOuter, 4)
             
-            line(x - halfLength, y - halfLength, x - distOuter, y - halfLength, 8)
-            line(x - halfLength, y - halfLength, x - halfLength, y - distOuter, 8)
+            line(x - halfLength, y - halfLength, x - distOuter, y - halfLength, 4)
+            line(x - halfLength, y - halfLength, x - halfLength, y - distOuter, 4)
             
             color(COL_WHITE)
-            line(x + halfLength, y + halfLength, x + distInner, y + halfLength, 3)
-            line(x + halfLength, y + halfLength, x + halfLength, y + distInner, 3)
+            line(x + halfLength, y + halfLength, x + distInner, y + halfLength, 2)
+            line(x + halfLength, y + halfLength, x + halfLength, y + distInner, 2)
             
-            line(x - halfLength, y + halfLength, x - distInner, y + halfLength, 3)
-            line(x - halfLength, y + halfLength, x - halfLength, y + distInner, 3)
+            line(x - halfLength, y + halfLength, x - distInner, y + halfLength, 2)
+            line(x - halfLength, y + halfLength, x - halfLength, y + distInner, 2)
             
-            line(x + halfLength, y - halfLength, x + distInner, y - halfLength, 3)
-            line(x + halfLength, y - halfLength, x + halfLength, y - distInner, 3)
+            line(x + halfLength, y - halfLength, x + distInner, y - halfLength, 2)
+            line(x + halfLength, y - halfLength, x + halfLength, y - distInner, 2)
             
-            line(x - halfLength, y - halfLength, x - distInner, y - halfLength, 3)
-            line(x - halfLength, y - halfLength, x - halfLength, y - distInner, 3)
+            line(x - halfLength, y - halfLength, x - distInner, y - halfLength, 2)
+            line(x - halfLength, y - halfLength, x - halfLength, y - distInner, 2)
+            
+            render.popMatrix()
             
         hook.remove("renderoffscreen", "LRT_drawStaticElements")
     end)
 
-    net.receive("LRT_syncClientTargetData", function()
-        ensureSounds()
-        TargetPos = net.readVector()
-        TargetID = net.readUInt(16)
-        TargetName = net.readString()
-        TargetInArray = net.readBool()
-        NewTargetPeriod = false
-        
-        if TargetInArray then
-            SOUND_track:play()
-            SOUND_lock:stop()
-        else
-            SOUND_track:stop()
-            SOUND_lock:play()
-        end
-    end)
-    
-    net.receive("LRT_syncClientTrackingBool", function()
-        ActivelyTracking = net.readBool()
-        NewTargetPeriod = true
-        
-        ensureSounds()
-        
-        SOUND_lock:stop()
-        SOUND_track:stop()
-        SOUND_dropTrack:stop()
-        
-        if not ActivelyTracking then
-            SOUND_dropTrack:play()
-        end
-    end)
+    NetworkedVariables.TrackData:addTrigger(refreshTrackedTarget)
     
     timer.create("LRT_targetRangeUpdateLoop", 0.1, 0, function()
         TargetRange = math.round(TargetPos:getDistance(P:getPos()))
