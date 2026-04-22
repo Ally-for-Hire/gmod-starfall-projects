@@ -609,7 +609,11 @@ local function writeValueByDescriptor(value, descriptor)
     end
 
     if code == TYPE_ENTITY then
-        net.writeEntity(value)
+        if value ~= nil and isValid(value) then
+            net.writeEntity(value)
+        else
+            net.writeEntity(chip())
+        end
         return
     end
 
@@ -1737,7 +1741,7 @@ if SERVER then
             return false
         end
 
-        if entry.currentValue ~= nil and deepValuesEqual(entry.currentValue, value) then
+        if entry.currentValue ~= nil and deepValuesEqual(entry.currentValue, value) and not entry.forceMeta then
             return false
         end
 
