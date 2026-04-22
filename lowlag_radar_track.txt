@@ -72,7 +72,7 @@ if SERVER then
         local targName = Inputs.Owner:get()
         
         -- if the arrays are miss-matched we dip
-        if (#targPos + #targVel + #targID + #targName) != #targPos * 4 then return end
+        if (#targPos + #targVel + #targID + #targName) ~= #targPos * 4 then return end
         
         local searchIndex = InternalInfo[5]
         
@@ -86,7 +86,7 @@ if SERVER then
         else
             TargetInArray = false
             for i = 1, #targID do
-                if targID[i] != InternalInfo[3] then continue end
+                if targID[i] ~= InternalInfo[3] then continue end
                 
                 InternalInfo = {targPos[i], targVel[i], targID[i], targName[i], i}
                 LastSeen = timer.curtime()
