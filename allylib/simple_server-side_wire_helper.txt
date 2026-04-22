@@ -287,6 +287,11 @@ local function normalizedType(value)
     if valueType == "Vector" then return "vector" end
     if valueType == "Angle" then return "angle" end
     if valueType == "Entity" then return "entity" end
+    if valueType == "Player" then return "entity" end
+    if valueType == "Vehicle" then return "entity" end
+    if valueType == "Weapon" then return "entity" end
+    if valueType == "Npc" then return "entity" end
+    if valueType == "NPC" then return "entity" end
     if valueType == "VMatrix" then return "matrix" end
 
     return valueType
