@@ -1,0 +1,94 @@
+--@name Lowlag Radar Display
+--@author Ally for Hire / Merydian9
+--@include GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt
+--@include GMOD-Starfall-Releases/allylib/general_algorithms.txt
+--@include GMOD-Starfall-Releases/allylib/helpful_hud_functions.txt
+--@shared
+
+require("GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt")
+require("GMOD-Starfall-Releases/allylib/general_algorithms.txt")
+require("GMOD-Starfall-Releases/allylib/helpful_hud_functions.txt")
+
+NAME_PREFIX = "LRD_"
+CHIP = chip()
+
+if SERVER then
+    updateInputs("Radar:entity Position:array IDs:array Owner:array")
+    Inputs.Position:enableNetworking(true)
+    Inputs.Owner:enableNetworking(true)
+    Inputs.IDs:enableNetworking(true)
+
+    Inputs.Radar:addTrigger(function(ent)
+        if ent ~= nil and isValid(ent) and ent:getClass() == "acf_radar" then
+            safeWireCreate(CHIP, ent, "Position", "Position")
+            safeWireCreate(CHIP, ent, "Owner", "Owner")
+            safeWireCreate(CHIP, ent, "IDs", "IDs")
+            return
+        end
+
+        safeWireDelete(CHIP, "Position")
+        safeWireDelete(CHIP, "Owner")
+        safeWireDelete(CHIP, "IDs")
+    end)
+end
+
+if CLIENT then
+    FONT_MAIN = render.createFont("Default", 16, 400, nil, nil, true)
+    COLOR_MAIN = Color(50, 255, 50)
+    RT_BOX = initRT("Display Box")
+    
+    AvailablePositions = {}
+    AvailableOwner = {}
+    OwnerRevision = 0
+    AvailableIDs = {}
+    IDRevision = 0
+    resx, resy = render.getResolution()
+    x = resx / 2
+    y = resy / 2
+
+    hook.add("DrawHud", NAME_PREFIX .. "mainDrawLoop", function()
+        if (#AvailableOwner + #AvailableIDs) != #AvailablePositions * 2 then return end
+        if OwnerRevision ~= IDRevision then return end
+        
+        font(FONT_MAIN)
+        color(COLOR_MAIN)
+            
+        local coords
+        local cachedScreenPos = {}
+        for idx, pos in pairs(AvailablePositions) do
+            coords = pos:toScreen()
+            cachedScreenPos[idx] = coords
+            local id = AvailableIDs[idx]
+            local name = AvailableOwner[idx]
+            
+            textSimple(coords.x, coords.y - 30, name, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+            textSimple(coords.x, coords.y + 30, "ID " .. id, TEXT_ALIGN.CENTER, TEXT_ALIGN.CENTER)
+            drawCenterRT(coords.x, coords.y, RT_BOX, 2)
+        end
+    end)
+    
+    hook.add("RenderOffscreen", NAME_PREFIX .. "drawStaticElements", function()
+        local x = 512
+        local y = 512
+        
+        selectClearRT(RT_BOX)
+            color(COL_BLACK)
+            centerRectOutline(x, y, 58, 58, 4)
+            color(COL_WHITE)
+            centerRectOutline(x, y, 56, 56, 2)
+        
+        hook.remove("RenderOffscreen", NAME_PREFIX .. "drawStaticElements")
+    end)
+
+    NetworkedVariables.Position:addTrigger(function() 
+        AvailablePositions = NetworkedVariables.Position:get()
+    end)
+    NetworkedVariables.Owner:addTrigger(function() 
+        AvailableOwner = NetworkedVariables.Owner:get()
+        OwnerRevision = OwnerRevision + 1
+    end)
+    NetworkedVariables.IDs:addTrigger(function() 
+        AvailableIDs = NetworkedVariables.IDs:get()
+        IDRevision = IDRevision + 1
+    end)
+end
