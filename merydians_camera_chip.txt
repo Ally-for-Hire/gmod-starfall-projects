@@ -52,6 +52,17 @@ if SERVER then
     Outputs.CamFOV:update(100)
 
     addNetworkedVariable("Driver")
+    addNetworkedVariable("ChairState")
+    addNetworkedVariable("MainParentState")
+    addNetworkedVariable("SecondaryParentState")
+    addNetworkedVariable("TertiaryParentState")
+    addNetworkedVariable("FilterState")
+
+    local function sameEntity(a, b)
+        if a == b then return true end
+        if not isValid(a) or not isValid(b) then return false end
+        return a:entIndex() == b:entIndex()
+    end
 
     local function refreshServerInputs()
         INPUTS.Chair = sanitizeEntityInput(InputValues.Chair, chip())
@@ -69,12 +80,16 @@ if SERVER then
     end
 
     local function queueDriverSnapshot()
-        Inputs.Chair:enableNetworking(true)
-        Inputs.MainParent:enableNetworking(true)
-        Inputs.SecondaryParent:enableNetworking(true)
-        Inputs.TertiaryParent:enableNetworking(true)
-        Inputs.Filter:enableNetworking(true, 0.1)
+        local driverVar = addNetworkedVariable("Driver")
+        if driverVar ~= nil then
+            driverVar.forceMeta = true
+        end
         updateNetworkedVariable("Driver", SHARED.Driver)
+        updateNetworkedVariable("ChairState", INPUTS.Chair)
+        updateNetworkedVariable("MainParentState", INPUTS.MainParent)
+        updateNetworkedVariable("SecondaryParentState", INPUTS.SecondaryParent)
+        updateNetworkedVariable("TertiaryParentState", INPUTS.TertiaryParent)
+        updateNetworkedVariable("FilterState", INPUTS.Filter)
     end
 
     local function setDriver(ply)
@@ -100,19 +115,41 @@ if SERVER then
         local previousChair = INPUTS.Chair
         INPUTS.Chair = sanitizeEntityInput(value, chip())
 
-        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() and previousChair ~= INPUTS.Chair then
+        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() then
+            updateNetworkedVariable("ChairState", INPUTS.Chair)
+        end
+
+        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() and not sameEntity(previousChair, INPUTS.Chair) then
             setDriver(nil)
         end
     end
 
     local function handleFilterChange(value)
         INPUTS.Filter = sanitizeTraceFilter(value)
+        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() then
+            updateNetworkedVariable("FilterState", INPUTS.Filter)
+        end
     end
 
     Inputs.Chair:addTrigger(handleChairChange)
-    Inputs.MainParent:addTrigger(function(value) INPUTS.MainParent = sanitizeEntityInput(value, chip()) end)
-    Inputs.SecondaryParent:addTrigger(function(value) INPUTS.SecondaryParent = sanitizeEntityInput(value, chip()) end)
-    Inputs.TertiaryParent:addTrigger(function(value) INPUTS.TertiaryParent = sanitizeEntityInput(value, chip()) end)
+    Inputs.MainParent:addTrigger(function(value)
+        INPUTS.MainParent = sanitizeEntityInput(value, chip())
+        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() then
+            updateNetworkedVariable("MainParentState", INPUTS.MainParent)
+        end
+    end)
+    Inputs.SecondaryParent:addTrigger(function(value)
+        INPUTS.SecondaryParent = sanitizeEntityInput(value, chip())
+        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() then
+            updateNetworkedVariable("SecondaryParentState", INPUTS.SecondaryParent)
+        end
+    end)
+    Inputs.TertiaryParent:addTrigger(function(value)
+        INPUTS.TertiaryParent = sanitizeEntityInput(value, chip())
+        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() then
+            updateNetworkedVariable("TertiaryParentState", INPUTS.TertiaryParent)
+        end
+    end)
     Inputs.Filter:addTrigger(handleFilterChange)
 
     refreshServerInputs()
@@ -124,10 +161,14 @@ if SERVER then
         local msgType = net.readInt(8)
 
         if msgType == MSG_MAIN_OUTPUTS then
-            Outputs.HitPos:update(net.readVector())
-            Outputs.CamDir:update(net.readVector())
-            Outputs.CamAng:update(net.readAngle())
-            Outputs.CamPos:update(net.readVector())
+            local hitPos = net.readVector()
+            local camDir = net.readVector()
+            local camAng = net.readAngle()
+            local camPos = net.readVector()
+            Outputs.HitPos:update(hitPos)
+            Outputs.CamDir:update(camDir)
+            Outputs.CamAng:update(camAng)
+            Outputs.CamPos:update(camPos)
         elseif msgType == MSG_STATE then
             Outputs.CamState:update(net.readInt(8))
         elseif msgType == MSG_FOV then
@@ -165,19 +206,30 @@ if CLIENT then
 
     ZoomHeld = false
     PanMul = 1
+    ClientActiveState = false
+    ClientHooksInstalled = false
+    local calcViewHookId = SHARED.EntId .. " CalcView"
+    local inputPressedHookId = SHARED.EntId .. " InputPressed"
+    local inputReleasedHookId = SHARED.EntId .. " InputReleased"
+    local mouseMovedHookId = SHARED.EntId .. " MouseMoved"
+    local mouseWheeledHookId = SHARED.EntId .. " MouseWheeled"
 
     local function refreshClientInputs()
-        INPUTS.Chair = sanitizeEntityInput(InputValues.Chair, chip())
-        INPUTS.MainParent = sanitizeEntityInput(InputValues.MainParent, chip())
-        INPUTS.SecondaryParent = sanitizeEntityInput(InputValues.SecondaryParent, chip())
-        INPUTS.TertiaryParent = sanitizeEntityInput(InputValues.TertiaryParent, chip())
-        INPUTS.Filter = sanitizeTraceFilter(InputValues.Filter)
+        INPUTS.Chair = sanitizeEntityInput(NetworkedVariableValues.ChairState, chip())
+        INPUTS.MainParent = sanitizeEntityInput(NetworkedVariableValues.MainParentState, chip())
+        INPUTS.SecondaryParent = sanitizeEntityInput(NetworkedVariableValues.SecondaryParentState, chip())
+        INPUTS.TertiaryParent = sanitizeEntityInput(NetworkedVariableValues.TertiaryParentState, chip())
+        INPUTS.Filter = sanitizeTraceFilter(NetworkedVariableValues.FilterState)
         SHARED.Driver = NetworkedVariableValues.Driver or chip()
     end
 
-    local function isActive()
+    local function computeClientActiveState()
         refreshClientInputs()
-        return SHARED.Driver == SHARED.Player and SHARED.Driver ~= chip() and INPUTS.MainParent ~= chip()
+
+        if SHARED.Driver == chip() then return false end
+        if SHARED.Driver ~= SHARED.Player then return false end
+        if INPUTS.MainParent == chip() then return false end
+        return true
     end
 
     local function shouldHit(ent)
@@ -210,7 +262,6 @@ if CLIENT then
 
     local function applyState(state)
         refreshClientInputs()
-
         if state == 1 then
             CamWorldPos = SETTINGS.CamWorldPos1
             CamRelPos = SETTINGS.CamRelPos1
@@ -237,93 +288,151 @@ if CLIENT then
         applyState(CamState)
     end
 
+    local function uninstallClientHooks()
+        if not ClientHooksInstalled then return end
+
+        hook.remove("CalcView", calcViewHookId)
+        hook.remove("InputPressed", inputPressedHookId)
+        hook.remove("InputReleased", inputReleasedHookId)
+        hook.remove("MouseMoved", mouseMovedHookId)
+        hook.remove("MouseWheeled", mouseWheeledHookId)
+        ClientHooksInstalled = false
+    end
+
+    local function installClientHooks()
+        if ClientHooksInstalled then return end
+
+        hook.add("CalcView", calcViewHookId, function()
+            if not isValid(CamParent) then
+                return
+            end
+
+            local now = timer.curtime()
+            local forward = CamAng:getForward()
+            local origin = CamParent:localToWorld(CamRelPos) + CamWorldPos - forward * CamDist
+
+            if NextSend < now then
+                NextSend = now + 0.05
+                local traceData = trace.line(origin, origin + forward * 999999, shouldHit)
+                CamHitPos = traceData.HitPos or origin
+                sendState(MSG_MAIN_OUTPUTS, CamHitPos, forward, normalizeAngleCopy(CamAng), origin)
+            end
+
+            return {
+                origin = origin,
+                angles = CamAng,
+                fov = CamFOV
+            }
+        end)
+
+        hook.add("InputPressed", inputPressedHookId, function(button)
+            if button == 79 then
+                if INPUTS.TertiaryParent == chip() then return end
+
+                if CamState ~= 3 then
+                    PrevCamState = CamState
+                    CamState = 3
+                else
+                    CamState = PrevCamState
+                end
+
+                modifyState()
+            elseif button == 32 then
+                if (CamState + 1 == 2 and INPUTS.SecondaryParent == chip()) or CamState == 3 then
+                    return
+                end
+
+                CamState = CamState + 1
+                if CamState > 2 then CamState = 1 end
+                modifyState()
+            elseif button == 12 then
+                CamFOV = 27.27
+                ZoomHeld = true
+                PanMul = CamFOV / 100 * 2
+                sendState(MSG_FOV, math.round(CamFOV))
+            end
+        end)
+
+        hook.add("InputReleased", inputReleasedHookId, function(button)
+            if button == 12 then
+                ZoomHeld = false
+                CamFOV = 100
+                PanMul = 1
+                sendState(MSG_FOV, math.round(CamFOV))
+            end
+        end)
+
+        hook.add("MouseMoved", mouseMovedHookId, function(x, y)
+            CamAng.pitch = clampValue(CamAng.pitch + (y / 40) * PanMul, -89, 89)
+            CamAng.yaw = CamAng.yaw - (x / 40) * PanMul
+        end)
+
+        hook.add("MouseWheeled", mouseWheeledHookId, function(delta)
+            local now = timer.curtime()
+            if (now - LastScroll) < 0.01 then return end
+
+            CamFOV = clampValue(CamFOV / 4 ^ delta, 1, 100)
+            PanMul = CamFOV / 100 * (ZoomHeld and 2 or 1)
+
+            LastScroll = now
+            sendState(MSG_FOV, math.round(CamFOV))
+        end)
+
+        ClientHooksInstalled = true
+    end
+
+    local function syncClientActivation()
+        local active = computeClientActiveState()
+
+        if active and not ClientActiveState then
+            ClientActiveState = true
+            resetCam()
+            installClientHooks()
+            return
+        end
+
+        if not active and ClientActiveState then
+            ClientActiveState = false
+            uninstallClientHooks()
+            resetCam()
+            return
+        end
+
+        if active then
+            installClientHooks()
+        else
+            uninstallClientHooks()
+        end
+    end
+
     local function modifyState()
         applyState(CamState)
         sendState(MSG_STATE, CamState)
     end
 
-    hook.add("CalcView", SHARED.EntId .. " CalcView", function()
-        if not isActive() or not isValid(CamParent) then return end
-
-        local now = timer.curtime()
-        local forward = CamAng:getForward()
-        local origin = CamParent:localToWorld(CamRelPos) + CamWorldPos - forward * CamDist
-
-        if NextSend < now then
-            NextSend = now + 0.05
-            local traceData = trace.line(origin, origin + forward * 999999, shouldHit)
-            CamHitPos = traceData.HitPos or origin
-            sendState(MSG_MAIN_OUTPUTS, CamHitPos, forward, normalizeAngleCopy(CamAng), origin)
-        end
-
-        return {
-            origin = origin,
-            angles = CamAng,
-            fov = CamFOV
-        }
+    NetworkedVariables.Driver:addTrigger(function()
+        syncClientActivation()
     end)
-
-    hook.add("InputPressed", SHARED.EntId .. " InputPressed", function(button)
-        if not isActive() then return end
-
-        if button == 79 then
-            if INPUTS.TertiaryParent == chip() then return end
-
-            if CamState ~= 3 then
-                PrevCamState = CamState
-                CamState = 3
-            else
-                CamState = PrevCamState
-            end
-
-            modifyState()
-        elseif button == 32 then
-            if (CamState + 1 == 2 and INPUTS.SecondaryParent == chip()) or CamState == 3 then
-                return
-            end
-
-            CamState = CamState + 1
-            if CamState > 2 then CamState = 1 end
-            modifyState()
-        elseif button == 12 then
-            CamFOV = 27.27
-            ZoomHeld = true
-            PanMul = CamFOV / 100 * 2
-            sendState(MSG_FOV, math.round(CamFOV))
-        end
+    NetworkedVariables.ChairState:addTrigger(function()
+        syncClientActivation()
     end)
-
-    hook.add("InputReleased", SHARED.EntId .. " InputReleased", function(button)
-        if not isActive() then return end
-
-        if button == 12 then
-            ZoomHeld = false
-            CamFOV = 100
-            PanMul = 1
-            sendState(MSG_FOV, math.round(CamFOV))
-        end
+    NetworkedVariables.MainParentState:addTrigger(function()
+        syncClientActivation()
     end)
-
-    hook.add("MouseMoved", SHARED.EntId .. " MouseMoved", function(x, y)
-        if not isActive() then return end
-
-        CamAng.pitch = clampValue(CamAng.pitch + (y / 40) * PanMul, -89, 89)
-        CamAng.yaw = CamAng.yaw - (x / 40) * PanMul
+    NetworkedVariables.SecondaryParentState:addTrigger(function()
+        syncClientActivation()
     end)
-
-    hook.add("MouseWheeled", SHARED.EntId .. " MouseWheeled", function(delta)
-        local now = timer.curtime()
-        if not isActive() or (now - LastScroll) < 0.01 then return end
-
-        CamFOV = clampValue(CamFOV / 4 ^ delta, 1, 100)
-        PanMul = CamFOV / 100 * (ZoomHeld and 2 or 1)
-
-        LastScroll = now
-        sendState(MSG_FOV, math.round(CamFOV))
+    NetworkedVariables.TertiaryParentState:addTrigger(function()
+        syncClientActivation()
     end)
+    NetworkedVariables.FilterState:addTrigger(function()
+        syncClientActivation()
+    end)
+    syncClientActivation()
 
     net.receive(CLEAR_DRIVER_NET, function()
         SHARED.Driver = chip()
+        syncClientActivation()
         resetCam()
     end)
 end
