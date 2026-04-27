@@ -21,6 +21,7 @@ Function index:
 - `safeWireDelete(ent, inputName)`: protected `wire.delete(...)`.
 - `minSendTime(...)`: estimates the minimum steady-state interval in seconds to keep sending the provided values indefinitely under the current send budget.
 - `Inputs.<Name>:get()`: reads the cached input value.
+- `Inputs.<Name>:isValid()`: true when that input is currently backed by a real wire/network update.
 - `Inputs.<Name>:addTrigger(fn)`: registers a trigger callback on that input object on both realms.
 - `Inputs.<Name>:removeTrigger(idx)`: removes a previously added trigger by index.
 - `Inputs.<Name>:clearTriggers()`: removes all triggers for that input.
@@ -49,11 +50,12 @@ Notes:
 - Later sends only transmit the variable id and the latest value.
 - Tables are serialized recursively without `net.writeTable`.
 - `ClientInitialized` sends the full current state without applying the local cap.
+- On the client, `Inputs.<Name>` is created lazily so triggers can be registered before metadata arrives.
 - Default bandwidth budgeting is derived from Starfall's actual per-player net burst,
   split across `NetworkBusyChipShareCount` busy chips by default.
 ]]--
 
--- Version 1.7.1
+-- Version 1.7.5
 
 --[[
 Usage:
@@ -74,6 +76,7 @@ Networking usage:
 ]]--
 
 Inputs, Outputs, InputValues = Inputs or {}, Outputs or {}, InputValues or {}
+InputValidity = InputValidity or {}
 Input = Input or Inputs
 InputTriggers = InputTriggers or {}
 NetworkedVariableTriggers = NetworkedVariableTriggers or {}
@@ -1132,12 +1135,20 @@ if SERVER then
         end
 
         local previousValue = entry.currentValue
+        local compareValue = entry.pendingValue ~= nil and entry.pendingValue or previousValue
+        local descriptorChanged = not entry.descriptor or not descriptorsEqual(entry.descriptor, descriptor)
+        local valueChanged = compareValue == nil or not deepValuesEqual(compareValue, value)
+
+        if not valueChanged and not descriptorChanged and not entry.forceMeta then
+            return false
+        end
+
         local storedValue = cloneValueIfTable(value)
         local wasPending = entry.pendingValue ~= nil
         entry.currentValue = storedValue
         NetworkedVariableValues[entry.name] = cloneValueIfTable(value)
 
-        if not entry.descriptor or not descriptorsEqual(entry.descriptor, descriptor) then
+        if descriptorChanged then
             entry.descriptor = descriptor
             entry.forceMeta = true
             networkDebug("descriptor updated for '" .. entry.name .. "'; next send will include metadata")
@@ -1162,7 +1173,7 @@ if SERVER then
             enableFlushHook()
         end
 
-        if not deepValuesEqual(previousValue, value) then
+        if previousValue == nil or not deepValuesEqual(previousValue, value) then
             fireNetworkedVariableTriggers(entry.name, value, "[SS-SWH] networked trigger error: ")
         end
 
@@ -1181,6 +1192,19 @@ if SERVER then
         net.send(target)
 
         entry.forceMeta = false
+        return true
+    end
+
+    local function sendNetworkedMetaSnapshot(target, entry, value, descriptor)
+        if not descriptor then return false end
+
+        net.start(NETVAR_META)
+        net.writeUInt(entry.id, NETVAR_ID_BITS)
+        net.writeUInt(entry.sourceCode, 1)
+        net.writeString(entry.name)
+        writeDescriptor(descriptor)
+        writeValueByDescriptor(value, descriptor)
+        net.send(target)
         return true
     end
 
@@ -1264,6 +1288,7 @@ if SERVER then
         if entry.currentValue ~= nil then return entry.currentValue end
 
         if entry.sourceCode == NET_SOURCE_INPUT then
+            if InputValidity[entry.name] ~= true then return nil end
             return InputValues[entry.name]
         end
 
@@ -1272,6 +1297,23 @@ if SERVER then
         end
 
         return entry.currentValue
+    end
+
+    local function sendNetworkedEntrySnapshot(ply, entry)
+        if not entry.enabled then return false end
+
+        local value = resolveNetworkedEntryValue(entry)
+        if value == nil then return false end
+
+        local descriptor = buildValueDescriptor(value)
+        if not descriptor then return false end
+
+        if not entry.descriptor or not descriptorsEqual(entry.descriptor, descriptor) then
+            entry.descriptor = descriptor
+            entry.forceMeta = true
+        end
+
+        return sendNetworkedMetaSnapshot(ply, entry, value, descriptor)
     end
 
     flushNetworkQueue = function(forceAll)
@@ -1350,11 +1392,35 @@ if SERVER then
         end
     end
 
+    local function clearNetworkedInputValue(name)
+        local entry = _rawget(NetworkedVariables, name)
+        if not entry or entry.sourceCode ~= NET_SOURCE_INPUT or not entry.enabled then return end
+
+        entry.currentValue = nil
+        entry.pendingValue = nil
+        entry.pendingFlushAt = nil
+        entry.forceMeta = true
+        NetworkedVariableValues[name] = nil
+        removePendingNetworkedVariable(entry.id)
+        disableFlushHookIfIdle()
+
+        local target, hasRecipients = getActiveSendTarget()
+        if not hasRecipients then return end
+
+        net.start(NETVAR_REMOVE)
+        net.writeUInt(entry.id, NETVAR_ID_BITS)
+        net.send(target)
+    end
+
     local inputProto = {}
     inputProto.__index = inputProto
 
     function inputProto:get()
         return InputValues[self.name]
+    end
+
+    function inputProto:isValid()
+        return InputValidity[self.name] == true
     end
 
     function inputProto:addTrigger(fn)
@@ -1403,14 +1469,21 @@ if SERVER then
             return false
         end
 
-        entry.enabled = enabled ~= false
+        local nextEnabled = enabled ~= false
+        local wasEnabled = entry.enabled == true
+        local intervalChanged = entry.sendInterval ~= nextInterval
+
+        entry.enabled = nextEnabled
         entry.sendInterval = nextInterval
         self.networked = entry.enabled
 
         if entry.enabled then
-            entry.forceMeta = true
+            if not wasEnabled then
+                entry.forceMeta = true
+            end
+
             local currentValue = InputValues[self.name]
-            if currentValue ~= nil then
+            if currentValue ~= nil and InputValidity[self.name] == true and (not wasEnabled or intervalChanged) then
                 queueNetworkedVariable(entry, currentValue)
             elseif entry.pendingValue ~= nil and entry.sendInterval > 0 then
                 entry.pendingFlushAt = _timer_curtime() + entry.sendInterval
@@ -1491,14 +1564,19 @@ if SERVER then
         if value == nil then return end
 
         local previousValue = InputValues[name]
+        local previousValid = InputValidity[name] == true
+        local inputValid = _wire.self():isWired(name)
         local changedValue = not deepValuesEqual(previousValue, value)
         local storedValue = cloneValueIfTable(value)
 
         InputValues[name] = storedValue
+        InputValidity[name] = inputValid
         syncInputGlobal(name, storedValue)
 
-        if changedValue then
+        if inputValid and (changedValue or not previousValid) then
             queueInputUpdate(name, value)
+        elseif not inputValid and previousValid then
+            clearNetworkedInputValue(name)
         end
 
         local triggers = InputTriggers[name]
@@ -1659,6 +1737,7 @@ if SERVER then
         for key in _pairs(InputValues) do
             if not keep[key] then
                 InputValues[key] = nil
+                InputValidity[key] = nil
                 unsyncInputGlobal(key)
             end
         end
@@ -1725,8 +1804,12 @@ if SERVER then
         local entry = registerNetworkedVariable(name, NET_SOURCE_CUSTOM)
         if not entry then return nil end
 
+        local wasEnabled = entry.enabled == true
         entry.enabled = true
-        entry.forceMeta = true
+        if not wasEnabled then
+            entry.forceMeta = true
+        end
+
         return entry
     end
 
@@ -1743,10 +1826,6 @@ if SERVER then
 
         local entry = addNetworkedVariable(name)
         if not entry then
-            return false
-        end
-
-        if entry.currentValue ~= nil and deepValuesEqual(entry.currentValue, value) and not entry.forceMeta then
             return false
         end
 
@@ -1773,19 +1852,8 @@ if SERVER then
         if not targetIncludesPlayer(NetworkTargets, ply) then return end
 
         for _, entry in _pairs(NetworkedVariables) do
-            if entry.enabled then
-                local value = resolveNetworkedEntryValue(entry)
-                if value ~= nil then
-                    local descriptor = buildValueDescriptor(value)
-                    if descriptor then
-                        entry.descriptor = descriptor
-                        entry.forceMeta = true
-                        sendNetworkedMeta(ply, entry, value)
-                        updateSendStats(entry, _timer_curtime())
-                        entry.pendingValue = nil
-                        removePendingNetworkedVariable(entry.id)
-                    end
-                end
+            if sendNetworkedEntrySnapshot(ply, entry) then
+                updateSendStats(entry, _timer_curtime())
             end
         end
     end)
@@ -1798,6 +1866,10 @@ if CLIENT then
 
     function clientInputProto:get()
         return InputValues[self.name]
+    end
+
+    function clientInputProto:isValid()
+        return InputValidity[self.name] == true
     end
 
     function clientInputProto:addTrigger(fn)
@@ -1834,9 +1906,25 @@ if CLIENT then
     end
 
     local function ensureClientInputObject(name)
-        if not Inputs[name] then
-            Inputs[name] = _setmetatable({ name = name, networked = true }, clientInputProto)
+        local input = _rawget(Inputs, name)
+        if not input then
+            input = _setmetatable({ name = name, networked = true }, clientInputProto)
+            _rawset(Inputs, name, input)
         end
+
+        return input
+    end
+
+    if getmetatable(Inputs) == nil then
+        _setmetatable(Inputs, {
+            __index = function(tbl, key)
+                if _type(key) ~= "string" or key == "" then
+                    return nil
+                end
+
+                return ensureClientInputObject(key)
+            end
+        })
     end
 
     local function fireClientInputTriggers(name, value)
@@ -1863,6 +1951,7 @@ if CLIENT then
         if entry.sourceCode == NET_SOURCE_INPUT then
             ensureClientInputObject(entry.name)
             InputValues[entry.name] = cloneValueIfTable(value)
+            InputValidity[entry.name] = true
             fireClientInputTriggers(entry.name, value)
         end
 
@@ -1925,6 +2014,7 @@ if CLIENT then
 
         if sourceCode == NET_SOURCE_INPUT then
             InputValues[entry.name] = nil
+            InputValidity[entry.name] = false
             Inputs[entry.name] = nil
         end
     end)
