@@ -165,20 +165,22 @@ if CLIENT then
     -- thickness: thickness of the prongs
     function drawPlus(x, y, up, down, left, right, thickness)
         if left == nil then
+            thickness = down
             down = up
             left = up
             right = up
-            thickness = down
         end
-    
-        drawCenterRect(x, y + (down - up) / 2, thickness, up + down)
-        drawCenterRect(x + (right - left) / 2, y, left + right, thickness)
+
+        if thickness == nil then thickness = 1 end
+
+        drawCenterRect(x, y - (up - down) / 2, thickness, up + down)
+        drawCenterRect(x - (left - right) / 2, y, left + right, thickness)
     end
 
 
     function drawCenterRT (x, y, rtname, divisor)
         local size = 1024
-        if divisor != nil then size = size / divisor end
+        if divisor ~= nil then size = size / divisor end
         
         _setRTTexture(rtname)
         _drawTexturedRect(x - size / 2, y - size / 2, size, size)    
