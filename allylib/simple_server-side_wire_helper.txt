@@ -19,7 +19,8 @@ Function index:
 - `addInputTrigger(name, fn)`: registers a trigger callback on a named input.
 - `safeWireCreate(entI, entO, inputName, outputName)`: protected `wire.create(...)`.
 - `safeWireDelete(ent, inputName)`: protected `wire.delete(...)`.
-- `addDriverDetection(vehicleOrInput, fn, interval)`: watches a vehicle or entity input and calls `fn(driver, vehicle, previousDriver)` when the driver changes.
+- `addDriverDetection(vehicleOrInput, fn, interval)`: watches a vehicle or entity input and calls
+  `fn(driver, vehicle, previousDriver)` when the driver changes.
 - `minSendTime(...)`: estimates the minimum steady-state interval in seconds to keep sending the provided values indefinitely under the current send budget.
 - `Inputs.<Name>:get()`: reads the cached input value.
 - `Inputs.<Name>:isValid()`: true when that input is currently backed by a real wire/network update.
@@ -1019,7 +1020,9 @@ function networkTargetSet(target)
 end
 
 local function resolveDriverDetectionVehicle(source)
-    if _type(source) == "table" and _type(source.get) == "function" and _type(source.isValid) == "function" then
+    if _type(source) == "table"
+        and _type(source.get) == "function"
+        and _type(source.isValid) == "function" then
         if source:isValid() then
             return source:get()
         end
