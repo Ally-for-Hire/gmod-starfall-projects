@@ -34,12 +34,23 @@ Function index:
 - `NetworkedVariables.<Name>:changed(keepChangedState, slot, epsilon)`: wraps `changed(...)` for that networked variable.
 - `NetworkedVariables.<Name>:resetChanged(slot)`: wraps `resetChanged(...)` for that networked variable.
 - `NetworkedVariables.<Name>:update(value)`: updates a custom networked variable on the server.
+- `NetworkedVariables.<Name>:setInterval(interval)`: sets custom networked variable coalescing interval on the server.
+- `NetworkedVariables.<Name>:setThrottleGroup(groupName, interval)`: puts the variable on a shared throttle.
+- `getNetworkedVariableValue("Name", fallback)`: reads a custom networked variable with a nil fallback.
+- `readNetworkedGunState("Gun1", stateTable)`: reads standard ACF gun state into a table.
+- `readNetworkedPropArmorState("Prop1", stateTable)`: reads standard ACF prop armor state into a table.
 
 Networking additions:
 - `Inputs.<Name>:enableNetworking(bool, interval)`: enables delta networking for an input, with optional send coalescing interval in seconds.
-- `addNetworkedVariable("Name")`: registers a custom named networked variable.
+- `addNetworkedVariable("Name", interval, throttleGroup)`: registers a custom named networked variable with optional coalescing interval.
+- `addNetworkedGunState("Gun1", interval)`: registers standard ACF gun state variables.
+- `addNetworkedPropArmorState("Prop1", interval)`: registers standard ACF prop armor state variables.
 - `addNetworkedVariableTrigger(name, fn)`: registers a callback on a named networked variable.
-- `updateNetworkedVariable("Name", value)`: updates a custom networked variable.
+- `setNetworkedVariableInterval("Name", interval)`: sets a custom networked variable coalescing interval.
+- `setNetworkedVariableThrottleGroup("Name", groupName, interval)`: puts a variable on a shared throttle.
+- `updateNetworkedVariable("Name", value, interval, throttleGroup)`: updates a custom networked variable.
+- `updateNetworkedGunState("Gun1", inputOrGun, interval)`: updates standard ACF gun state variables.
+- `updateNetworkedPropArmorState("Prop1", inputOrProp, interval)`: updates standard ACF prop armor state variables.
 - `networkTargetSet(playerOrPlayers)`: sets broadcast, single-player, or multi-player network targets.
 - `updateMaxSend(bitsPerMillisecond)`: overrides the automatic fair-share limiter.
 - `networkEnableDebug(bool)`: enables chat/debug prints for buffer, throttle, and send-limit events.
@@ -55,7 +66,7 @@ Notes:
   split across `NetworkBusyChipShareCount` busy chips by default.
 ]]--
 
--- Version 1.7.5
+-- Version 1.8.0
 
 --[[
 Usage:
@@ -85,6 +96,7 @@ NetworkedVariables = NetworkedVariables or {}
 NetworkedVariableValues = NetworkedVariableValues or {}
 NetworkedVariableLookup = NetworkedVariableLookup or {}
 NetworkedVariableIds = NetworkedVariableIds or {}
+NetworkThrottleGroups = NetworkThrottleGroups or {}
 NetworkTargets = NetworkTargets
 NetworkDebugEnabled = NetworkDebugEnabled or false
 
@@ -201,6 +213,22 @@ function networkedVariableProto:update(value)
     return updateNetworkedVariable(self.name, value)
 end
 
+function networkedVariableProto:setInterval(interval)
+    if not SERVER or self.sourceCode ~= NET_SOURCE_CUSTOM then
+        return false
+    end
+
+    return setNetworkedVariableInterval(self.name, interval)
+end
+
+function networkedVariableProto:setThrottleGroup(groupName, interval)
+    if not SERVER or self.sourceCode ~= NET_SOURCE_CUSTOM then
+        return false
+    end
+
+    return setNetworkedVariableThrottleGroup(self.name, groupName, interval)
+end
+
 local function ensureNetworkedVariableObject(entry)
     if not entry then return nil end
 
@@ -225,6 +253,60 @@ local function getOrCreateNetworkedVariableObject(name)
 
     _rawset(NetworkedVariables, name, entry)
     return entry
+end
+
+local function normalizeNetworkedGunPrefix(prefix)
+    if _type(prefix) == "number" then
+        return "Gun" .. prefix
+    end
+    if _type(prefix) == "string" and prefix ~= "" then
+        return prefix
+    end
+    return nil
+end
+
+local function normalizeNetworkedPropPrefix(prefix)
+    if _type(prefix) == "number" then
+        return "Prop" .. prefix
+    end
+    if _type(prefix) == "string" and prefix ~= "" then
+        return prefix
+    end
+    return nil
+end
+
+function getNetworkedVariableValue(name, fallback)
+    if _type(name) ~= "string" or name == "" then return fallback end
+
+    local value = getOrCreateNetworkedVariableObject(name):get()
+    if value == nil then
+        return fallback
+    end
+
+    return value
+end
+
+function readNetworkedGunState(prefix, state)
+    prefix = normalizeNetworkedGunPrefix(prefix)
+    if not prefix then return state end
+
+    state = state or {}
+    state.Ready = getNetworkedVariableValue(prefix .. "Ready", false) == true
+    state.AmmoType = getNetworkedVariableValue(prefix .. "AmmoType", state.AmmoType or "")
+    state.AmmoCount = getNetworkedVariableValue(prefix .. "AmmoCount", state.AmmoCount or 0)
+    state.AmmoCountMax = getNetworkedVariableValue(prefix .. "AmmoCountMax", state.AmmoCountMax or 0)
+
+    return state
+end
+
+function readNetworkedPropArmorState(prefix, state)
+    prefix = normalizeNetworkedPropPrefix(prefix)
+    if not prefix then return state end
+
+    state = state or {}
+    state.Armor = getNetworkedVariableValue(prefix .. "Armor", state.Armor or 0)
+
+    return state
 end
 
 if getmetatable(NetworkedVariables) == nil then
@@ -959,6 +1041,7 @@ if SERVER then
     local FlushHookActive = FlushHookActive or false
     local flushNetworkQueue
     local replenishNetworkBudget
+    local normalizeNetworkInterval
 
     local function addInitializedNetworkTarget(ply)
         if InitializedNetworkTargets[ply] then return end
@@ -1094,6 +1177,101 @@ if SERVER then
         end
     end
 
+    local function normalizeThrottleGroupName(groupName)
+        if groupName == nil or groupName == false then
+            return nil
+        end
+
+        if _type(groupName) == "string" and groupName ~= "" then
+            return groupName
+        end
+
+        return false
+    end
+
+    local function getThrottleGroup(groupName, interval)
+        groupName = normalizeThrottleGroupName(groupName)
+        if not groupName then return nil end
+
+        local group = NetworkThrottleGroups[groupName]
+        if not group then
+            group = {
+                name = groupName,
+                sendInterval = 0,
+                pendingFlushAt = nil
+            }
+            NetworkThrottleGroups[groupName] = group
+        end
+
+        if interval ~= nil and interval ~= false then
+            local nextInterval = normalizeNetworkInterval(interval)
+            if nextInterval == nil then return nil end
+            group.sendInterval = nextInterval
+        end
+
+        return group
+    end
+
+    local function groupHasPendingEntry(groupName)
+        if not groupName then return false end
+
+        for i = 1, #PendingNetworkOrder do
+            local entry = NetworkedVariableLookup[PendingNetworkOrder[i]]
+            if entry and entry.pendingValue ~= nil and entry.throttleGroup == groupName then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function clearThrottleGroupIfIdle(groupName)
+        if not groupName then return end
+
+        local group = NetworkThrottleGroups[groupName]
+        if group and not groupHasPendingEntry(groupName) then
+            group.pendingFlushAt = nil
+        end
+    end
+
+    local function getEntrySendInterval(entry)
+        local group = entry.throttleGroup and NetworkThrottleGroups[entry.throttleGroup]
+        if group then
+            return group.sendInterval or 0
+        end
+
+        return entry.sendInterval or 0
+    end
+
+    local function getEntryPendingFlushAt(entry)
+        local group = entry.throttleGroup and NetworkThrottleGroups[entry.throttleGroup]
+        if group then
+            return group.pendingFlushAt
+        end
+
+        return entry.pendingFlushAt
+    end
+
+    local function schedulePendingFlush(entry)
+        local interval = getEntrySendInterval(entry)
+        if interval <= 0 then
+            entry.pendingFlushAt = nil
+            return
+        end
+
+        local now = _timer_curtime()
+        local group = entry.throttleGroup and NetworkThrottleGroups[entry.throttleGroup]
+        if group then
+            if group.pendingFlushAt == nil or group.pendingFlushAt <= now then
+                group.pendingFlushAt = now + interval
+            end
+            entry.pendingFlushAt = nil
+            return
+        end
+
+        entry.pendingFlushAt = now + interval
+    end
+
     local function disableFlushHookIfIdle()
         if FlushHookActive and #PendingNetworkOrder == 0 then
             hook.remove("tick", NETVAR_PREFIX .. "_Flush")
@@ -1135,7 +1313,10 @@ if SERVER then
         end
 
         local previousValue = entry.currentValue
-        local compareValue = entry.pendingValue ~= nil and entry.pendingValue or previousValue
+        local compareValue = previousValue
+        if entry.pendingValue ~= nil then
+            compareValue = entry.pendingValue
+        end
         local descriptorChanged = not entry.descriptor or not descriptorsEqual(entry.descriptor, descriptor)
         local valueChanged = compareValue == nil or not deepValuesEqual(compareValue, value)
 
@@ -1156,9 +1337,10 @@ if SERVER then
 
         entry.pendingValue = storedValue
         if not wasPending then
-            if entry.sendInterval and entry.sendInterval > 0 then
-                entry.pendingFlushAt = _timer_curtime() + entry.sendInterval
-                networkDebug("buffered '" .. entry.name .. "' for " .. _tostring(entry.sendInterval) .. "s coalescing window")
+            local sendInterval = getEntrySendInterval(entry)
+            if sendInterval > 0 then
+                schedulePendingFlush(entry)
+                networkDebug("buffered '" .. entry.name .. "' for " .. _tostring(sendInterval) .. "s coalescing window")
             else
                 entry.pendingFlushAt = nil
                 networkDebug("queued '" .. entry.name .. "' for next network flush")
@@ -1176,6 +1358,77 @@ if SERVER then
         if previousValue == nil or not deepValuesEqual(previousValue, value) then
             fireNetworkedVariableTriggers(entry.name, value, "[SS-SWH] networked trigger error: ")
         end
+
+        return true
+    end
+
+    normalizeNetworkInterval = function(interval)
+        if interval == nil or interval == false then
+            return 0
+        end
+
+        if _type(interval) == "number" and interval > 0 then
+            return interval
+        end
+
+        return nil
+    end
+
+    local function setNetworkedVariableIntervalInternal(entry, interval)
+        if not entry then return false end
+
+        local nextInterval = normalizeNetworkInterval(interval)
+        if nextInterval == nil then return false end
+
+        local group = entry.throttleGroup and NetworkThrottleGroups[entry.throttleGroup]
+        if group then
+            group.sendInterval = nextInterval
+            if entry.pendingValue ~= nil then
+                schedulePendingFlush(entry)
+            end
+            return true
+        end
+
+        if entry.sendInterval == nextInterval then
+            return true
+        end
+
+        entry.sendInterval = nextInterval
+
+        if entry.pendingValue ~= nil then
+            schedulePendingFlush(entry)
+        end
+
+        return true
+    end
+
+    local function setNetworkedVariableThrottleGroupInternal(entry, groupName, interval)
+        if not entry then return false end
+
+        groupName = normalizeThrottleGroupName(groupName)
+        if groupName == false then return false end
+
+        if not groupName then
+            local oldGroup = entry.throttleGroup
+            entry.throttleGroup = nil
+            if interval ~= nil and setNetworkedVariableIntervalInternal(entry, interval) == false then
+                entry.throttleGroup = oldGroup
+                return false
+            end
+            clearThrottleGroupIfIdle(oldGroup)
+            return true
+        end
+
+        local group = getThrottleGroup(groupName, interval)
+        if not group then return false end
+
+        local oldGroup = entry.throttleGroup
+        entry.throttleGroup = groupName
+        entry.pendingFlushAt = nil
+        if entry.pendingValue ~= nil then
+            schedulePendingFlush(entry)
+        end
+        clearThrottleGroupIfIdle(oldGroup)
 
         return true
     end
@@ -1241,6 +1494,7 @@ if SERVER then
         NetworkedVariableIds[name] = nil
         NetworkedVariableValues[name] = nil
         _rawset(NetworkedVariables, name, nil)
+        clearThrottleGroupIfIdle(entry.throttleGroup)
         disableFlushHookIfIdle()
 
         local target, hasRecipients = getActiveSendTarget()
@@ -1335,12 +1589,13 @@ if SERVER then
             local id = PendingNetworkOrder[i]
             local entry = NetworkedVariableLookup[id]
 
-            if not entry or not entry.pendingValue then
+            if not entry or entry.pendingValue == nil then
                 PendingNetworkLookup[id] = nil
                 _table_remove(PendingNetworkOrder, i)
             else
                 local value = entry.pendingValue
-                if not forceAll and entry.pendingFlushAt and now < entry.pendingFlushAt then
+                local pendingFlushAt = getEntryPendingFlushAt(entry)
+                if not forceAll and pendingFlushAt and now < pendingFlushAt then
                     if not entry.debugIntervalPending then
                         entry.debugIntervalPending = true
                         networkDebug("holding '" .. entry.name .. "' until coalescing window closes")
@@ -1371,6 +1626,7 @@ if SERVER then
                     entry.debugIntervalPending = false
                     PendingNetworkLookup[id] = nil
                     _table_remove(PendingNetworkOrder, i)
+                    clearThrottleGroupIfIdle(entry.throttleGroup)
 
                     if not forceAll and MaxSendBitsPerMs ~= nil then
                         NetworkSendBudget = _math_max(0, NetworkSendBudget - estimatedBits)
@@ -1402,6 +1658,7 @@ if SERVER then
         entry.forceMeta = true
         NetworkedVariableValues[name] = nil
         removePendingNetworkedVariable(entry.id)
+        clearThrottleGroupIfIdle(entry.throttleGroup)
         disableFlushHookIfIdle()
 
         local target, hasRecipients = getActiveSendTarget()
@@ -1798,7 +2055,7 @@ if SERVER then
         return inputObj:addTrigger(fn)
     end
 
-    function addNetworkedVariable(name)
+    function addNetworkedVariable(name, interval, throttleGroup)
         if _type(name) ~= "string" or name == "" then return nil end
 
         local entry = registerNetworkedVariable(name, NET_SOURCE_CUSTOM)
@@ -1809,8 +2066,33 @@ if SERVER then
         if not wasEnabled then
             entry.forceMeta = true
         end
+        if interval ~= nil and setNetworkedVariableIntervalInternal(entry, interval) == false then
+            return nil
+        end
+        if throttleGroup ~= nil and setNetworkedVariableThrottleGroupInternal(entry, throttleGroup, interval) == false then
+            return nil
+        end
 
         return entry
+    end
+
+    function addNetworkedGunState(prefix, interval, throttleGroup)
+        prefix = normalizeNetworkedGunPrefix(prefix)
+        if not prefix then return false end
+
+        addNetworkedVariable(prefix .. "Ready", interval, throttleGroup)
+        addNetworkedVariable(prefix .. "AmmoType", interval, throttleGroup)
+        addNetworkedVariable(prefix .. "AmmoCount", interval, throttleGroup)
+        addNetworkedVariable(prefix .. "AmmoCountMax", interval, throttleGroup)
+        return true
+    end
+
+    function addNetworkedPropArmorState(prefix, interval, throttleGroup)
+        prefix = normalizeNetworkedPropPrefix(prefix)
+        if not prefix then return false end
+
+        addNetworkedVariable(prefix .. "Armor", interval, throttleGroup)
+        return true
     end
 
     function addNetworkedVariableTrigger(name, fn)
@@ -1819,17 +2101,87 @@ if SERVER then
         return entry:addTrigger(fn)
     end
 
-    function updateNetworkedVariable(name, value)
+    function setNetworkedVariableInterval(name, interval)
+        if _type(name) ~= "string" or name == "" then return false end
+
+        local entry = addNetworkedVariable(name)
+        if not entry then return false end
+
+        return setNetworkedVariableIntervalInternal(entry, interval)
+    end
+
+    function setNetworkedVariableThrottleGroup(name, groupName, interval)
+        if _type(name) ~= "string" or name == "" then return false end
+
+        local entry = addNetworkedVariable(name)
+        if not entry then return false end
+
+        return setNetworkedVariableThrottleGroupInternal(entry, groupName, interval)
+    end
+
+    function updateNetworkedVariable(name, value, interval, throttleGroup)
         if _type(name) ~= "string" or name == "" or value == nil then
             return false
         end
 
-        local entry = addNetworkedVariable(name)
+        local entry = addNetworkedVariable(name, interval, throttleGroup)
         if not entry then
             return false
         end
 
         return queueNetworkedVariable(entry, value)
+    end
+
+    function updateNetworkedGunState(prefix, inputOrGun, interval, throttleGroup)
+        prefix = normalizeNetworkedGunPrefix(prefix)
+        if not prefix then return false end
+
+        local gun
+        if _type(inputOrGun) == "table" and _type(inputOrGun.isValid) == "function" and
+            _type(inputOrGun.get) == "function" then
+            if inputOrGun:isValid() then
+                gun = inputOrGun:get()
+            end
+        elseif inputOrGun ~= nil and isValid(inputOrGun) then
+            gun = inputOrGun
+        end
+
+        if gun ~= nil and isValid(gun) then
+            updateNetworkedVariable(prefix .. "Ready", gun:acfReady(), interval, throttleGroup)
+            updateNetworkedVariable(prefix .. "AmmoType", gun:acfAmmoType() or "", interval, throttleGroup)
+            updateNetworkedVariable(prefix .. "AmmoCount", gun:acfMagRounds() or 0, interval, throttleGroup)
+            updateNetworkedVariable(prefix .. "AmmoCountMax", gun:acfMagSize() or 0, interval, throttleGroup)
+            return true
+        end
+
+        updateNetworkedVariable(prefix .. "Ready", false, interval, throttleGroup)
+        updateNetworkedVariable(prefix .. "AmmoType", "", interval, throttleGroup)
+        updateNetworkedVariable(prefix .. "AmmoCount", 0, interval, throttleGroup)
+        updateNetworkedVariable(prefix .. "AmmoCountMax", 0, interval, throttleGroup)
+        return false
+    end
+
+    function updateNetworkedPropArmorState(prefix, inputOrProp, interval, throttleGroup)
+        prefix = normalizeNetworkedPropPrefix(prefix)
+        if not prefix then return false end
+
+        local prop
+        if _type(inputOrProp) == "table" and _type(inputOrProp.isValid) == "function" and
+            _type(inputOrProp.get) == "function" then
+            if inputOrProp:isValid() then
+                prop = inputOrProp:get()
+            end
+        elseif inputOrProp ~= nil and isValid(inputOrProp) then
+            prop = inputOrProp
+        end
+
+        if prop ~= nil and isValid(prop) then
+            updateNetworkedVariable(prefix .. "Armor", prop:acfPropArmor() or 0, interval, throttleGroup)
+            return true
+        end
+
+        updateNetworkedVariable(prefix .. "Armor", 0, interval, throttleGroup)
+        return false
     end
 
     function safeWireCreate(entI, entO, inputName, outputName)
