@@ -214,17 +214,17 @@ local function interpolateTimeToDistance(time)
     return lerp(a.distance, b.distance, (time - a.time) / span)
 end
 
-local function interpolateTimeToAngle(time)
+local function interpolateDistanceToAngle(distance)
     local count = #DATASET
     if count <= 0 then return 0 end
-    if time <= DATASET[1].time then return DATASET[1].angle or 0 end
-    if time >= DATASET[count].time then return DATASET[count].angle or 0 end
+    if distance <= DATASET[1].distance then return DATASET[1].angle or 0 end
+    if distance >= DATASET[count].distance then return DATASET[count].angle or 0 end
 
     local low = 1
     local high = count
     while high - low > 1 do
         local mid = math.floor((low + high) * 0.5)
-        if DATASET[mid].time < time then
+        if DATASET[mid].distance < distance then
             low = mid
         else
             high = mid
@@ -233,9 +233,9 @@ local function interpolateTimeToAngle(time)
 
     local a = DATASET[low]
     local b = DATASET[high]
-    local span = b.time - a.time
+    local span = b.distance - a.distance
     if span <= 0 then return a.angle or 0 end
-    return lerp(a.angle or 0, b.angle or 0, (time - a.time) / span)
+    return lerp(a.angle or 0, b.angle or 0, (distance - a.distance) / span)
 end
 
 local function getEffectiveBallisticDistance(relPos, time)
@@ -291,13 +291,13 @@ local function updateShooterTracking(shooter, now)
     return shooterVel, SHOOTER_SAMPLE_ACCEL
 end
 
-local function buildAimPos(gunPos, futureRel, timeToArrive)
+local function buildAimPos(gunPos, futureRel)
     local horizX = futureRel[1]
     local horizY = futureRel[2]
     local horizLen = math.sqrt(horizX * horizX + horizY * horizY)
 
     if horizLen > 0 then
-        local basePitch = interpolateTimeToAngle(timeToArrive)
+        local basePitch = interpolateDistanceToAngle(horizLen)
         local aimOffsetZ = futureRel[3] + math.tan(basePitch) * horizLen
         return Vector(gunPos[1] + horizX, gunPos[2] + horizY, gunPos[3] + aimOffsetZ)
     end
@@ -316,7 +316,7 @@ local function solveStaticIntercept(base, targetPos)
     if not base or not base:isValid() then
         return targetPos, targetPos, 0
     end
-    if not ballisticDistance then
+    if not ballisticTime then
         return targetPos, targetPos, 0
     end
 
@@ -344,7 +344,7 @@ local function solveStaticIntercept(base, targetPos)
     end
 
     local futureRel = relPos - shooterVel * timeToArrive
-    local aimPos = buildAimPos(gunPos, futureRel, timeToArrive)
+    local aimPos = buildAimPos(gunPos, futureRel)
     return targetPos, aimPos, timeToArrive
 end
 
