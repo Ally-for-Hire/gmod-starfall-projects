@@ -3,7 +3,7 @@
 --@include allylib/simple_server-side_wire_helper.txt
 --@server
 
---- Version 0.13.8
+--- Version 0.13.12
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/ally_mobility_hours.txt
 
 --[[
@@ -32,7 +32,7 @@ Inputs.MainGearbox:addTrigger(markEngineDirty)
 SPEEDCONV = 1 / 17.6
 MAX_YAW_RATE = 240
 BRAKE_SPEED_GATE = 30
-THINK_DT = 0.05
+THINK_DT = 0.1
 
 GEARING_TYPE          = 3
 MAX_BRAKE_POWER       = 100
@@ -46,11 +46,12 @@ HAS_WHEELS = false
 INVERTED_TRANSFERS = -1
 INLINE_TRANSFERS = true
 
-YAW_DEADZONE = 15
+YAW_DEADZONE = 10
 COUNTERSTEER_STRENGTH = 1.5 -- legacy P gain (kept for compatibility)
+COUNTERSTEER_MIN_BRAKE = 35
 COUNTERSTEER_KI = 0
 COUNTERSTEER_KD = 0.05 -- small D term for easier damping tuning
-ACTUAL_COUNTERSTEER_THRESHOLD = 0.65
+ACTUAL_COUNTERSTEER_THRESHOLD = 0.5
 ACTUAL_COUNTERSTEER_ENGAGEMENT = 1.0 -- 0 disables it; keep this low because 1 is a full reverse bite
 
 INVERT_REVERSE_STEER = false
@@ -532,7 +533,8 @@ local function think()
 
             local pidNorm = math.min(math.max(p + i + d, 0), 1)
             local actualAssist = getActualCounterSteerAssist(pidNorm)
-            local counterSteerWeight = pidNorm * brakePower * (1 - actualAssist)
+            local baseWeight = math.max(COUNTERSTEER_MIN_BRAKE, pidNorm * brakePower)
+            local counterSteerWeight = math.min(baseWeight, brakePower) * (1 - actualAssist)
 
             CounterSteerPrevError = err
 
