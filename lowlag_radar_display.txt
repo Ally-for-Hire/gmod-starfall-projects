@@ -1,13 +1,13 @@
 --@name Lowlag Radar Display
 --@author Ally for Hire / Merydian9
---@include GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt
---@include GMOD-Starfall-Releases/allylib/general_algorithms.txt
---@include GMOD-Starfall-Releases/allylib/helpful_hud_functions.txt
+--@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/general_algorithms.txt
+--@include allylib/helpful_hud_functions.txt
 --@shared
 
-require("GMOD-Starfall-Releases/allylib/simple_server-side_wire_helper.txt")
-require("GMOD-Starfall-Releases/allylib/general_algorithms.txt")
-require("GMOD-Starfall-Releases/allylib/helpful_hud_functions.txt")
+require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/general_algorithms.txt")
+require("allylib/helpful_hud_functions.txt")
 
 NAME_PREFIX = "LRD_"
 CHIP = chip()
@@ -48,8 +48,8 @@ if CLIENT then
     x = resx / 2
     y = resy / 2
 
-    hook.add("DrawHud", NAME_PREFIX .. "mainDrawLoop", function()
-        if (#AvailableOwner + #AvailableIDs) != #AvailablePositions * 2 then return end
+    hook.add("drawhud", NAME_PREFIX .. "mainDrawLoop", function()
+        if (#AvailableOwner + #AvailableIDs) ~= #AvailablePositions * 2 then return end
         if OwnerRevision ~= IDRevision then return end
         
         font(FONT_MAIN)
