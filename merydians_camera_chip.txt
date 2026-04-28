@@ -5,7 +5,7 @@
 --@include allylib/simple_server-side_wire_helper.txt
 --@include allylib/general_algorithms.txt
 
--- Version 1.5.0
+-- Version 1.5.1
 -- Uses built-in SSSWH networking for driver-only state sync.
 
 INPUTS = INPUTS or {}
@@ -22,13 +22,15 @@ SETTINGS.CamWorldPos1 = Vector(0, 0, 120)
 SETTINGS.CamRelPos1 = Vector(0, 0, 0)
 SETTINGS.CamDist1 = 300
 
-SETTINGS.CamWorldPos2 = Vector(0, 0, 0)
-SETTINGS.CamRelPos2 = Vector(0, 12, 13)
+SETTINGS.CamWorldPos2 = Vector(0, 0, 160)
+SETTINGS.CamRelPos2 = Vector(0, 0, 0)
 SETTINGS.CamDist2 = 0
 
 SETTINGS.CamWorldPos3 = Vector(0, 0, 0)
 SETTINGS.CamRelPos3 = Vector(250, 0, 0)
 SETTINGS.CamDist3 = 0
+
+DRIVER_CHECK_INTERVAL = 0.5
 
 SHARED.Driver = nil
 SHARED.Owner = owner()
@@ -39,17 +41,29 @@ MSG_MAIN_OUTPUTS = 1
 MSG_STATE = 2
 MSG_FOV = 3
 CLEAR_DRIVER_NET = SHARED.EntId .. " Driver Clear"
+ZERO_VECTOR = Vector()
+ZERO_ANGLE = Angle()
 
 require("allylib/general_algorithms.txt")
 require("allylib/simple_server-side_wire_helper.txt")
 
 if SERVER then
+    NextDriverCheck = 0
+
     syncInputCommands(true)
     updateInputs("Chair:ENTITY MainParent:ENTITY SecondaryParent:ENTITY TertiaryParent:ENTITY Filter:ARRAY")
-    updateOutputs("HitPos:VECTOR CamDir:VECTOR CamAng:ANGLE CamPos:VECTOR CamState:NORMAL CamFOV:NORMAL")
+    updateOutputs(
+        "HitPos:VECTOR CamDir:VECTOR CamAng:ANGLE CamPos:VECTOR " ..
+        "CamState:NORMAL CamFOV:NORMAL CamActive:NORMAL"
+    )
 
+    Outputs.HitPos:update(ZERO_VECTOR)
+    Outputs.CamDir:update(ZERO_VECTOR)
+    Outputs.CamAng:update(ZERO_ANGLE)
+    Outputs.CamPos:update(ZERO_VECTOR)
     Outputs.CamState:update(1)
     Outputs.CamFOV:update(100)
+    Outputs.CamActive:update(0)
 
     addNetworkedVariable("Driver")
     addNetworkedVariable("ChairState")
@@ -79,6 +93,45 @@ if SERVER then
         net.send(ply)
     end
 
+    local function clearCameraOutputs()
+        Outputs.HitPos:update(ZERO_VECTOR)
+        Outputs.CamDir:update(ZERO_VECTOR)
+        Outputs.CamAng:update(ZERO_ANGLE)
+        Outputs.CamPos:update(ZERO_VECTOR)
+        Outputs.CamState:update(1)
+        Outputs.CamFOV:update(100)
+        Outputs.CamActive:update(0)
+    end
+
+    local function getChairDriver(chair)
+        if type(chair) ~= "Vehicle" then return nil end
+
+        local driver = chair:getDriver()
+        if isValid(driver) then
+            return driver
+        end
+
+        return nil
+    end
+
+    local function hasCameraDriver()
+        return SHARED.Driver ~= nil and SHARED.Driver ~= chip()
+    end
+
+    local function hasMainParent()
+        return INPUTS.MainParent ~= nil and INPUTS.MainParent ~= chip()
+    end
+
+    local function refreshCameraActiveOutput()
+        if hasCameraDriver() and hasMainParent() then
+            Outputs.CamActive:update(1)
+            return true
+        end
+
+        clearCameraOutputs()
+        return false
+    end
+
     local function queueDriverSnapshot()
         local driverVar = addNetworkedVariable("Driver")
         if driverVar ~= nil then
@@ -102,11 +155,11 @@ if SERVER then
         if ply ~= nil then
             SHARED.Driver = ply
             networkTargetSet(ply)
+            refreshCameraActiveOutput()
             queueDriverSnapshot()
         else
             SHARED.Driver = chip()
-            Outputs.CamState:update(1)
-            Outputs.CamFOV:update(100)
+            clearCameraOutputs()
             networkTargetSet({})
         end
     end
@@ -119,8 +172,8 @@ if SERVER then
             updateNetworkedVariable("ChairState", INPUTS.Chair)
         end
 
-        if SHARED.Driver ~= nil and SHARED.Driver ~= chip() and not sameEntity(previousChair, INPUTS.Chair) then
-            setDriver(nil)
+        if not sameEntity(previousChair, INPUTS.Chair) then
+            setDriver(getChairDriver(INPUTS.Chair))
         end
     end
 
@@ -137,6 +190,7 @@ if SERVER then
         if SHARED.Driver ~= nil and SHARED.Driver ~= chip() then
             updateNetworkedVariable("MainParentState", INPUTS.MainParent)
         end
+        refreshCameraActiveOutput()
     end)
     Inputs.SecondaryParent:addTrigger(function(value)
         INPUTS.SecondaryParent = sanitizeEntityInput(value, chip())
@@ -153,12 +207,16 @@ if SERVER then
     Inputs.Filter:addTrigger(handleFilterChange)
 
     refreshServerInputs()
-    setDriver(nil)
+    setDriver(getChairDriver(INPUTS.Chair))
 
     net.receive(SHARED.EntId .. " Server Update", function(_, ply)
         if SHARED.Driver ~= ply then return end
 
         local msgType = net.readInt(8)
+        if not hasMainParent() then
+            clearCameraOutputs()
+            return
+        end
 
         if msgType == MSG_MAIN_OUTPUTS then
             local hitPos = net.readVector()
@@ -169,6 +227,7 @@ if SERVER then
             Outputs.CamDir:update(camDir)
             Outputs.CamAng:update(camAng)
             Outputs.CamPos:update(camPos)
+            Outputs.CamActive:update(1)
         elseif msgType == MSG_STATE then
             Outputs.CamState:update(net.readInt(8))
         elseif msgType == MSG_FOV then
@@ -186,6 +245,20 @@ if SERVER then
         if vehicle == INPUTS.Chair then
             setDriver(nil)
         end
+    end)
+
+    hook.add("think", SHARED.EntId .. " Driver Check", function()
+        local now = timer.curtime()
+        if now < NextDriverCheck then return end
+        NextDriverCheck = now + DRIVER_CHECK_INTERVAL
+
+        local chairDriver = getChairDriver(INPUTS.Chair)
+        if chairDriver ~= SHARED.Driver then
+            setDriver(chairDriver)
+            return
+        end
+
+        refreshCameraActiveOutput()
     end)
 end
 
@@ -299,6 +372,8 @@ if CLIENT then
         ClientHooksInstalled = false
     end
 
+    local modifyState
+
     local function installClientHooks()
         if ClientHooksInstalled then return end
 
@@ -314,7 +389,11 @@ if CLIENT then
             if NextSend < now then
                 NextSend = now + 0.05
                 local traceData = trace.line(origin, origin + forward * 999999, shouldHit)
-                CamHitPos = traceData.HitPos or origin
+                if traceData and traceData.HitPos then
+                    CamHitPos = traceData.HitPos
+                else
+                    CamHitPos = origin + forward * 999999
+                end
                 sendState(MSG_MAIN_OUTPUTS, CamHitPos, forward, normalizeAngleCopy(CamAng), origin)
             end
 
@@ -405,7 +484,7 @@ if CLIENT then
         end
     end
 
-    local function modifyState()
+    modifyState = function()
         applyState(CamState)
         sendState(MSG_STATE, CamState)
     end
@@ -436,5 +515,3 @@ if CLIENT then
         resetCam()
     end)
 end
-
-
