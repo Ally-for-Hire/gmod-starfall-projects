@@ -5,7 +5,7 @@
 --@include allylib/simple_server-side_wire_helper.txt
 --@include allylib/general_algorithms.txt
 
--- Version 1.5.1
+-- Version 1.5.2
 -- Uses built-in SSSWH networking for driver-only state sync.
 
 INPUTS = INPUTS or {}
