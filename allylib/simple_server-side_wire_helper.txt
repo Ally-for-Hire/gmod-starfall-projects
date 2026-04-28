@@ -2156,7 +2156,7 @@ if SERVER then
             updateNetworkedVariable(prefix .. "Ready", gun:acfReady(), interval, throttleGroup)
             updateNetworkedVariable(prefix .. "AmmoType", gun:acfAmmoType() or "", interval, throttleGroup)
             updateNetworkedVariable(prefix .. "AmmoCount", gun:acfMagRounds() or 0, interval, throttleGroup)
-            updateNetworkedVariable(prefix .. "AmmoCountMax", gun:acfMagSize() or 0, interval, throttleGroup)
+            updateNetworkedVariable(prefix .. "AmmoCountMax", gun:acfTotalAmmoCount() or 0, interval, throttleGroup)
             return true
         end
 
