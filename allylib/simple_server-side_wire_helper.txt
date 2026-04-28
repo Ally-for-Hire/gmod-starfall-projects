@@ -19,6 +19,7 @@ Function index:
 - `addInputTrigger(name, fn)`: registers a trigger callback on a named input.
 - `safeWireCreate(entI, entO, inputName, outputName)`: protected `wire.create(...)`.
 - `safeWireDelete(ent, inputName)`: protected `wire.delete(...)`.
+- `addDriverDetection(vehicleOrInput, fn, interval)`: watches a vehicle or entity input and calls `fn(driver, vehicle, previousDriver)` when the driver changes.
 - `minSendTime(...)`: estimates the minimum steady-state interval in seconds to keep sending the provided values indefinitely under the current send budget.
 - `Inputs.<Name>:get()`: reads the cached input value.
 - `Inputs.<Name>:isValid()`: true when that input is currently backed by a real wire/network update.
@@ -66,7 +67,7 @@ Notes:
   split across `NetworkBusyChipShareCount` busy chips by default.
 ]]--
 
--- Version 1.8.0
+-- Version 1.8.1
 
 --[[
 Usage:
@@ -99,9 +100,11 @@ NetworkedVariableIds = NetworkedVariableIds or {}
 NetworkThrottleGroups = NetworkThrottleGroups or {}
 NetworkTargets = NetworkTargets
 NetworkDebugEnabled = NetworkDebugEnabled or false
+DriverDetectors = DriverDetectors or {}
 
 MaxSendBitsPerMs = MaxSendBitsPerMs
 NetworkFlushInterval = NetworkFlushInterval or 0.05
+DriverDetectionInterval = DriverDetectionInterval or 0.5
 NetworkBusyChipShareCount = NetworkBusyChipShareCount or 3
 NetworkBurstRegenBitsPerSecond = NetworkBurstRegenBitsPerSecond or (5 * 1000 * 8)
 NetworkBurstLimitBits = NetworkBurstLimitBits or (10 * 1000 * 8)
@@ -1013,6 +1016,155 @@ function networkTargetSet(target)
 
     NetworkTargets = copied
     return true
+end
+
+local function resolveDriverDetectionVehicle(source)
+    if _type(source) == "table" and _type(source.get) == "function" and _type(source.isValid) == "function" then
+        if source:isValid() then
+            return source:get()
+        end
+
+        return nil
+    end
+
+    if source ~= nil and isValid(source) then
+        return source
+    end
+
+    return nil
+end
+
+local function sameDriverDetectionEntity(a, b)
+    if a == b then return true end
+    if not isValid(a) or not isValid(b) then return false end
+    return a:entIndex() == b:entIndex()
+end
+
+local function getVehicleDriver(vehicle)
+    if _type(vehicle) ~= "Vehicle" then return nil end
+
+    local driver = vehicle:getDriver()
+    if isValid(driver) then
+        return driver
+    end
+
+    return nil
+end
+
+local function onDriverDetectionError(err)
+    return "[SS-SWH] driver detection error: " .. _tostring(err)
+end
+
+local function runDriverDetector(detector, force, eventVehicle)
+    if not detector or detector.removed then return nil end
+
+    local now = _timer_curtime()
+    if not force and now < detector.nextCheck then
+        return detector.lastDriver
+    end
+    detector.nextCheck = now + detector.interval
+
+    local vehicle = resolveDriverDetectionVehicle(detector.source)
+    if eventVehicle ~= nil and not sameDriverDetectionEntity(vehicle, eventVehicle) then
+        return detector.lastDriver
+    end
+
+    local driver = getVehicleDriver(vehicle)
+    local previousDriver = detector.lastDriver
+    local changedDriver = not sameDriverDetectionEntity(driver, previousDriver)
+    local changedVehicle = not sameDriverDetectionEntity(vehicle, detector.lastVehicle)
+
+    detector.lastVehicle = vehicle
+    detector.lastDriver = driver
+
+    if detector.initialized and not changedDriver and not changedVehicle then
+        return driver
+    end
+
+    detector.initialized = true
+
+    local ok, msg = _xpcall(detector.callback, onDriverDetectionError, driver, vehicle, previousDriver)
+    if not ok then _print(msg) end
+
+    return driver
+end
+
+local function runDriverDetectors(force, vehicle)
+    for i = 1, #DriverDetectors do
+        runDriverDetector(DriverDetectors[i], force, vehicle)
+    end
+end
+
+local function installDriverDetectionHooks()
+    if DriverDetectionHooksInstalled then return end
+    DriverDetectionHooksInstalled = true
+
+    hook.add("think", NETVAR_PREFIX .. "_DriverDetection", function()
+        runDriverDetectors(false)
+    end)
+
+    if SERVER then
+        hook.add("PlayerEnteredVehicle", NETVAR_PREFIX .. "_DriverEntered", function(_, vehicle)
+            runDriverDetectors(true, vehicle)
+        end)
+
+        hook.add("PlayerLeaveVehicle", NETVAR_PREFIX .. "_DriverLeft", function(_, vehicle)
+            runDriverDetectors(true, vehicle)
+        end)
+    end
+end
+
+function addDriverDetection(vehicleOrInput, fn, interval)
+    if _type(fn) ~= "function" then return nil end
+
+    installDriverDetectionHooks()
+
+    local detector = {
+        source = vehicleOrInput,
+        callback = fn,
+        interval = _math_max(0.05, tonumber(interval) or DriverDetectionInterval),
+        nextCheck = 0,
+        lastVehicle = nil,
+        lastDriver = nil,
+        initialized = false,
+        removed = false
+    }
+
+    DriverDetectors[#DriverDetectors + 1] = detector
+
+    if _type(vehicleOrInput) == "table" and _type(vehicleOrInput.addTrigger) == "function" then
+        detector.inputTrigger = vehicleOrInput:addTrigger(function()
+            detector.nextCheck = 0
+            runDriverDetector(detector, true)
+        end)
+    end
+
+    function detector:getDriver()
+        return self.lastDriver
+    end
+
+    function detector:getVehicle()
+        return self.lastVehicle
+    end
+
+    function detector:check()
+        return runDriverDetector(self, true)
+    end
+
+    function detector:remove()
+        if self.removed then return false end
+        self.removed = true
+
+        if _type(self.source) == "table" and _type(self.source.removeTrigger) == "function" and
+            self.inputTrigger ~= nil then
+            self.source:removeTrigger(self.inputTrigger)
+        end
+
+        return true
+    end
+
+    runDriverDetector(detector, true)
+    return detector
 end
 
 if SERVER then
