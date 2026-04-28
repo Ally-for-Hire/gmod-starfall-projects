@@ -48,8 +48,6 @@ require("allylib/general_algorithms.txt")
 require("allylib/simple_server-side_wire_helper.txt")
 
 if SERVER then
-    NextDriverCheck = 0
-
     syncInputCommands(true)
     updateInputs("Chair:ENTITY MainParent:ENTITY SecondaryParent:ENTITY TertiaryParent:ENTITY Filter:ARRAY")
     updateOutputs(
@@ -71,12 +69,6 @@ if SERVER then
     addNetworkedVariable("SecondaryParentState")
     addNetworkedVariable("TertiaryParentState")
     addNetworkedVariable("FilterState")
-
-    local function sameEntity(a, b)
-        if a == b then return true end
-        if not isValid(a) or not isValid(b) then return false end
-        return a:entIndex() == b:entIndex()
-    end
 
     local function refreshServerInputs()
         INPUTS.Chair = sanitizeEntityInput(InputValues.Chair, chip())
@@ -101,17 +93,6 @@ if SERVER then
         Outputs.CamState:update(1)
         Outputs.CamFOV:update(100)
         Outputs.CamActive:update(0)
-    end
-
-    local function getChairDriver(chair)
-        if type(chair) ~= "Vehicle" then return nil end
-
-        local driver = chair:getDriver()
-        if isValid(driver) then
-            return driver
-        end
-
-        return nil
     end
 
     local function hasCameraDriver()
@@ -165,15 +146,10 @@ if SERVER then
     end
 
     local function handleChairChange(value)
-        local previousChair = INPUTS.Chair
         INPUTS.Chair = sanitizeEntityInput(value, chip())
 
         if SHARED.Driver ~= nil and SHARED.Driver ~= chip() then
             updateNetworkedVariable("ChairState", INPUTS.Chair)
-        end
-
-        if not sameEntity(previousChair, INPUTS.Chair) then
-            setDriver(getChairDriver(INPUTS.Chair))
         end
     end
 
@@ -207,7 +183,9 @@ if SERVER then
     Inputs.Filter:addTrigger(handleFilterChange)
 
     refreshServerInputs()
-    setDriver(getChairDriver(INPUTS.Chair))
+    addDriverDetection(Inputs.Chair, function(driver)
+        setDriver(driver)
+    end, DRIVER_CHECK_INTERVAL)
 
     net.receive(SHARED.EntId .. " Server Update", function(_, ply)
         if SHARED.Driver ~= ply then return end
@@ -235,31 +213,6 @@ if SERVER then
         end
     end)
 
-    hook.add("PlayerEnteredVehicle", SHARED.EntId .. " PlayerEnteredVehicle", function(ply, vehicle)
-        if vehicle == INPUTS.Chair then
-            setDriver(ply)
-        end
-    end)
-
-    hook.add("PlayerLeaveVehicle", SHARED.EntId .. " PlayerLeaveVehicle", function(ply, vehicle)
-        if vehicle == INPUTS.Chair then
-            setDriver(nil)
-        end
-    end)
-
-    hook.add("think", SHARED.EntId .. " Driver Check", function()
-        local now = timer.curtime()
-        if now < NextDriverCheck then return end
-        NextDriverCheck = now + DRIVER_CHECK_INTERVAL
-
-        local chairDriver = getChairDriver(INPUTS.Chair)
-        if chairDriver ~= SHARED.Driver then
-            setDriver(chairDriver)
-            return
-        end
-
-        refreshCameraActiveOutput()
-    end)
 end
 
 if CLIENT then
