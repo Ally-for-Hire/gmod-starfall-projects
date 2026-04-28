@@ -3,38 +3,15 @@
 --@include allylib/simple_server-side_wire_helper.txt
 --@server
 
---- Version 0.13.2
+--- Version 0.13.8
 -- Sourced from https://github.com/Ally-for-Hire/gmod-starfall-projects/blob/main/ally_mobility_hours.txt
--- GITHUB: https://github.com/Ally-for-Hire/gmod-starfall-projects/tree/main
--- GOOGLE DRIVE: https://drive.google.com/drive/folders/1arb3QgrZkKfF06vdEVqD4samK23IfJrT?dmr=1&ec=wgc-drive-globalnav-goto
 
-/*
---- Overview
-Plug-and-play mobility brain for tracked or wheeled ACF vehicles. It manages autogearing, clutch modulation, braking, and counter-steer logic so you can concentrate on driving instead of spinning out.
-
---- Wiring
--- Inputs
-1. "MainGearbox" -> main gearbox (typically the largest gearbox on the vehicle).
-2. "Engine" -> the engine you want monitored; pick the one with the largest powerband if you have multiple different types.
-3. "Base" -> vehicle baseplate entity.
-4. "Pod" -> pod controller
--- Outputs
-1. "Throttle" <- all of your engines' throttle inputs.
-
-Once those links are set, the chip begins driving the gearbox and throttle outputs automatically.
-
---- Customizing
-Every tunable sits in the "Customizable Variables" block and includes inline descriptions.
-
-Key notes:
-- "GEARING_TYPE": "1" uses RPM-based shifts, "2" uses speed gates, and "3" blends both. Hybrid is the recommended default.
-- "WHEEL_DIAMETER" and "FINAL_RATIO" should match your physical wheel diameter and combined gearbox ratios so the shift map stays accurate. Example: (1/1.5) * (1/1.4).
-- Flip "SHOW_DEBUG" on to review gear-speed targets; nudge "WHEEL_DIAMETER" if the speeds feel off.
-- Counter-steer defaults are tuned for general use. Only tweak them for exceptionally unusual drivetrains.
-- "DUAL_CLUTCH" comes from Cheezus' clutch curve; leave it at "0.8" unless you have a specific low-RPM behaviour to chase.
-
-Need a hand tailoring it to a particular rig? Ping @allyfh and I'll walk you through it.
-*/
+--[[
+Tracked/wheeled ACF mobility controller.
+Inputs: Engine, MainGearbox, Base, Pod wirelink.
+Outputs: Throttle, LeftWeldLatch, RightWeldLatch.
+GEARING_TYPE: 1 = RPM, 2 = speed, 3 = hybrid.
+]]--
 
 require("allylib/simple_server-side_wire_helper.txt")
 
@@ -42,42 +19,41 @@ syncInputCommands(true) -- init-only toggle; do not call per-tick
 updateInputs("Engine:ENTITY MainGearbox:ENTITY Base:ENTITY Pod:WIRELINK")
 updateOutputs("Throttle:NORMAL LeftWeldLatch:NORMAL RightWeldLatch:NORMAL")
 
---- Constants
+EngineStateDirty = true
+
+local function markEngineDirty()
+    EngineStateDirty = true
+end
+
+Inputs.Engine:addTrigger(markEngineDirty)
+Inputs.MainGearbox:addTrigger(markEngineDirty)
+
+--- Config
 SPEEDCONV = 1 / 17.6
 MAX_YAW_RATE = 240
 BRAKE_SPEED_GATE = 30
 THINK_DT = 0.05
 
---- Customizable Variables
--- Gearing and Braking Setup
 GEARING_TYPE          = 3
 MAX_BRAKE_POWER       = 100
 SCALE_BRAKES          = false
 WHEEL_DIAMETER        = 28
 FINAL_RATIO           = 0.18
-IDLE_THROTTLE         = 20
+IDLE_THROTTLE         = 10
 DISABLE_NEUTRAL_STEER = false
 
--- Vehicle Setup 
 HAS_WHEELS = false
-DUAL_CLUTCH = false
-INVERTED_TRANSFERS = 1
+INVERTED_TRANSFERS = -1
 INLINE_TRANSFERS = true
 
--- Countersteering Setup
 YAW_DEADZONE = 15
 COUNTERSTEER_STRENGTH = 1.5 -- legacy P gain (kept for compatibility)
 COUNTERSTEER_KI = 0
 COUNTERSTEER_KD = 0.05 -- small D term for easier damping tuning
-ACTUAL_COUNTERSTEER_THRESHOLD = 0.65 -- start feeding reverse into the correcting side once brake-only correction is close to saturated; requires split-transfer side gear control, not driver neutral steer
+ACTUAL_COUNTERSTEER_THRESHOLD = 0.65
 ACTUAL_COUNTERSTEER_ENGAGEMENT = 1.0 -- 0 disables it; keep this low because 1 is a full reverse bite
 
--- Steering Setup
-INVERT_STEER = false
 INVERT_REVERSE_STEER = false
-
--- Misc
-SHOW_DEBUG = false
 CLUTCH_START = 0.8
 
 --- Internal Variables
@@ -94,12 +70,11 @@ MainWL, LeftWL, RightWL = nil, nil, nil
 ActiveEngine = nil
 EngineReady = false
 
-GearLinks, GearSpeeds = {}, {}
+GearSpeeds = {}
 ReverseGears = 0
 IsAutogearing = false
-HasSplitTransfers = false
 CanNeutralSteer = false
-Acf3GearRatios = true
+DetectedDualClutch = false
 
 OutputGear = 1
 OutputThrottle = 0
@@ -107,12 +82,7 @@ OutputRightGear, OutputLeftGear = 1, 1
 OutputRightClutch, OutputLeftClutch = CLUTCH_BRAKE, CLUTCH_BRAKE
 OutputRightBrake, OutputLeftBrake = MAX_BRAKE_POWER, MAX_BRAKE_POWER
 LeftTransfer, RightTransfer = nil, nil
-
-LastGear, LastThrottle = nil, nil
-LastLBrake, LastRBrake = nil, nil
-LastLClutch, LastRClutch = nil, nil
-LastLGear, LastRGear = nil, nil
-LastLWeld, LastRWeld = nil, nil
+LastWire = {}
 
 CounterSteerI = 0
 CounterSteerPrevError = 0
@@ -127,44 +97,42 @@ local function applyBrakeClutch(LBrake, RBrake, LClutch, RClutch)
     OutputLeftBrake = LBrake
 end
 
-local function writeWireIfChanged(wl, key, value, lastValue)
-    if not wl then return lastValue end
-    if lastValue ~= value then
+local function writeWire(wl, cacheKey, key, value)
+    if not wl then return end
+    if LastWire[cacheKey] ~= value then
         wl[key] = value
-        return value
+        LastWire[cacheKey] = value
     end
-    return lastValue
 end
 
-local function writeWirePairIfChanged(wl, keyA, keyB, value, lastValue)
-    if not wl then return lastValue end
-    if lastValue ~= value then
+local function writeWirePair(wl, cacheKey, keyA, keyB, value)
+    if not wl then return end
+    if LastWire[cacheKey] ~= value then
         wl[keyA] = value
         wl[keyB] = value
-        return value
+        LastWire[cacheKey] = value
     end
-    return lastValue
 end
 
-local function writePortIfChanged(key, value, lastValue)
-    if lastValue ~= value then
-        local out = Outputs[key]
-        if out then
-            out:update(value)
-        else
-            wire.ports[key] = value
-        end
-        return value
-    end
-    return lastValue
+local function probeWireWrite(wl, key, value)
+    if not wl then return false end
+
+    local ok = pcall(function()
+        wl[key] = value
+    end)
+
+    return ok == true
+end
+
+local function detectDualClutch(wl)
+    return probeWireWrite(wl, "Left Brake", MAX_BRAKE_POWER)
+        and probeWireWrite(wl, "Right Brake", MAX_BRAKE_POWER)
+        and probeWireWrite(wl, "Left Clutch", CLUTCH_BRAKE)
+        and probeWireWrite(wl, "Right Clutch", CLUTCH_BRAKE)
 end
 
 local function resetOutputCache()
-    LastGear, LastThrottle = nil, nil
-    LastLBrake, LastRBrake = nil, nil
-    LastLClutch, LastRClutch = nil, nil
-    LastLGear, LastRGear = nil, nil
-    LastLWeld, LastRWeld = nil, nil
+    LastWire = {}
 end
 
 local function resetCounterSteer()
@@ -182,6 +150,14 @@ local function getActualCounterSteerAssist(pidNorm)
     end
 
     return math.clamp((pidNorm - ACTUAL_COUNTERSTEER_THRESHOLD) / (1 - ACTUAL_COUNTERSTEER_THRESHOLD), 0, 1)
+end
+
+local function getSteerSign()
+    if INVERTED_TRANSFERS < 0 then
+        return 1
+    end
+
+    return -1
 end
 
 local function applyCounterSteerSide(useLeft, brakeWeight, actualAssist)
@@ -284,54 +260,55 @@ local function selectGear(rpm, speed, driveDir, neutralSteerEnabled)
 end
 
 function applyOutputs()
-    LastThrottle = writePortIfChanged("Throttle", OutputThrottle, LastThrottle)
+    Outputs.Throttle:update(OutputThrottle)
 
     local lweld = OutputLeftBrake > 0 and 1 or 0
     local rweld = OutputRightBrake > 0 and 1 or 0
 
-    LastLWeld = writePortIfChanged("LeftWeldLatch", lweld, LastLWeld)
-    LastRWeld = writePortIfChanged("RightWeldLatch", rweld, LastRWeld)
+    Outputs.LeftWeldLatch:update(lweld)
+    Outputs.RightWeldLatch:update(rweld)
 
     if not MainWL then return end
 
-    LastGear = writeWireIfChanged(MainWL, "Gear", OutputGear, LastGear)
+    writeWire(MainWL, "MainGear", "Gear", OutputGear)
 
     if CanNeutralSteer then
         if not LeftWL or not RightWL then return end
 
-        LastLBrake = writeWirePairIfChanged(LeftWL, "Left Brake", "Right Brake", OutputLeftBrake, LastLBrake)
-        LastRBrake = writeWirePairIfChanged(RightWL, "Left Brake", "Right Brake", OutputRightBrake, LastRBrake)
+        writeWirePair(LeftWL, "LeftTransferBrake", "Left Brake", "Right Brake", OutputLeftBrake)
+        writeWirePair(RightWL, "RightTransferBrake", "Left Brake", "Right Brake", OutputRightBrake)
 
-        LastLClutch = writeWirePairIfChanged(LeftWL, "Left Clutch", "Right Clutch", OutputLeftClutch, LastLClutch)
-        LastRClutch = writeWirePairIfChanged(RightWL, "Left Clutch", "Right Clutch", OutputRightClutch, LastRClutch)
+        writeWirePair(LeftWL, "LeftTransferClutch", "Left Clutch", "Right Clutch", OutputLeftClutch)
+        writeWirePair(RightWL, "RightTransferClutch", "Left Clutch", "Right Clutch", OutputRightClutch)
 
         if INLINE_TRANSFERS then
-            LastLGear = writeWireIfChanged(LeftWL, "Gear", OutputLeftGear, LastLGear)
-            LastRGear = writeWireIfChanged(RightWL, "Gear", OutputRightGear, LastRGear)
+            writeWire(LeftWL, "LeftTransferGear", "Gear", OutputLeftGear)
+            writeWire(RightWL, "RightTransferGear", "Gear", OutputRightGear)
         else
-            LastLGear = writeWirePairIfChanged(LeftWL, "Left Gear", "Right Gear", OutputLeftGear, LastLGear)
-            LastRGear = writeWirePairIfChanged(RightWL, "Left Gear", "Right Gear", OutputRightGear, LastRGear)
+            writeWirePair(LeftWL, "LeftTransferGear", "Left Gear", "Right Gear", OutputLeftGear)
+            writeWirePair(RightWL, "RightTransferGear", "Left Gear", "Right Gear", OutputRightGear)
         end
-    elseif DUAL_CLUTCH then
-        LastLBrake = writeWireIfChanged(MainWL, "Left Brake", OutputLeftBrake, LastLBrake)
-        LastRBrake = writeWireIfChanged(MainWL, "Right Brake", OutputRightBrake, LastRBrake)
+    elseif DetectedDualClutch then
+        writeWire(MainWL, "LeftBrake", "Left Brake", OutputLeftBrake)
+        writeWire(MainWL, "RightBrake", "Right Brake", OutputRightBrake)
 
-        LastLClutch = writeWireIfChanged(MainWL, "Left Clutch", OutputLeftClutch, LastLClutch)
-        LastRClutch = writeWireIfChanged(MainWL, "Right Clutch", OutputRightClutch, LastRClutch)
+        writeWire(MainWL, "LeftClutch", "Left Clutch", OutputLeftClutch)
+        writeWire(MainWL, "RightClutch", "Right Clutch", OutputRightClutch)
     else
-        LastLBrake = writeWireIfChanged(MainWL, "Brake", OutputLeftBrake, LastLBrake)
-        LastLClutch = writeWireIfChanged(MainWL, "Clutch", OutputLeftClutch, LastLClutch)
+        writeWire(MainWL, "Brake", "Brake", OutputLeftBrake)
+        writeWire(MainWL, "Clutch", "Clutch", OutputLeftClutch)
     end
 end
 
 local function updateEngineVariables()
+    EngineStateDirty = false
     MainWL, LeftWL, RightWL = nil, nil, nil
     ActiveEngine = nil
     LeftTransfer, RightTransfer = nil, nil
     CanNeutralSteer = false
-    HasSplitTransfers = false
+    DetectedDualClutch = false
     EngineReady = false
-    GearLinks, GearSpeeds = {}, {}
+    GearSpeeds = {}
     resetOutputCache()
 
     if not isValid(MainGearbox) then
@@ -339,12 +316,12 @@ local function updateEngineVariables()
         return
     end
 
-    GearLinks = MainGearbox:acfLinks()
+    local gearLinks = MainGearbox:acfLinks()
 
     if isValid(Engine) then
         ActiveEngine = Engine
     else
-        ActiveEngine = findLinkedEngine(GearLinks)
+        ActiveEngine = findLinkedEngine(gearLinks)
     end
 
     if not isValid(ActiveEngine) then
@@ -371,27 +348,20 @@ local function updateEngineVariables()
     GearCount = GearCount - ReverseGears
     IsAutogearing = GearCount > 2
 
-    Acf3GearRatios = math.abs(MainGearbox:acfGearRatio(1)) > 1
+    local acf3GearRatios = math.abs(MainGearbox:acfGearRatio(1)) > 1
     local commonVal = (PowerMax * FINAL_RATIO / 60) * WHEEL_DIAMETER * math.pi
 
     if IsAutogearing then
-        if SHOW_DEBUG then print("Gear Speeds:") end
-        if Acf3GearRatios then
-            for i = 1, GearCount + ReverseGears do
-                GearSpeeds[i] = math.abs(commonVal * (1 / MainGearbox:acfGearRatio(i)) * SPEEDCONV)
-                if SHOW_DEBUG then print("    " .. i .. " .. " .. GearSpeeds[i]) end
-            end
-        else
-            for i = 1, GearCount + ReverseGears do
-                GearSpeeds[i] = math.abs(commonVal * (MainGearbox:acfGearRatio(i)) * SPEEDCONV)
-                if SHOW_DEBUG then print("    " .. i .. " .. " .. GearSpeeds[i]) end
-            end
+        for i = 1, GearCount + ReverseGears do
+            local ratio = MainGearbox:acfGearRatio(i)
+            local ratioScale = acf3GearRatios and (1 / ratio) or ratio
+            GearSpeeds[i] = math.abs(commonVal * ratioScale * SPEEDCONV)
         end
     end
 
     local transfers = 0
-    for i = 1, #GearLinks do
-        local link = GearLinks[i]
+    for i = 1, #gearLinks do
+        local link = gearLinks[i]
         if not isValid(link) or link:getClass() == "prop_physics" then continue end
 
         local type = link:acfType()
@@ -411,26 +381,17 @@ local function updateEngineVariables()
         RightWL = RightTransfer:getWirelink()
     end
 
-    HasSplitTransfers = transfers >= 2
-    CanNeutralSteer = HasSplitTransfers and LeftWL ~= nil and RightWL ~= nil
-    EngineReady = MainWL ~= nil and isValid(ActiveEngine) and (not HasSplitTransfers or CanNeutralSteer)
-
-    if SHOW_DEBUG then
-        if Acf3GearRatios and IsAutogearing then print("This Vehicle Uses ACF3 Gears") elseif IsAutogearing then print("This vehicle Uses ACE Gears") end
-        print("Detected Forward Gears .. " .. GearCount)
-        print("Detected Reverse Gears .. " .. ReverseGears)
-        print("Detected Transfers .. " .. transfers)
-        if isValid(ActiveEngine) then print("Active Engine .. " .. ActiveEngine:getClass()) end
-        if IsAutogearing then print("Autogearing Enabled") else print("Autogearing Disabled") end
-        if CanNeutralSteer then print("The Vehicle Can Neutral Steer") else print("The Vehicle Cannot Neutral Steer") end
-    end
+    local hasSplitTransfers = transfers >= 2
+    CanNeutralSteer = hasSplitTransfers and LeftWL ~= nil and RightWL ~= nil
+    DetectedDualClutch = not CanNeutralSteer and detectDualClutch(MainWL)
+    EngineReady = MainWL ~= nil and isValid(ActiveEngine) and (not hasSplitTransfers or CanNeutralSteer)
 end
 
 PrevEngine = nil
 PrevMainGearbox = nil
 
 local function think()
-    local needsRefresh = Engine ~= PrevEngine or MainGearbox ~= PrevMainGearbox
+    local needsRefresh = EngineStateDirty or Engine ~= PrevEngine or MainGearbox ~= PrevMainGearbox
     if not needsRefresh then
         needsRefresh = not isValid(MainGearbox) or not isValid(ActiveEngine) or MainWL == nil or not EngineReady
         if not needsRefresh and CanNeutralSteer then
@@ -462,10 +423,8 @@ local function think()
     local S = Pod["S"] or 0
     local D = Pod["D"] or 0
     local driveDir = W - S
-    local steerDir = D - A
-    if INVERT_STEER then
-        steerDir = -steerDir
-    end
+    local steerSign = getSteerSign()
+    local steerDir = (D - A) * steerSign
     local neutralSteerEnabled = CanNeutralSteer and not HAS_WHEELS and not DISABLE_NEUTRAL_STEER
     local nonNeutralSteerEnabled = not HAS_WHEELS and not neutralSteerEnabled
     local hasDriveInput = driveDir ~= 0
@@ -542,7 +501,8 @@ local function think()
             OutputRightGear = 2
         end
 
-        if hasSteerInput and (hasDriveInput or speed > 1 or steerOnlyDrive) and (CanNeutralSteer or DUAL_CLUTCH) then
+        if hasSteerInput and (hasDriveInput or speed > 1 or steerOnlyDrive) and
+            (CanNeutralSteer or DetectedDualClutch) then
             local turnDir = steerDir
             if driveDir < 0 and INVERT_REVERSE_STEER then
                 turnDir = -turnDir
@@ -576,10 +536,7 @@ local function think()
 
             CounterSteerPrevError = err
 
-            local direction = driveDir ~= 0 and driveDir or 1
-            if INVERT_STEER then
-                direction = -direction
-            end
+            local direction = (driveDir ~= 0 and driveDir or 1) * steerSign
 
             if yawRate * direction < 0 then
                 applyCounterSteerSide(true, counterSteerWeight, actualAssist)
