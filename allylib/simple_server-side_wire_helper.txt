@@ -43,14 +43,14 @@ Function index:
 Networking additions:
 - `Inputs.<Name>:enableNetworking(bool, interval)`: enables delta networking for an input, with optional send coalescing interval in seconds.
 - `addNetworkedVariable("Name", interval, throttleGroup)`: registers a custom named networked variable with optional coalescing interval.
-- `addNetworkedGunState("Gun1", interval)`: registers standard ACF gun state variables.
-- `addNetworkedPropArmorState("Prop1", interval)`: registers standard ACF prop armor state variables.
+- `addNetworkedGunState("Gun1", interval, throttleGroup)`: registers standard ACF gun state variables.
+- `addNetworkedPropArmorState("Prop1", interval, throttleGroup)`: registers standard ACF prop armor state variables.
 - `addNetworkedVariableTrigger(name, fn)`: registers a callback on a named networked variable.
 - `setNetworkedVariableInterval("Name", interval)`: sets a custom networked variable coalescing interval.
 - `setNetworkedVariableThrottleGroup("Name", groupName, interval)`: puts a variable on a shared throttle.
 - `updateNetworkedVariable("Name", value, interval, throttleGroup)`: updates a custom networked variable.
-- `updateNetworkedGunState("Gun1", inputOrGun, interval)`: updates standard ACF gun state variables.
-- `updateNetworkedPropArmorState("Prop1", inputOrProp, interval)`: updates standard ACF prop armor state variables.
+- `updateNetworkedGunState("Gun1", inputOrGun, interval, throttleGroup)`: updates standard ACF gun state variables.
+- `updateNetworkedPropArmorState("Prop1", inputOrProp, interval, throttleGroup)`: updates standard ACF prop armor state variables.
 - `networkTargetSet(playerOrPlayers)`: sets broadcast, single-player, or multi-player network targets.
 - `updateMaxSend(bitsPerMillisecond)`: overrides the automatic fair-share limiter.
 - `networkEnableDebug(bool)`: enables chat/debug prints for buffer, throttle, and send-limit events.
@@ -1382,6 +1382,10 @@ if SERVER then
 
         local group = entry.throttleGroup and NetworkThrottleGroups[entry.throttleGroup]
         if group then
+            if group.sendInterval == nextInterval then
+                return true
+            end
+
             group.sendInterval = nextInterval
             if entry.pendingValue ~= nil then
                 schedulePendingFlush(entry)
@@ -1419,13 +1423,15 @@ if SERVER then
             return true
         end
 
+        local existingGroup = NetworkThrottleGroups[groupName]
+        local previousInterval = existingGroup and existingGroup.sendInterval
         local group = getThrottleGroup(groupName, interval)
         if not group then return false end
 
         local oldGroup = entry.throttleGroup
         entry.throttleGroup = groupName
         entry.pendingFlushAt = nil
-        if entry.pendingValue ~= nil then
+        if entry.pendingValue ~= nil and (oldGroup ~= groupName or previousInterval ~= group.sendInterval) then
             schedulePendingFlush(entry)
         end
         clearThrottleGroupIfIdle(oldGroup)
