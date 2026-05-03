@@ -198,7 +198,7 @@ if CLIENT then
     end
 
     local function refreshTrackedTarget()
-        local data = NetworkedVariables.TrackData:get() or {}
+        local data = NetVars.TrackData:get()
         local previousActive = ActivelyTracking
 
         ensureSounds()
@@ -324,7 +324,7 @@ if CLIENT then
         hook.remove("renderoffscreen", "LRT_drawStaticElements")
     end)
 
-    NetworkedVariables.TrackData:addTrigger(refreshTrackedTarget)
+    NetVars.TrackData:addTrigger(refreshTrackedTarget)
     
     timer.create("LRT_targetRangeUpdateLoop", 0.1, 0, function()
         TargetRange = math.round(TargetPos:getDistance(P:getPos()))

@@ -82,15 +82,15 @@ if CLIENT then
         hook.remove("RenderOffscreen", NAME_PREFIX .. "drawStaticElements")
     end)
 
-    NetworkedVariables.Position:addTrigger(function() 
-        AvailablePositions = NetworkedVariables.Position:get()
+    NetVars.Position:addTrigger(function() 
+        AvailablePositions = NetVars.Position:get()
     end)
-    NetworkedVariables.Owner:addTrigger(function() 
-        AvailableOwner = NetworkedVariables.Owner:get()
+    NetVars.Owner:addTrigger(function() 
+        AvailableOwner = NetVars.Owner:get()
         OwnerRevision = OwnerRevision + 1
     end)
-    NetworkedVariables.IDs:addTrigger(function() 
-        AvailableIDs = NetworkedVariables.IDs:get()
+    NetVars.IDs:addTrigger(function() 
+        AvailableIDs = NetVars.IDs:get()
         IDRevision = IDRevision + 1
     end)
 end
