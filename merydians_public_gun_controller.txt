@@ -16,97 +16,72 @@ CurTime = timer.curtime
 ZERO_VEC = Vector()
 
 ACTIVE_INTERVAL = 0.05
-IDLE_INTERVAL = 0.2
+IDLE_INTERVAL = 0.5
+LOCK_CLICK_DEBOUNCE = 0.15
 LOAD_PITCH = nil
 
-NextThink = 0
+LastGun = nil
 Locked = false
-LockedAimPos = ZERO_VEC
-LastAimPos = ZERO_VEC
+LastLock = 0
+LastLockClick = -1
 
-local function wakeThink()
-    NextThink = 0
+local function liveInput(name, fallback)
+    local value = wire.ports[name]
+    if value ~= nil then return value end
+    return fallback
 end
 
-local function getLoadAimPos(gun, base, targetPos, loadAng)
-    local origin = getGunOrigin(gun)
-    if not origin then return nil end
-
-    local baseAng = base:getAngles()
-    local toTarget = targetPos - origin
-    local yaw = toTarget:getAngle().y
-    local ang = Angle(baseAng.p - loadAng.p, yaw, 0)
-    return origin + ang:getForward() * 10000
-end
-
-Inputs.Gun:addTrigger(function(gun)
-    if gun and gun:isValid() and CFBA_SetGun then
-        CFBA_SetGun(gun)
+hook.add("input", "SF_MPGC_Input", function(name, value)
+    if name == "Lock" then
+        local lock = (value or 0) ~= 0 and 1 or 0
+        local now = CurTime()
+        if lock ~= 0 and (LastLock == 0 or now - LastLockClick >= LOCK_CLICK_DEBOUNCE) then
+            Locked = not Locked
+            LastLockClick = now
+        end
+        LastLock = lock
     end
-
-    wakeThink()
-end)
-
-Inputs.Base:addTrigger(wakeThink)
-Inputs.HitPos:addTrigger(wakeThink)
-Inputs.Active:addTrigger(wakeThink)
-Inputs.Lock:addTrigger(function(value)
-    if value == 0 then return end
-
-    Locked = not Locked
-    if Locked then
-        LockedAimPos = LastAimPos
-    end
-
-    wakeThink()
+    if name == "Gun" then LastGun = nil end
 end)
 
 local function main()
-    local now = CurTime()
-    local gun = InputValues.Gun
-    local base = InputValues.Base
-    local hitPos = InputValues.HitPos or ZERO_VEC
-    local active = (InputValues.Active or 0) ~= 0
-    local gunValid = gun and gun:isValid()
-    local turretActive = active or Locked
-    local canSolve = active
-        and gunValid
-        and base
-        and base:isValid()
-        and hitPos:getLength() > 0
+    Outputs.TurretActive:update(not Locked and 1 or 0)
 
-    Outputs.TurretActive:update(turretActive and 1 or 0)
-
-    if now < NextThink then
-        return
-    end
-
-    local aimPos = hitPos
+    local gun = liveInput("Gun")
+    local base = liveInput("Base")
+    local aimPos = liveInput("HitPos", ZERO_VEC)
     local tta = 0
 
-    if Locked then
-        aimPos = LockedAimPos
-    elseif canSolve and gun:acfReady() and CFBA_SolveStatic then
-        local _, staticAimPos, staticTta = CFBA_SolveStatic(base, hitPos)
-        if hasVectorValue(staticAimPos) then
-            aimPos = staticAimPos
-        end
-        if type(staticTta) == "number" then
-            tta = staticTta
-        end
-    elseif canSolve and LOAD_PITCH ~= nil then
-        local loadAimPos = getLoadAimPos(gun, base, hitPos, Angle(LOAD_PITCH, 0, 0))
-        if hasVectorValue(loadAimPos) then
-            aimPos = loadAimPos
+    if gun and gun:isValid() and gun ~= LastGun then
+        if CFBA_SetGun then CFBA_SetGun(gun) end
+        LastGun = gun
+    end
+
+    if gun and gun:isValid() and base and base:isValid() and aimPos:getLength() > 0 then
+        if CFBA_SolveStatic then
+            local _, staticAimPos, staticTta = CFBA_SolveStatic(base, aimPos)
+            if hasVectorValue(staticAimPos) then
+                aimPos = staticAimPos
+                tta = staticTta
+            elseif LOAD_PITCH ~= nil then
+                local origin = getGunOrigin(gun)
+                if origin then
+                    local yaw = (aimPos - origin):getAngle().y
+                    aimPos = origin + Angle(base:getAngles().p - LOAD_PITCH, yaw, 0):getForward() * 10000
+                end
+            end
+        elseif LOAD_PITCH ~= nil then
+            local origin = getGunOrigin(gun)
+            if origin then
+                local yaw = (aimPos - origin):getAngle().y
+                aimPos = origin + Angle(base:getAngles().p - LOAD_PITCH, yaw, 0):getForward() * 10000
+            end
         end
     end
 
-    LastAimPos = aimPos
-    Outputs.HAimPos:update(aimPos)
-    Outputs.VAimPos:update(aimPos)
+    Outputs.HAimPos:update(Vector(aimPos.x, aimPos.y, aimPos.z))
+    Outputs.VAimPos:update(Vector(aimPos.x, aimPos.y, aimPos.z))
     Outputs.TTA:update(tta)
-
-    NextThink = now + (turretActive and ACTIVE_INTERVAL or IDLE_INTERVAL)
 end
 
-hook.add("think", "SF_MPGC", main)
+timer.create("SF_MPGC", ACTIVE_INTERVAL, 0, main)
