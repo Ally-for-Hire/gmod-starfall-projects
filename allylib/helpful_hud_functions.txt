@@ -21,26 +21,35 @@ Function index:
 
 --- SHARED Space
 
+local InitializedClients = {}
+local SendData = {}
+local O = owner()
+
+hook.add("ClientInitialized", "HHF_storePlayers", function(ply)
+    InitializedClients[ply] = true
+
+    if #SendData == 0 || ply != O then return end
+
+    for name, var in SendData do
+        net.start(name)
+        net.writeType(var)
+        net.send(O)
+    end
+end)
+
 --- Function interface data easily between server and client
 -- name: the name of the stream
 -- value: the data being sent
--- safe: whether or not to resend every second for 3 seconds to make sure it gets to target
-function sendData(name, value, safe)
-    if safe == nil then
+function sendData(name, value, target)
+    if InitializedClients[owner()] then
         net.start(name) 
         net.writeType(value) 
-        net.send(owner())
-        return
+        net.send(O)
+        return true
     end
-        
-    timer.create(name, 1, 0, function()
-        net.start(name) 
-        net.writeType(value) 
-        net.send(owner())  
-        timer.create("remove " .. name, 3, function()
-            timer.remove("remove " .. name)    
-        end)  
-    end)
+
+    SendData[name] = value
+    return false
 end
 
 curtime = timer.curtime
@@ -215,6 +224,7 @@ if CLIENT then
     color = _setColor
     text = _drawText
     textSimple = _drawSimpleText
+    plus = drawPlus
     function line (x1, y1, x2, y2, thickness)
         if thickness ~= nil then
             drawThickLine(x1, y1, x2, y2, thickness)
