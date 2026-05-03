@@ -141,7 +141,7 @@ if SERVER then
         else
             SHARED.Driver = chip()
             clearCameraOutputs()
-            networkTargetSet({})
+            networkTargetSet(nil)
         end
     end
 
@@ -241,12 +241,12 @@ if CLIENT then
     local mouseWheeledHookId = SHARED.EntId .. " MouseWheeled"
 
     local function refreshClientInputs()
-        INPUTS.Chair = sanitizeEntityInput(NetworkedVariableValues.ChairState, chip())
-        INPUTS.MainParent = sanitizeEntityInput(NetworkedVariableValues.MainParentState, chip())
-        INPUTS.SecondaryParent = sanitizeEntityInput(NetworkedVariableValues.SecondaryParentState, chip())
-        INPUTS.TertiaryParent = sanitizeEntityInput(NetworkedVariableValues.TertiaryParentState, chip())
-        INPUTS.Filter = sanitizeTraceFilter(NetworkedVariableValues.FilterState)
-        SHARED.Driver = NetworkedVariableValues.Driver or chip()
+        INPUTS.Chair = sanitizeEntityInput(NetVars.ChairState:get(), chip())
+        INPUTS.MainParent = sanitizeEntityInput(NetVars.MainParentState:get(), chip())
+        INPUTS.SecondaryParent = sanitizeEntityInput(NetVars.SecondaryParentState:get(), chip())
+        INPUTS.TertiaryParent = sanitizeEntityInput(NetVars.TertiaryParentState:get(), chip())
+        INPUTS.Filter = sanitizeTraceFilter(NetVars.FilterState:get())
+        SHARED.Driver = NetVars.Driver:get()
     end
 
     local function computeClientActiveState()
@@ -442,24 +442,12 @@ if CLIENT then
         sendState(MSG_STATE, CamState)
     end
 
-    NetworkedVariables.Driver:addTrigger(function()
-        syncClientActivation()
-    end)
-    NetworkedVariables.ChairState:addTrigger(function()
-        syncClientActivation()
-    end)
-    NetworkedVariables.MainParentState:addTrigger(function()
-        syncClientActivation()
-    end)
-    NetworkedVariables.SecondaryParentState:addTrigger(function()
-        syncClientActivation()
-    end)
-    NetworkedVariables.TertiaryParentState:addTrigger(function()
-        syncClientActivation()
-    end)
-    NetworkedVariables.FilterState:addTrigger(function()
-        syncClientActivation()
-    end)
+    NetVars.Driver:addTrigger(syncClientActivation)
+    NetVars.ChairState:addTrigger(syncClientActivation)
+    NetVars.MainParentState:addTrigger(syncClientActivation)
+    NetVars.SecondaryParentState:addTrigger(syncClientActivation)
+    NetVars.TertiaryParentState:addTrigger(syncClientActivation)
+    NetVars.FilterState:addTrigger(syncClientActivation)
     syncClientActivation()
 
     net.receive(CLEAR_DRIVER_NET, function()
