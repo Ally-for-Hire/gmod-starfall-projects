@@ -22,9 +22,10 @@ Function index:
 - `safeWireCreate(entI, entO, inputName, outputName)`: protected `wire.create`.
 - `safeWireDelete(ent, inputName)`: protected `wire.delete`.
 - `updateWirelinkField(wirelink, field, value, slot)`: cached wirelink field write.
-- `addDriverDetection(vehicleOrInput, fn, interval)`: polls a chair/entity input for its driver.
+- `addDriverDetection(vehicleOrInput, fn, interval)`: tracks a chair/entity input driver with vehicle hooks and polling.
 - `minSendTime(...)`: returns the helper's current send interval estimate.
 - `networkTargetSet(target)`: sets explicit NetVar recipients; nil means `net.send(nil)`.
+- `sendNetworkedVariablesTo(target)`: sends the current NetVar snapshot to one recipient.
 - `enableConnectSend(enabled)`: only sends NetVars to clients that have run the helper HUD hook once.
 - `networkEnableDebug(enabled)`: toggles helper debug state.
 - `networkStats()`: returns simple replication counters.
@@ -74,6 +75,7 @@ NetworkedStateNames = NetworkedStateNames or {}
 NetworkedStateFields = NetworkedStateFields or {}
 ConnectSendTargets = ConnectSendTargets or {}
 ConnectSendEnabled = ConnectSendEnabled or false
+NetworkInputArrayNextUpdate = NetworkInputArrayNextUpdate or {}
 
 NetworkFlushInterval = NetworkFlushInterval or 0.05
 NetworkMaxRecordsPerFlush = NetworkMaxRecordsPerFlush or 64
@@ -122,6 +124,20 @@ local function angleComponent(value, longName, shortName)
     return value[longName] or value[shortName] or 0
 end
 
+local function isDenseArray(value)
+    if type(value) ~= "table" then return false, 0 end
+
+    local n = 0
+    for key in pairs(value) do
+        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then return false, 0 end
+        if key > n then n = key end
+    end
+    for i = 1, n do
+        if value[i] == nil then return false, 0 end
+    end
+    return true, n
+end
+
 local function quantizeNumber(value)
     if value >= 0 then return math.floor(value * 1000 + 0.5) / 1000 end
     return -math.floor(-value * 1000 + 0.5) / 1000
@@ -143,6 +159,41 @@ local function clone(value)
     return out
 end
 
+local function cloneDenseArrayInto(value, previous)
+    local isArray, count = isDenseArray(value)
+    if not isArray then return nil end
+
+    local out = type(previous) == "table" and previous or {}
+    for i = 1, count do
+        out[i] = value[i]
+    end
+    for i = count + 1, #out do
+        out[i] = nil
+    end
+    return out
+end
+
+local function sameDenseArrayRefs(a, b)
+    local aIsArray, aCount = isDenseArray(a)
+    local bIsArray, bCount = isDenseArray(b)
+    if not aIsArray or not bIsArray or aCount ~= bCount then return false end
+
+    for i = 1, aCount do
+        if a[i] ~= b[i] then return false end
+    end
+    return true
+end
+
+local function cacheClone(name, value, cache)
+    if type(value) ~= "table" or isVector(value) or isAngle(value) then
+        return clone(value)
+    end
+
+    local arrayCopy = cloneDenseArrayInto(value, cache and cache[name])
+    if arrayCopy ~= nil then return arrayCopy end
+    return clone(value)
+end
+
 local function quantize(value)
     if type(value) == "number" then return quantizeNumber(value) end
     if isVector(value) then return Vector(quantizeNumber(value.x), quantizeNumber(value.y), quantizeNumber(value.z)) end
@@ -158,6 +209,16 @@ local function quantize(value)
     local out = {}
     for k, v in pairs(value) do out[k] = quantize(v) end
     return out
+end
+
+local function netVarSnapshot(value)
+    if type(value) ~= "table" or isVector(value) or isAngle(value) then
+        return quantize(value)
+    end
+
+    local arrayCopy = cloneDenseArrayInto(value)
+    if arrayCopy ~= nil then return arrayCopy end
+    return quantize(value)
 end
 
 local function same(a, b)
@@ -419,7 +480,7 @@ outputProto.__index = outputProto
 
 function outputProto:update(value)
     if same(value, LastOutputValues[self.name]) then return false end
-    LastOutputValues[self.name] = clone(value)
+    LastOutputValues[self.name] = cacheClone(self.name, value, LastOutputValues)
     wire.ports[self.name] = value
     return true
 end
@@ -511,6 +572,7 @@ local function stateNames(prefix)
         AmmoCount = prefix .. "AmmoCount",
         AmmoCountMax = prefix .. "AmmoCountMax",
         MagSize = prefix .. "MagSize",
+        MagRounds = prefix .. "MagRounds",
         Armor = prefix .. "Armor",
         ArmorMax = prefix .. "ArmorMax",
         PropArmor = prefix .. "PropArmor",
@@ -675,6 +737,29 @@ local function installDriverHook()
             end
         end
     end)
+
+    hook.add("PlayerEnteredVehicle", "SSSWH_DriverEnteredVehicle", function(ply, vehicle)
+        for _, detector in pairs(DriverDetectors) do
+            local detectorVehicle = detector.vehicle or vehicleFromSource(detector.source)
+            if detectorVehicle == vehicle and detector.driver ~= ply then
+                local previous = detector.driver
+                detector.vehicle = vehicle
+                detector.driver = ply
+                xpcall(detector.fn, function(err) print("[SS-SWH] driver detector error: ", err) end, ply, vehicle, previous)
+            end
+        end
+    end)
+
+    hook.add("PlayerLeaveVehicle", "SSSWH_DriverLeftVehicle", function(ply, vehicle)
+        for _, detector in pairs(DriverDetectors) do
+            local detectorVehicle = detector.vehicle or vehicleFromSource(detector.source)
+            if detectorVehicle == vehicle and detector.driver == ply then
+                detector.vehicle = vehicle
+                detector.driver = nil
+                xpcall(detector.fn, function(err) print("[SS-SWH] driver detector error: ", err) end, nil, vehicle, ply)
+            end
+        end
+    end)
 end
 
 function addDriverDetection(vehicleOrInput, fn, interval)
@@ -770,8 +855,10 @@ if SERVER then
         local entry = addNetworkedVariable(name, interval)
         if not entry or entry.enabled == false then return false end
 
-        value = quantize(value)
-        if same(value, entry.value) and not entry.dirty then return false end
+        value = netVarSnapshot(value)
+        local isArray = isDenseArray(value)
+        local sameValue = isArray and sameDenseArrayRefs(value, entry.value) or same(value, entry.value)
+        if sameValue and not entry.dirty then return false end
 
         entry.typeCode = inferNetVarTypeCode(value)
         entry.value = value
@@ -1302,12 +1389,32 @@ if SERVER then
     end
 
     hook.add("input", "SSSWH_Input", function(name, value)
-        InputValues[name] = clone(value)
+        InputValues[name] = value
         InputValidity[name] = wire.self():isWired(name)
         if SyncInputCommandsEnabled then _G[name] = InputValues[name] end
 
         local entry = rawget(NetVars, name)
-        if entry and entry.input and entry.enabled then updateNetworkedVariable(name, value) end
+        if entry and entry.input and entry.enabled then
+            if isDenseArray(value) then
+                local now = CurTime()
+                local nextUpdate = NetworkInputArrayNextUpdate[name] or 0
+                local interval = entry.interval
+                if interval == nil or interval <= 0 then interval = NetworkFlushInterval end
+
+                entry.value = value
+                NetVarValues[name] = value
+
+                if not entry.dirty and now >= nextUpdate then
+                    NetworkInputArrayNextUpdate[name] = now + interval
+                    entry.typeCode = TYPE_ARRAY
+                    entry.dirty = true
+                    markDirty(entry)
+                    fireNetVarTriggers(name, value)
+                end
+            else
+                updateNetworkedVariable(name, value)
+            end
+        end
 
         if NetworkedStatePollers[name] then markStaticStateDirty(name) end
 
@@ -1355,6 +1462,12 @@ if SERVER then
         for name, value in pairs(NetVarValues) do records[#records + 1] = { name, clone(value) } end
         if #records <= 0 then return end
         sendRecords(records, ply)
+    end
+
+    function sendNetworkedVariablesTo(target)
+        if not validRecipient(target) then return false end
+        sendCurrentRecordsToPlayer(target)
+        return true
     end
 
     local function addConnectSendTarget(ply)
@@ -1545,6 +1658,10 @@ else
     end
 
     function safeWireDelete()
+        return false
+    end
+
+    function sendNetworkedVariablesTo()
         return false
     end
 
