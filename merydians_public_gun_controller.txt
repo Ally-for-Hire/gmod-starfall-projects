@@ -9,7 +9,7 @@ require("allylib/general_algorithms.txt")
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/merys_integrated_ballistics_computer.txt")
 
-updateInputs("Lock:NORMAL Active:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR")
+updateInputs("Lock:NORMAL Active:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR LoadPitch:NORMAL")
 updateOutputs("TurretActive:NORMAL HAimPos:VECTOR VAimPos:VECTOR TTA:NORMAL")
 
 CurTime = timer.curtime
@@ -18,12 +18,14 @@ ZERO_VEC = Vector()
 ACTIVE_INTERVAL = 0.05
 IDLE_INTERVAL = 0.5
 LOCK_CLICK_DEBOUNCE = 0.15
-LOAD_PITCH = nil
+WIRING_CHECK_INTERVAL = 0.5
 
 LastGun = nil
 Locked = false
 LastLock = 0
 LastLockClick = -1
+NextWiringCheck = 0
+LoadPitchWired = false
 
 local function liveInput(name, fallback)
     local input = Inputs[name]
@@ -46,11 +48,18 @@ hook.add("input", "SF_MPGC_Input", function(name, value)
 end)
 
 local function main()
+    local now = CurTime()
+    if now >= NextWiringCheck then
+        LoadPitchWired = wire.self():isWired("LoadPitch")
+        NextWiringCheck = now + WIRING_CHECK_INTERVAL
+    end
+
     Outputs.TurretActive:update(not Locked and 1 or 0)
 
     local gun = liveInput("Gun")
     local base = liveInput("Base")
     local aimPos = liveInput("HitPos", ZERO_VEC)
+    local loadPitch = LoadPitchWired and liveInput("LoadPitch") or nil
     local tta = 0
 
     if gun and gun:isValid() and gun ~= LastGun then
@@ -64,18 +73,18 @@ local function main()
             if hasVectorValue(staticAimPos) then
                 aimPos = staticAimPos
                 tta = staticTta
-            elseif LOAD_PITCH ~= nil then
+            elseif loadPitch ~= nil then
                 local origin = getGunOrigin(gun)
                 if origin then
                     local yaw = (aimPos - origin):getAngle().y
-                    aimPos = origin + Angle(base:getAngles().p - LOAD_PITCH, yaw, 0):getForward() * 10000
+                    aimPos = origin + Angle(base:getAngles().p - loadPitch, yaw, 0):getForward() * 10000
                 end
             end
-        elseif LOAD_PITCH ~= nil then
+        elseif loadPitch ~= nil then
             local origin = getGunOrigin(gun)
             if origin then
                 local yaw = (aimPos - origin):getAngle().y
-                aimPos = origin + Angle(base:getAngles().p - LOAD_PITCH, yaw, 0):getForward() * 10000
+                aimPos = origin + Angle(base:getAngles().p - loadPitch, yaw, 0):getForward() * 10000
             end
         end
     end
