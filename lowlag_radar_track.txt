@@ -7,7 +7,7 @@
 require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/helpful_hud_functions.txt")
 
-OUTPUT_UPDATE_CAP = 0.05
+OUTPUT_UPDATE_CAP = 0.1
 FOLLOW_LAST_VELOCITY_TIME = 3
 SOUND_VOLUME = 35
 CHIP = chip()
@@ -96,16 +96,8 @@ if SERVER then
             end
         end
         
-        -- InternalInfo = {pos, vel, id, name, arrayindex}
-        Outputs.TargetPos:update(InternalInfo[1])
-        Outputs.TargetVelocity:update(InternalInfo[2])
-        Outputs.TargetID:update(InternalInfo[3])
-        Outputs.TargetName:update(InternalInfo[4])
-        TrackRevision = TrackRevision + 1
-        publishTrackData()
-        
         local searchPosition = InternalInfo[1] + InternalInfo[2] * 0.1
-        local dt = (timer.curtime() - LastSeen)
+        local dt = timer.curtime() - LastSeen
         if not TargetInArray and dt < FOLLOW_LAST_VELOCITY_TIME then
             if SearchAttempts % 2 == 0 then
                 searchPosition = InternalInfo[1] + InternalInfo[2] * dt
@@ -113,6 +105,14 @@ if SERVER then
             
             SearchAttempts = SearchAttempts + 1
         end
+
+        -- InternalInfo = {pos, vel, id, name, arrayindex}
+        Outputs.TargetPos:update(InternalInfo[1])
+        Outputs.TargetVelocity:update(InternalInfo[2])
+        Outputs.TargetID:update(InternalInfo[3])
+        Outputs.TargetName:update(InternalInfo[4])
+        TrackRevision = TrackRevision + 1
+        publishTrackData()
         
         Outputs.GimbalPos:update(searchPosition)
         LastOutputUpdate = timer.curtime()
@@ -129,6 +129,8 @@ if SERVER then
             TargetInArray = false
             TrackRevision = TrackRevision + 1
             publishTrackData()
+            Outputs.GimbalPos:update(Inputs.HitPos:get() or Vector())
+            LastOutputUpdate = timer.curtime()
             
             return
         end
