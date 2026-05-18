@@ -6,7 +6,7 @@
 --@include allylib/general_algorithms.txt
 
 -- Version 1.6.0
--- Seat-driver camera controller. Helper owns wire, input mirroring, driver detection, and NetVar sync.
+-- Seat-driver camera controller. Helper owns wire, cached input reads, and NetVar sync.
 
 require("allylib/general_algorithms.txt")
 require("allylib/simple_server-side_wire_helper.txt")
@@ -28,6 +28,7 @@ local MSG_MAIN_OUTPUTS = 1
 local MSG_STATE = 2
 local MSG_FOV = 3
 local NET_UPDATE = ENT_ID .. " Server Update"
+local NET_DRIVER_CLEAR = ENT_ID .. " Driver Clear"
 local ZERO_VECTOR = Vector()
 local ZERO_ANGLE = Angle()
 
@@ -54,8 +55,8 @@ local CameraModes = {
 
 if SERVER then
     local Driver = CHIP
+    local LastDriverCheck = 0
 
-    syncInputCommands(true)
     updateInputs("Chair:ENTITY MainParent:ENTITY SecondaryParent:ENTITY TertiaryParent:ENTITY Filter:ARRAY")
     updateOutputs(
         "HitPos:VECTOR CamDir:VECTOR CamAng:ANGLE CamPos:VECTOR " ..
@@ -94,7 +95,7 @@ if SERVER then
         end
     end
 
-    local function sendDriverSnapshot(ply)
+    local function updateDriverSnapshot()
         updateNetworkedVariables({
             Driver = Driver,
             MainParent = parentInput("MainParent"),
@@ -102,7 +103,12 @@ if SERVER then
             TertiaryParent = parentInput("TertiaryParent"),
             Filter = sanitizeTraceFilter(InputValues.Filter)
         })
-        if ply ~= nil and ply ~= CHIP then sendNetworkedVariablesTo(ply) end
+    end
+
+    local function clearPreviousDriver(ply)
+        if ply == nil or ply == CHIP then return end
+        net.start(NET_DRIVER_CLEAR)
+        net.send(ply)
     end
 
     local function setDriver(ply)
@@ -111,7 +117,7 @@ if SERVER then
         if previousDriver ~= nil and previousDriver ~= CHIP and previousDriver ~= ply then
             Driver = CHIP
             updateNetworkedVariable("Driver", Driver, 0)
-            sendNetworkedVariablesTo(previousDriver)
+            clearPreviousDriver(previousDriver)
         end
 
         Driver = ply or CHIP
@@ -119,11 +125,11 @@ if SERVER then
 
         if Driver ~= CHIP then
             networkTargetSet(Driver)
-            sendDriverSnapshot(Driver)
+            updateDriverSnapshot()
         else
             updateNetworkedVariable("Driver", Driver, 0)
             if previousDriver ~= nil and previousDriver ~= CHIP then
-                sendNetworkedVariablesTo(previousDriver)
+                clearPreviousDriver(previousDriver)
             end
             networkTargetSet({})
         end
@@ -135,9 +141,22 @@ if SERVER then
         updateActiveOutput()
     end)
 
-    addDriverDetection(Inputs.Chair, function(driver)
-        setDriver(driver)
-    end, DRIVER_CHECK_INTERVAL)
+    local function checkDriver()
+        local now = timer.curtime()
+        if now - LastDriverCheck < DRIVER_CHECK_INTERVAL then return end
+        LastDriverCheck = now
+
+        local chair = Inputs.Chair:get()
+        local driver = nil
+        if chair and isValid(chair) then
+            driver = chair:getDriver()
+            if not isValid(driver) then driver = nil end
+        end
+
+        if (driver or CHIP) ~= Driver then setDriver(driver) end
+    end
+
+    hook.add("think", ENT_ID .. "_DriverCheck", checkDriver)
 
     net.receive(NET_UPDATE, function(_, ply)
         if Driver ~= ply then return end
@@ -328,6 +347,13 @@ if CLIENT then
             resetCamera()
         end
     end
+
+    net.receive(NET_DRIVER_CLEAR, function()
+        NetVarValues.Driver = CHIP
+        Active = false
+        uninstallHooks()
+        resetCamera()
+    end)
 
     NetVars.Driver:addTrigger(syncActivation)
     NetVars.MainParent:addTrigger(syncActivation)
