@@ -6,30 +6,26 @@ Small Starfall helper for common chip plumbing:
 - readable wire input/output declarations
 - cached input values and input triggers
 - cached output writes
-- simple latest-value NetVars replication
+- simple latest-value NetVars replication with bounded typed payloads
 
 Networking is intentionally one path:
 server code registers or updates a NetVar, the helper keeps only the newest value,
 and a capped flush sends sequential typed records to the selected clients.
+Oversized payloads are serialized and chunked through the same NetVar receiver.
 
 Function index:
 - `updateInputs(str)`: creates wire inputs and `Inputs.<Name>` objects.
 - `updateOutputs(str)`: creates wire outputs and `Outputs.<Name>` objects.
-- `syncInputCommands(enabled)`: mirrors input values into globals matching their names.
 - `changed(value, keepChangedState, slot, epsilon)`: cached change detector.
 - `resetChanged(slot)`: clears one change slot, or all slots when omitted.
-- `addInputTrigger(name, fn)`: adds an input trigger without touching `Inputs` directly.
 - `safeWireCreate(entI, entO, inputName, outputName)`: protected `wire.create`.
 - `safeWireDelete(ent, inputName)`: protected `wire.delete`.
 - `updateWirelinkField(wirelink, field, value, slot)`: cached wirelink field write.
-- `addDriverDetection(vehicleOrInput, fn, interval)`: tracks a chair/entity input driver with vehicle hooks and polling.
 - `minSendTime(...)`: returns the helper's current send interval estimate.
 - `networkTargetSet(target)`: sets explicit NetVar recipients; nil means `net.send(nil)`.
-- `sendNetworkedVariablesTo(target)`: sends the current NetVar snapshot to one recipient.
 - `enableConnectSend(enabled)`: only sends NetVars to clients that have run the helper HUD hook once.
 - `networkEnableDebug(enabled)`: toggles helper debug state.
 - `networkStats()`: returns simple replication counters.
-- `updateMaxSend(...)`: compatibility no-op in the simplified helper.
 - `Inputs.<Name>:get()`: reads cached input, falling back to `wire.ports`.
 - `Inputs.<Name>:isValid()`: checks cached/wired input validity.
 - `Inputs.<Name>:addTrigger(fn)`: registers an input callback.
@@ -40,7 +36,6 @@ Function index:
 - `NetVars.<Name>:update(value, interval)`: updates a custom NetVar on the server.
 - `NetVars.<Name>:setInterval(interval)`: caps that NetVar's send interval.
 - `addNetworkedVariable(name, interval)`: registers a custom NetVar.
-- `addNetworkedVariables(names, interval)`: registers several custom NetVars.
 - `updateNetworkedVariable(name, value, interval)`: queues latest value for replication.
 - `updateNetworkedVariables(values, interval)`: queues several latest values for replication.
 - `State.<Prefix>`: reads a replicated gun or prop armor state table with valid defaults.
@@ -51,22 +46,19 @@ Function index:
 - `updateNetworkedPropArmorState(prefix, inputOrProp, interval)`: queues prop armor state.
 ]]--
 
--- Version 2.1.0
+-- Version 2.5.0
 
 Inputs, Outputs, InputValues = Inputs or {}, Outputs or {}, InputValues or {}
 InputValidity = InputValidity or {}
 InputTriggers = InputTriggers or {}
-Input = Inputs
 
 NetVars = NetVars or {}
-NetworkedVariables = NetVars
 NetVarValues = NetVarValues or {}
 NetValues = NetVarValues
 NetworkedVariableTriggers = NetworkedVariableTriggers or {}
 NetworkTargets = NetworkTargets
 NetworkDebugEnabled = NetworkDebugEnabled or false
 NetworkReplicationStats = NetworkReplicationStats or {}
-DriverDetectors = DriverDetectors or {}
 State = State or {}
 StateKinds = StateKinds or {}
 NetworkedStatePollers = NetworkedStatePollers or {}
@@ -76,6 +68,11 @@ NetworkedStateFields = NetworkedStateFields or {}
 ConnectSendTargets = ConnectSendTargets or {}
 ConnectSendEnabled = ConnectSendEnabled or false
 NetworkInputArrayNextUpdate = NetworkInputArrayNextUpdate or {}
+NetworkForceResend = NetworkForceResend or false
+NetworkStreamID = NetworkStreamID or 1
+NetworkClientStreams = NetworkClientStreams or {}
+PendingRecordFirst = PendingRecordFirst or 1
+PendingRecordLast = PendingRecordLast or 0
 
 NetworkFlushInterval = NetworkFlushInterval or 0.05
 NetworkMaxRecordsPerFlush = NetworkMaxRecordsPerFlush or 64
@@ -90,6 +87,35 @@ local NETWORK_PACKET_OVERHEAD_BITS = 64
 local NETWORK_RECORD_COUNT_BITS = 16
 local NETWORK_RECORD_OVERHEAD_BITS = 8
 local NETWORK_STRING_OVERHEAD_BITS = 8
+local NETWORK_ESTIMATE_CAP_BITS = NETWORK_PACKET_BITS + 1
+local NETWORK_MAX_TABLE_ITEMS = 65535
+local NETWORK_MAX_READ_DEPTH = 16
+local NETWORK_STREAM_KIND = 1
+local NETWORK_STREAM_CHUNK_BYTES = 2048
+
+local TYPE_NIL = 0
+local TYPE_BOOL = 1
+local TYPE_NUMBER = 2
+local TYPE_STRING = 3
+local TYPE_VECTOR = 4
+local TYPE_ANGLE = 5
+local TYPE_ENTITY = 6
+local TYPE_ARRAY = 7
+local TYPE_MAP = 8
+local TYPE_INT8 = 9
+local TYPE_INT16 = 10
+local TYPE_INT24 = 11
+local TYPE_INT32 = 12
+
+local ENTITY_TYPES = {
+    Entity = true,
+    Player = true,
+    Vehicle = true,
+    Weapon = true,
+    NPC = true,
+    Npc = true,
+    Hologram = true
+}
 
 local NET_MESSAGE = "SSSWH_" .. chip():entIndex() .. "_NetVars"
 local CurTime = timer.curtime
@@ -97,10 +123,8 @@ local LastOutputValues = LastOutputValues or {}
 local ChangedSlots = ChangedSlots or {}
 local NetworkSendBudgetBits = NetworkSendBudgetBits or NETWORK_SEND_BURST_BITS
 local NetworkLastBudgetTime = NetworkLastBudgetTime or CurTime()
-local DriverHookInstalled = false
 
 _G.NetVars = NetVars
-_G.NetworkedVariables = NetVars
 _G.NetVarValues = NetVarValues
 _G.NetValues = NetValues
 _G.State = State
@@ -109,7 +133,11 @@ local netVarProto = {}
 netVarProto.__index = netVarProto
 
 local function isVector(value)
-    return type(value) == "Vector" or (type(value) == "table" and type(value.x) == "number" and type(value.y) == "number" and type(value.z) == "number")
+    return type(value) == "Vector"
+        or (type(value) == "table"
+            and type(value.x) == "number"
+            and type(value.y) == "number"
+            and type(value.z) == "number")
 end
 
 local function isAngle(value)
@@ -173,6 +201,8 @@ local function cloneDenseArrayInto(value, previous)
     return out
 end
 
+local inferNetVarTypeCode
+
 local function sameDenseArrayRefs(a, b)
     local aIsArray, aCount = isDenseArray(a)
     local bIsArray, bCount = isDenseArray(b)
@@ -182,6 +212,26 @@ local function sameDenseArrayRefs(a, b)
         if a[i] ~= b[i] then return false end
     end
     return true
+end
+
+local function sameDenseArrayValues(a, b, count)
+    if type(b) ~= "table" or #b ~= count then return false end
+    for i = 1, count do
+        if a[i] ~= b[i] then return false end
+    end
+    return true
+end
+
+local function denseArrayTypeCode(value, count)
+    if count <= 0 then return TYPE_NIL end
+
+    local code = inferNetVarTypeCode(value[1])
+    if code == TYPE_ARRAY or code == TYPE_MAP or code == TYPE_STRING then return nil end
+
+    for i = 2, count do
+        if inferNetVarTypeCode(value[i]) ~= code then return nil end
+    end
+    return code
 end
 
 local function cacheClone(name, value, cache)
@@ -196,7 +246,9 @@ end
 
 local function quantize(value)
     if type(value) == "number" then return quantizeNumber(value) end
-    if isVector(value) then return Vector(quantizeNumber(value.x), quantizeNumber(value.y), quantizeNumber(value.z)) end
+    if isVector(value) then
+        return Vector(quantizeNumber(value.x), quantizeNumber(value.y), quantizeNumber(value.z))
+    end
     if isAngle(value) then
         return Angle(
             quantizeNumber(angleComponent(value, "pitch", "p")),
@@ -281,52 +333,73 @@ local function isEntityDefaultName(name)
         or name == "base"
 end
 
+local DEFAULT_TABLE_NAMES = {
+    "filter", "list", "data", "ids", "positions", "contacts", "targetstate", "table"
+}
+
+local DEFAULT_VECTOR_NAMES = {
+    "pos", "vel", "vector", "aim"
+}
+
+local DEFAULT_BOOL_NAMES = {
+    "active", "enabled", "ready", "lock"
+}
+
+local DEFAULT_STRING_NAMES = {
+    "name", "text", "status", "type"
+}
+
+local DEFAULT_NUMBER_NAMES = {
+    "count", "amount", "size", "armor", "state", "fov", "id"
+}
+
+local function nameContainsAny(name, patterns)
+    for i = 1, #patterns do
+        if string.find(name, patterns[i]) then return true end
+    end
+
+    return false
+end
+
 local function defaultNetVarValue(name)
     name = string.lower(tostring(name or ""))
     if isEntityDefaultName(name) then return defaultEntityValue() end
-    if string.find(name, "filter") or string.find(name, "list") or string.find(name, "data") or string.find(name, "ids") or string.find(name, "positions") or string.find(name, "contacts") or string.find(name, "targetstate") or string.find(name, "table") then return {} end
-    if string.find(name, "pos") or string.find(name, "vel") or string.find(name, "vector") or string.find(name, "aim") then return Vector() end
+    if nameContainsAny(name, DEFAULT_TABLE_NAMES) then return {} end
+    if nameContainsAny(name, DEFAULT_VECTOR_NAMES) then return Vector() end
     if string.find(name, "ang") or string.find(name, "angle") then return Angle() end
-    if string.find(name, "active") or string.find(name, "enabled") or string.find(name, "ready") or string.find(name, "lock") then return false end
-    if string.find(name, "name") or string.find(name, "text") or string.find(name, "status") or string.find(name, "type") then return "" end
-    if string.find(name, "count") or string.find(name, "amount") or string.find(name, "size") or string.find(name, "armor") or string.find(name, "state") or string.find(name, "fov") or string.find(name, "id") then return 0 end
+    if nameContainsAny(name, DEFAULT_BOOL_NAMES) then return false end
+    if nameContainsAny(name, DEFAULT_STRING_NAMES) then return "" end
+    if nameContainsAny(name, DEFAULT_NUMBER_NAMES) then return 0 end
     return 0
 end
 
 local function defaultForTypeCode(code)
-    if code == 1 then return false end
-    if code == 2 then return 0 end
-    if code == 3 then return "" end
-    if code == 4 then return Vector() end
-    if code == 5 then return Angle() end
-    if code == 6 then return defaultEntityValue() end
-    if code == 7 or code == 8 then return {} end
+    if code == TYPE_BOOL then return false end
+    if code == TYPE_NUMBER then return 0 end
+    if code == TYPE_STRING then return "" end
+    if code == TYPE_VECTOR then return Vector() end
+    if code == TYPE_ANGLE then return Angle() end
+    if code == TYPE_ENTITY then return defaultEntityValue() end
+    if code == TYPE_ARRAY or code == TYPE_MAP then return {} end
     return 0
 end
 
-local function validDefaultEntity(value)
-    local ok, valid = pcall(isValid, value)
-    return ok and valid == true
+local function isEntityValue(value)
+    local valueType = type(value)
+    if not ENTITY_TYPES[valueType] then return false end
+    return value.isValid == nil or value:isValid()
 end
 
-local function inferNetVarTypeCode(value)
-    if type(value) == "boolean" then return 1 end
-    if type(value) == "number" then return 2 end
-    if type(value) == "string" then return 3 end
-    if isVector(value) then return 4 end
-    if isAngle(value) then return 5 end
-    if validDefaultEntity(value) then return 6 end
-    if type(value) ~= "table" then return 3 end
-
-    local n = 0
-    for key in pairs(value) do
-        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then return 8 end
-        if key > n then n = key end
-    end
-    for i = 1, n do
-        if value[i] == nil then return 8 end
-    end
-    return 7
+inferNetVarTypeCode = function(value)
+    if type(value) == "boolean" then return TYPE_BOOL end
+    if type(value) == "number" then return TYPE_NUMBER end
+    if type(value) == "string" then return TYPE_STRING end
+    if isVector(value) then return TYPE_VECTOR end
+    if isAngle(value) then return TYPE_ANGLE end
+    if isEntityValue(value) then return TYPE_ENTITY end
+    if type(value) ~= "table" then return TYPE_STRING end
+    if isDenseArray(value) then return TYPE_ARRAY end
+    return TYPE_MAP
 end
 
 local function netVar(name)
@@ -429,6 +502,38 @@ local function splitPorts(str)
     return names, types
 end
 
+local function ensurePortObject(store, name, proto)
+    local entry = store[name]
+    if entry then return entry end
+
+    entry = setmetatable({ name = name }, proto)
+    store[name] = entry
+    return entry
+end
+
+local function buildPortObjects(store, names, proto)
+    for i = 1, #names do
+        ensurePortObject(store, names[i], proto)
+    end
+end
+
+local function appendTrigger(store, name, fn)
+    if type(fn) ~= "function" then return nil end
+
+    local list = store[name] or {}
+    store[name] = list
+    list[#list + 1] = fn
+    return #list
+end
+
+local function runTriggerList(list, errLabel, value, name)
+    if not list then return end
+
+    for i = 1, #list do
+        xpcall(list[i], function(err) print(errLabel, err) end, value, name)
+    end
+end
+
 local inputProto = {}
 inputProto.__index = inputProto
 
@@ -445,11 +550,7 @@ function inputProto:isValid()
 end
 
 function inputProto:addTrigger(fn)
-    if type(fn) ~= "function" then return nil end
-    local list = InputTriggers[self.name] or {}
-    InputTriggers[self.name] = list
-    list[#list + 1] = fn
-    return #list
+    return appendTrigger(InputTriggers, self.name, fn)
 end
 
 function inputProto:removeTrigger(idx)
@@ -483,13 +584,6 @@ function outputProto:update(value)
     LastOutputValues[self.name] = cacheClone(self.name, value, LastOutputValues)
     wire.ports[self.name] = value
     return true
-end
-
-function syncInputCommands(enabled)
-    SyncInputCommandsEnabled = enabled == true
-    if not SERVER then return SyncInputCommandsEnabled end
-    for name, value in pairs(InputValues) do _G[name] = value end
-    return SyncInputCommandsEnabled
 end
 
 function changed(value, keepChangedState, slot, epsilon)
@@ -541,6 +635,40 @@ local function normalizePropArmorPrefix(prefix)
     return "Prop"
 end
 
+local function normalizeStatePrefix(prefix)
+    if type(prefix) == "number" then return "State" .. prefix end
+    if type(prefix) == "string" and prefix ~= "" then return prefix end
+    return "State"
+end
+
+local function stateFieldSuffix(prefix, methodName, explicitName)
+    if type(explicitName) == "string" and explicitName ~= "" then return explicitName end
+    local suffix = string.gsub(tostring(methodName or ""), "^acf", "")
+    if string.sub(suffix, 1, #prefix) == prefix then suffix = string.sub(suffix, #prefix + 1) end
+    if suffix == "" then suffix = tostring(methodName or "Value") end
+    return suffix
+end
+
+local function readStateFieldSpec(spec, index)
+    local methodName, fieldName, fallback, fn
+
+    if type(spec) == "string" then
+        methodName = spec
+    elseif type(spec) == "function" then
+        methodName = "Value" .. tostring(index or 1)
+        fn = spec
+    elseif type(spec) == "table" then
+        methodName = spec.method or spec[1] or spec.name
+        fieldName = spec.field or spec[2]
+        fallback = spec.fallback
+        if fallback == nil then fallback = spec.default end
+        if fallback == nil then fallback = spec[3] end
+        fn = spec.fn
+    end
+
+    return methodName, fieldName, fallback, fn
+end
+
 local StateFieldDefaults = {
     Name = "",
     Ready = false,
@@ -580,6 +708,41 @@ local function stateNames(prefix)
     }
     NetworkedStateNames[prefix] = names
     return names
+end
+
+local GUN_STATE_FIELDS = {
+    { "Name", 0 },
+    { "Ready" },
+    { "AmmoType" },
+    { "AmmoCount" },
+    { "AmmoCountMax" },
+    { "MagSize" },
+    { "MagRounds" }
+}
+
+local GUN_RELOAD_STATE_FIELDS = {
+    { "ReloadTime" },
+    { "ReloadProgress", 0 },
+    { "MaxReloadTime", 0 }
+}
+
+local PROP_ARMOR_STATE_FIELDS = {
+    { "Armor" },
+    { "ArmorMax" }
+}
+
+local function addNamedStateVars(names, fields, interval)
+    for i = 1, #fields do
+        local field = fields[i]
+        addNetworkedVariable(names[field[1]], field[2] or interval)
+    end
+end
+
+local function updateDefaultStateVars(names, fields, interval)
+    for i = 1, #fields do
+        local suffix = fields[i][1]
+        updateNetworkedVariable(names[suffix], StateFieldDefaults[suffix], interval)
+    end
 end
 
 local StateFieldSuffixes = {
@@ -639,8 +802,14 @@ setmetatable(State, {
     end
 })
 
+local wakeNetworkPump
+
 function networkTargetSet(target)
     NetworkTargets = target or nil
+    if SERVER then
+        NetworkForceResend = true
+        if wakeNetworkPump then wakeNetworkPump() end
+    end
     return true
 end
 
@@ -667,19 +836,28 @@ function networkStats()
     return clone(NetworkReplicationStats)
 end
 
-function updateMaxSend()
-    return true
-end
-
 function minSendTime(...)
     local count = select("#", ...)
     if count <= 0 then return 0 end
-    return NetworkFlushInterval
-end
 
-local function validEntity(value)
-    local ok, valid = pcall(isValid, value)
-    return ok and valid == true
+    local bits = NETWORK_PACKET_OVERHEAD_BITS
+    for i = 1, count do
+        local value = select(i, ...)
+        if type(value) == "boolean" then
+            bits = bits + 5
+        elseif type(value) == "number" then
+            bits = bits + 68
+        elseif type(value) == "string" then
+            bits = bits + (string.len(value) + 1) * 8 + NETWORK_STRING_OVERHEAD_BITS + 4
+        elseif isVector(value) or isAngle(value) then
+            bits = bits + 100
+        elseif type(value) == "table" then
+            bits = bits + NETWORK_PACKET_BITS
+        else
+            bits = bits + 20
+        end
+    end
+    return math.max(NetworkFlushInterval, bits / NETWORK_SEND_RATE_BITS)
 end
 
 local function networkDebug(...)
@@ -687,140 +865,81 @@ local function networkDebug(...)
     print("[SS-SWH] ", ...)
 end
 
-local function vehicleFromSource(source)
-    if not source then return nil end
-
-    if type(source) == "table" and source.get then
-        local ok, value = pcall(source.get, source)
-        if ok and validEntity(value) then return value end
-    end
-
-    if SERVER and type(source) == "table" and source.name and wire.ports then
-        local value = wire.ports[source.name]
-        if validEntity(value) then return value end
-    end
-
-    if validEntity(source) then return source end
-    return nil
-end
-
-local function checkDriverDetector(detector, force)
-    local vehicle = vehicleFromSource(detector.source)
-    if not validEntity(vehicle) then vehicle = nil end
-
-    local driver = nil
-    if vehicle then
-        local ok, result = pcall(function()
-            return vehicle:getDriver()
-        end)
-        if ok and validEntity(result) then driver = result end
-    end
-
-    if not force and driver == detector.driver and vehicle == detector.vehicle then return end
-
-    local previous = detector.driver
-    detector.vehicle = vehicle
-    detector.driver = driver
-    networkDebug("driver detector vehicle=", vehicle, " driver=", driver, " previous=", previous)
-    xpcall(detector.fn, function(err) print("[SS-SWH] driver detector error: ", err) end, driver, vehicle, previous)
-end
-
-local function installDriverHook()
-    if DriverHookInstalled then return end
-    DriverHookInstalled = true
-    hook.add("think", "SSSWH_DriverDetection", function()
-        local now = CurTime()
-        for _, detector in pairs(DriverDetectors) do
-            if now >= detector.nextCheck then
-                detector.nextCheck = now + detector.interval
-                checkDriverDetector(detector, false)
-            end
-        end
-    end)
-
-    hook.add("PlayerEnteredVehicle", "SSSWH_DriverEnteredVehicle", function(ply, vehicle)
-        for _, detector in pairs(DriverDetectors) do
-            local detectorVehicle = detector.vehicle or vehicleFromSource(detector.source)
-            if detectorVehicle == vehicle and detector.driver ~= ply then
-                local previous = detector.driver
-                detector.vehicle = vehicle
-                detector.driver = ply
-                xpcall(detector.fn, function(err) print("[SS-SWH] driver detector error: ", err) end, ply, vehicle, previous)
-            end
-        end
-    end)
-
-    hook.add("PlayerLeaveVehicle", "SSSWH_DriverLeftVehicle", function(ply, vehicle)
-        for _, detector in pairs(DriverDetectors) do
-            local detectorVehicle = detector.vehicle or vehicleFromSource(detector.source)
-            if detectorVehicle == vehicle and detector.driver == ply then
-                detector.vehicle = vehicle
-                detector.driver = nil
-                xpcall(detector.fn, function(err) print("[SS-SWH] driver detector error: ", err) end, nil, vehicle, ply)
-            end
-        end
-    end)
-end
-
-function addDriverDetection(vehicleOrInput, fn, interval)
-    if type(fn) ~= "function" then return nil end
-    local detector = {
-        source = vehicleOrInput,
-        fn = fn,
-        interval = interval or DriverDetectionInterval or 0.5,
-        nextCheck = 0,
-        driver = nil,
-        vehicle = nil
-    }
-    detector.getDriver = function() return detector.driver end
-    detector.getVehicle = function() return detector.vehicle end
-    detector.check = function() checkDriverDetector(detector, true) end
-    detector.remove = function()
-        for i = #DriverDetectors, 1, -1 do
-            if DriverDetectors[i] == detector then table.remove(DriverDetectors, i) end
-        end
-    end
-    DriverDetectors[#DriverDetectors + 1] = detector
-    networkDebug("added driver detector source=", vehicleOrInput, " interval=", detector.interval)
-    installDriverHook()
-    checkDriverDetector(detector, true)
-    return detector
-end
-
 function updateInputs(str)
     local names, types = splitPorts(str)
-    for i = 1, #names do
-        Inputs[names[i]] = setmetatable({ name = names[i] }, inputProto)
-    end
+    buildPortObjects(Inputs, names, inputProto)
     if SERVER then wire.adjustInputs(names, types) end
     return names, types, Inputs
 end
 
 function updateOutputs(str)
     local names, types = splitPorts(str)
-    for i = 1, #names do
-        Outputs[names[i]] = setmetatable({ name = names[i] }, outputProto)
-    end
+    buildPortObjects(Outputs, names, outputProto)
     if SERVER then wire.adjustOutputs(names, types) end
     return names, types, Outputs
 end
 
-function addInputTrigger(name, fn)
-    if not Inputs[name] then Inputs[name] = setmetatable({ name = name }, inputProto) end
-    return Inputs[name]:addTrigger(fn)
+function updateNetworkedVariables(values, interval)
+    if type(values) ~= "table" then return 0 end
+
+    local count = 0
+    for name, value in pairs(values) do
+        if updateNetworkedVariable(name, value, interval) then count = count + 1 end
+    end
+    return count
+end
+
+function addNetworkedVariableTrigger(name, fn)
+    return NetVars[name]:addTrigger(fn)
 end
 
 if SERVER then
+    local WireSelf = wire.self()
     local DirtyOrder = DirtyOrder or {}
     local DirtyLookup = DirtyLookup or {}
     local NextFlush = 0
     local NextStatePoll = 0
     local PendingRecords = PendingRecords or {}
+    local NetworkPumpActive = false
+    local ensureNetworkPump
+    local stopNetworkPumpIfIdle
+    if PendingRecordLast <= 0 then PendingRecordLast = #PendingRecords end
+
+    local function pendingRecordCount()
+        if PendingRecordLast < PendingRecordFirst then return 0 end
+        return PendingRecordLast - PendingRecordFirst + 1
+    end
+
+    local function pushPendingRecord(packet)
+        PendingRecordLast = PendingRecordLast + 1
+        PendingRecords[PendingRecordLast] = packet
+        NetworkReplicationStats.pendingPackets = pendingRecordCount()
+        if ensureNetworkPump then ensureNetworkPump() end
+    end
+
+    local function peekPendingRecord()
+        return PendingRecords[PendingRecordFirst]
+    end
+
+    local function popPendingRecord()
+        if PendingRecordLast < PendingRecordFirst then return nil end
+
+        local packet = PendingRecords[PendingRecordFirst]
+        PendingRecords[PendingRecordFirst] = nil
+        PendingRecordFirst = PendingRecordFirst + 1
+        if PendingRecordFirst > 32 and PendingRecordFirst > PendingRecordLast then
+            PendingRecordFirst = 1
+            PendingRecordLast = 0
+        end
+        NetworkReplicationStats.pendingPackets = pendingRecordCount()
+        return packet
+    end
 
     local function markDirty(entry)
         if DirtyLookup[entry.name] then return end
         DirtyLookup[entry.name] = true
         DirtyOrder[#DirtyOrder + 1] = entry
+        if ensureNetworkPump then ensureNetworkPump() end
     end
 
     function addNetworkedVariable(name, interval)
@@ -829,18 +948,6 @@ if SERVER then
         entry.enabled = true
         if interval ~= nil then entry.interval = tonumber(interval) or 0 end
         return entry
-    end
-
-    function addNetworkedVariables(names, interval)
-        if type(names) ~= "table" then return 0 end
-
-        local count = 0
-        for i = 1, #names do
-            if addNetworkedVariable(names[i], interval) then
-                count = count + 1
-            end
-        end
-        return count
     end
 
     function setNetworkedVariableInterval(name, interval)
@@ -855,12 +962,36 @@ if SERVER then
         local entry = addNetworkedVariable(name, interval)
         if not entry or entry.enabled == false then return false end
 
+        local isArray, arrayCount = false, 0
+        if type(value) == "table" and not isVector(value) and not isAngle(value) then
+            isArray, arrayCount = isDenseArray(value)
+            if isArray and not entry.dirty and sameDenseArrayValues(value, entry.value, arrayCount) then
+                return false
+            end
+        elseif not entry.dirty and same(value, entry.value) then
+            return false
+        end
+
         value = netVarSnapshot(value)
-        local isArray = isDenseArray(value)
+        if isArray then
+            NetVarValues[name] = value
+            entry.typeCode = TYPE_ARRAY
+            entry.arrayTypeCode = denseArrayTypeCode(value, arrayCount)
+            entry.value = value
+            entry.dirty = true
+            markDirty(entry)
+            fireNetVarTriggers(name, value)
+            networkDebug("queued netvar ", name, " value=", value)
+            NetworkReplicationStats.variablesQueued = (NetworkReplicationStats.variablesQueued or 0) + 1
+            return true
+        end
+
+        isArray = isDenseArray(value)
         local sameValue = isArray and sameDenseArrayRefs(value, entry.value) or same(value, entry.value)
         if sameValue and not entry.dirty then return false end
 
         entry.typeCode = inferNetVarTypeCode(value)
+        entry.arrayTypeCode = isArray and denseArrayTypeCode(value, #value) or nil
         entry.value = value
         NetVarValues[name] = value
         entry.dirty = true
@@ -871,28 +1002,6 @@ if SERVER then
         return true
     end
 
-    function updateNetworkedVariables(values, interval)
-        if type(values) ~= "table" then return 0 end
-
-        local count = 0
-        for name, value in pairs(values) do
-            if updateNetworkedVariable(name, value, interval) then
-                count = count + 1
-            end
-        end
-        return count
-    end
-
-    local TYPE_NIL = 0
-    local TYPE_BOOL = 1
-    local TYPE_NUMBER = 2
-    local TYPE_STRING = 3
-    local TYPE_VECTOR = 4
-    local TYPE_ANGLE = 5
-    local TYPE_ENTITY = 6
-    local TYPE_ARRAY = 7
-    local TYPE_MAP = 8
-
     local estimateValueBits
 
     local function estimateStringBits(value)
@@ -901,23 +1010,14 @@ if SERVER then
 
     local function valueTypeCode(value)
         if value == nil then return TYPE_NIL end
-        if type(value) == "boolean" then return TYPE_BOOL end
-        if type(value) == "number" then return TYPE_NUMBER end
-        if type(value) == "string" then return TYPE_STRING end
-        if validEntity(value) then return TYPE_ENTITY end
-        if isVector(value) then return TYPE_VECTOR end
-        if isAngle(value) then return TYPE_ANGLE end
-        if type(value) ~= "table" then return TYPE_STRING end
-
-        local n = 0
-        for k in pairs(value) do
-            if type(k) ~= "number" or k < 1 or k % 1 ~= 0 then return TYPE_MAP end
-            if k > n then n = k end
+        if isEntityValue(value) then return TYPE_ENTITY end
+        if type(value) == "number" and value % 1 == 0 then
+            if value >= -128 and value <= 127 then return TYPE_INT8 end
+            if value >= -32768 and value <= 32767 then return TYPE_INT16 end
+            if value >= -8388608 and value <= 8388607 then return TYPE_INT24 end
+            if value >= -2147483648 and value <= 2147483647 then return TYPE_INT32 end
         end
-        for i = 1, n do
-            if value[i] == nil then return TYPE_MAP end
-        end
-        return TYPE_ARRAY
+        return inferNetVarTypeCode(value)
     end
 
     estimateValueBits = function(value)
@@ -928,6 +1028,14 @@ if SERVER then
             return bits
         elseif code == TYPE_BOOL then
             return bits + 1
+        elseif code == TYPE_INT8 then
+            return bits + 8
+        elseif code == TYPE_INT16 then
+            return bits + 16
+        elseif code == TYPE_INT24 then
+            return bits + 24
+        elseif code == TYPE_INT32 then
+            return bits + 32
         elseif code == TYPE_NUMBER then
             return bits + 64
         elseif code == TYPE_STRING then
@@ -938,14 +1046,19 @@ if SERVER then
             return bits + 16
         elseif code == TYPE_ARRAY then
             bits = bits + 16
-            for i = 1, #value do
+            for i = 1, math.min(#value, NETWORK_MAX_TABLE_ITEMS) do
                 bits = bits + estimateValueBits(value[i])
+                if bits > NETWORK_ESTIMATE_CAP_BITS then return bits end
             end
             return bits
         elseif code == TYPE_MAP then
             bits = bits + 16
+            local count = 0
             for k, v in pairs(value) do
+                count = count + 1
+                if count > NETWORK_MAX_TABLE_ITEMS then break end
                 bits = bits + estimateValueBits(k) + estimateValueBits(v)
+                if bits > NETWORK_ESTIMATE_CAP_BITS then return bits end
             end
             return bits
         end
@@ -953,8 +1066,30 @@ if SERVER then
         return bits + estimateStringBits(value)
     end
 
+    local function estimateKnownValueBits(value, code)
+        if code == TYPE_BOOL then return 5 end
+        if code == TYPE_INT8 then return 12 end
+        if code == TYPE_INT16 then return 20 end
+        if code == TYPE_INT24 then return 28 end
+        if code == TYPE_INT32 then return 36 end
+        if code == TYPE_NUMBER then return 68 end
+        if code == TYPE_VECTOR or code == TYPE_ANGLE then return 100 end
+        if code == TYPE_ENTITY then return 20 end
+        if code == TYPE_STRING then return 4 + estimateStringBits(value) end
+        return estimateValueBits(value)
+    end
+
     local function estimateRecordBits(record)
-        return estimateStringBits(record[1]) + estimateValueBits(record[2]) + NETWORK_RECORD_OVERHEAD_BITS
+        local value = record[2]
+        local arrayTypeCode = record[3]
+        if arrayTypeCode ~= nil and type(value) == "table" then
+            return estimateStringBits(record[1])
+                + 20
+                + #value * estimateKnownValueBits(value[1], arrayTypeCode)
+                + NETWORK_RECORD_OVERHEAD_BITS
+        end
+
+        return estimateStringBits(record[1]) + estimateValueBits(value) + NETWORK_RECORD_OVERHEAD_BITS
     end
 
     local function refillNetworkBudget()
@@ -968,14 +1103,28 @@ if SERVER then
         )
     end
 
-    local function writeValue(value)
-        local code = valueTypeCode(value)
+    local function writeValue(value, depth, knownArrayTypeCode, knownTypeCode)
+        depth = (depth or 0) + 1
+        if depth > NETWORK_MAX_READ_DEPTH then
+            net.writeUInt(TYPE_NIL, 4)
+            return
+        end
+
+        local code = knownTypeCode or valueTypeCode(value)
         net.writeUInt(code, 4)
 
         if code == TYPE_NIL then
             return
         elseif code == TYPE_BOOL then
             net.writeBool(value == true)
+        elseif code == TYPE_INT8 then
+            net.writeInt(value, 8)
+        elseif code == TYPE_INT16 then
+            net.writeInt(value, 16)
+        elseif code == TYPE_INT24 then
+            net.writeInt(value, 24)
+        elseif code == TYPE_INT32 then
+            net.writeInt(value, 32)
         elseif code == TYPE_NUMBER then
             net.writeDouble(value)
         elseif code == TYPE_STRING then
@@ -987,17 +1136,100 @@ if SERVER then
         elseif code == TYPE_ENTITY then
             net.writeEntity(value)
         elseif code == TYPE_ARRAY then
-            net.writeUInt(#value, 16)
-            for i = 1, #value do writeValue(value[i]) end
+            local count = math.min(#value, NETWORK_MAX_TABLE_ITEMS)
+            net.writeUInt(count, 16)
+            if knownArrayTypeCode ~= nil then
+                for i = 1, count do writeValue(value[i], depth, nil, knownArrayTypeCode) end
+            else
+                for i = 1, count do writeValue(value[i], depth) end
+            end
         elseif code == TYPE_MAP then
             local count = 0
-            for _ in pairs(value) do count = count + 1 end
+            for _ in pairs(value) do
+                count = count + 1
+                if count >= NETWORK_MAX_TABLE_ITEMS then break end
+            end
             net.writeUInt(count, 16)
+            local written = 0
             for k, v in pairs(value) do
-                writeValue(k)
-                writeValue(v)
+                written = written + 1
+                if written > count then break end
+                writeValue(k, depth)
+                writeValue(v, depth)
             end
         end
+    end
+
+    local function streamWriteData(stream, value)
+        value = tostring(value or "")
+        stream:writeInt32(#value)
+        stream:write(value)
+    end
+
+    local function streamWriteValue(stream, value, depth)
+        depth = (depth or 0) + 1
+        if depth > NETWORK_MAX_READ_DEPTH then
+            stream:writeInt8(TYPE_NIL)
+            return
+        end
+
+        local code = valueTypeCode(value)
+        stream:writeInt8(code)
+
+        if code == TYPE_NIL then
+            return
+        elseif code == TYPE_BOOL then
+            stream:write(value == true and "1" or "0")
+        elseif code == TYPE_INT8 then
+            stream:writeInt8(value)
+        elseif code == TYPE_INT16 then
+            stream:writeInt16(value)
+        elseif code == TYPE_INT24 or code == TYPE_INT32 then
+            stream:writeInt32(value)
+        elseif code == TYPE_NUMBER then
+            stream:writeDouble(value)
+        elseif code == TYPE_STRING then
+            streamWriteData(stream, value)
+        elseif code == TYPE_VECTOR then
+            stream:writeFloat(value.x)
+            stream:writeFloat(value.y)
+            stream:writeFloat(value.z)
+        elseif code == TYPE_ANGLE then
+            stream:writeFloat(angleComponent(value, "pitch", "p"))
+            stream:writeFloat(angleComponent(value, "yaw", "y"))
+            stream:writeFloat(angleComponent(value, "roll", "r"))
+        elseif code == TYPE_ENTITY then
+            stream:writeInt16(value:entIndex())
+        elseif code == TYPE_ARRAY then
+            local count = math.min(#value, NETWORK_MAX_TABLE_ITEMS)
+            stream:writeInt32(count)
+            for i = 1, count do streamWriteValue(stream, value[i], depth) end
+        elseif code == TYPE_MAP then
+            local count = 0
+            for _ in pairs(value) do
+                count = count + 1
+                if count >= NETWORK_MAX_TABLE_ITEMS then break end
+            end
+            stream:writeInt32(count)
+
+            local written = 0
+            for k, v in pairs(value) do
+                written = written + 1
+                if written > count then break end
+                streamWriteValue(stream, k, depth)
+                streamWriteValue(stream, v, depth)
+            end
+        end
+    end
+
+    local function serializeRecords(records)
+        local stream = bit.stringstream()
+        stream:writeInt32(#records)
+        for i = 1, #records do
+            streamWriteData(stream, records[i][1])
+            streamWriteValue(stream, records[i][2])
+        end
+        return stream:getString()
     end
 
     local function validRecipient(target)
@@ -1025,7 +1257,9 @@ if SERVER then
 
     local function resolveSendTargets(targetOverride)
         if targetOverride ~= nil then
-            if not validRecipient(targetOverride) or not targetAllowedByConnectSend(targetOverride) then return false, nil end
+            if not validRecipient(targetOverride)
+                or not targetAllowedByConnectSend(targetOverride) then return false, nil end
+
             return true, targetOverride
         end
 
@@ -1040,7 +1274,9 @@ if SERVER then
         end
 
         if type(NetworkTargets) ~= "table" then
-            if not validRecipient(NetworkTargets) or not targetAllowedByConnectSend(NetworkTargets) then return false, nil end
+            if not validRecipient(NetworkTargets)
+                or not targetAllowedByConnectSend(NetworkTargets) then return false, nil end
+
             return true, NetworkTargets
         end
 
@@ -1067,11 +1303,11 @@ if SERVER then
             local wouldOverflow = #packetRecords > 0 and packetBits + recordBits > NETWORK_PACKET_BITS
 
             if wouldOverflow then
-                PendingRecords[#PendingRecords + 1] = {
+                pushPendingRecord({
                     records = packetRecords,
                     target = targetOverride,
                     bits = packetBits
-                }
+                })
 
                 packetRecords = {}
                 packetBits = NETWORK_PACKET_OVERHEAD_BITS + NETWORK_RECORD_COUNT_BITS
@@ -1082,30 +1318,98 @@ if SERVER then
         end
 
         if #packetRecords > 0 then
-            PendingRecords[#PendingRecords + 1] = {
+            pushPendingRecord({
                 records = packetRecords,
                 target = targetOverride,
                 bits = packetBits
-            }
+            })
         end
 
         return true
     end
 
     local function sendPendingRecords()
-        local packet = PendingRecords[1]
-        if not packet then return end
+        local packet = peekPendingRecord()
+        if not packet then
+            if stopNetworkPumpIfIdle then stopNetworkPumpIfIdle() end
+            return
+        end
 
         refillNetworkBudget()
         local packetBits = packet.bits or NETWORK_PACKET_BITS
-        if packetBits > NetworkSendBudgetBits then
+        if packetBits > NETWORK_PACKET_BITS then
+            if not packet.streamData then
+                packet.streamData = serializeRecords(packet.records)
+                packet.streamOffset = 1
+                packet.streamID = NetworkStreamID
+                NetworkStreamID = NetworkStreamID + 1
+                if NetworkStreamID > 65535 then NetworkStreamID = 1 end
+                NetworkReplicationStats.streamsQueued = (NetworkReplicationStats.streamsQueued or 0) + 1
+            end
+
+            local remaining = #packet.streamData - packet.streamOffset + 1
+            local chunkBytes = math.min(remaining, NETWORK_STREAM_CHUNK_BYTES)
+            local budgetCost = NETWORK_PACKET_OVERHEAD_BITS + chunkBytes * 8
+            if budgetCost > NetworkSendBudgetBits then
+                NetworkReplicationStats.packetsDeferred = (NetworkReplicationStats.packetsDeferred or 0) + 1
+                return
+            end
+
+            local canSend, targets = resolveSendTargets(packet.target)
+            if not canSend then
+                popPendingRecord()
+                if stopNetworkPumpIfIdle then stopNetworkPumpIfIdle() end
+                return
+            end
+
+            local offset = packet.streamOffset
+            local first = offset == 1
+            local last = chunkBytes >= remaining
+            local chunk = string.sub(packet.streamData, offset, offset + chunkBytes - 1)
+            local ok, err = xpcall(function()
+                net.start(NET_MESSAGE)
+                net.writeUInt(0, 16)
+                net.writeUInt(NETWORK_STREAM_KIND, 4)
+                net.writeUInt(packet.streamID, 16)
+                net.writeBool(first)
+                net.writeBool(last)
+                net.writeUInt(chunkBytes, 16)
+                net.writeData(chunk, chunkBytes)
+                net.send(targets)
+            end, function(e) return e end)
+
+            if not ok then
+                NetworkSendBudgetBits = 0
+                NetworkReplicationStats.sendErrors = (NetworkReplicationStats.sendErrors or 0) + 1
+                NetworkReplicationStats.lastSendError = tostring(err)
+                return
+            end
+
+            NetworkSendBudgetBits = math.max(0, NetworkSendBudgetBits - budgetCost)
+            packet.streamOffset = offset + chunkBytes
+            NetworkReplicationStats.streamChunksSent = (NetworkReplicationStats.streamChunksSent or 0) + 1
+            NetworkReplicationStats.sendBudgetBits = NetworkSendBudgetBits
+
+            if last then
+                popPendingRecord()
+                NetworkReplicationStats.packetsSent = (NetworkReplicationStats.packetsSent or 0) + 1
+                NetworkReplicationStats.variablesSent =
+                    (NetworkReplicationStats.variablesSent or 0) + #packet.records
+                if stopNetworkPumpIfIdle then stopNetworkPumpIfIdle() end
+            end
+            return
+        end
+
+        local budgetCost = math.min(packetBits, NETWORK_SEND_BURST_BITS)
+        if budgetCost > NetworkSendBudgetBits then
             NetworkReplicationStats.packetsDeferred = (NetworkReplicationStats.packetsDeferred or 0) + 1
             return
         end
 
         local canSend, targets = resolveSendTargets(packet.target)
         if not canSend then
-            table.remove(PendingRecords, 1)
+            popPendingRecord()
+            if stopNetworkPumpIfIdle then stopNetworkPumpIfIdle() end
             return
         end
 
@@ -1115,29 +1419,53 @@ if SERVER then
             net.writeUInt(#packet.records, 16)
             for i = 1, #packet.records do
                 net.writeString(packet.records[i][1])
-                writeValue(packet.records[i][2])
+                writeValue(packet.records[i][2], nil, packet.records[i][3])
             end
             net.send(targets)
         end, function(e) return e end)
 
         if not ok then
-            NetworkSendBudgetBits = 0
             NetworkReplicationStats.sendErrors = (NetworkReplicationStats.sendErrors or 0) + 1
             NetworkReplicationStats.lastSendError = tostring(err)
+            NetworkSendBudgetBits = 0
+
+            if packetBits > NETWORK_SEND_BURST_BITS then
+                popPendingRecord()
+                NetworkReplicationStats.packetsDropped = (NetworkReplicationStats.packetsDropped or 0) + 1
+            end
             return
         end
 
-        table.remove(PendingRecords, 1)
-        NetworkSendBudgetBits = math.max(0, NetworkSendBudgetBits - packetBits)
+        popPendingRecord()
+        NetworkSendBudgetBits = math.max(0, NetworkSendBudgetBits - budgetCost)
         NetworkReplicationStats.packetsSent = (NetworkReplicationStats.packetsSent or 0) + 1
         NetworkReplicationStats.variablesSent = (NetworkReplicationStats.variablesSent or 0) + #packet.records
-        NetworkReplicationStats.pendingPackets = #PendingRecords
         NetworkReplicationStats.sendBudgetBits = NetworkSendBudgetBits
+        if stopNetworkPumpIfIdle then stopNetworkPumpIfIdle() end
     end
 
     local function flush(force)
-        if not force and #DirtyOrder <= 0 then return end
         local now = CurTime()
+        if NetworkForceResend then
+            NetworkForceResend = false
+            for name, value in pairs(NetVarValues) do
+                local entry = rawget(NetVars, name)
+                if entry and entry.enabled ~= false then
+                    entry.value = value
+                    entry.typeCode = inferNetVarTypeCode(value)
+                    if entry.typeCode == TYPE_ARRAY then
+                        entry.arrayTypeCode = denseArrayTypeCode(value, #value)
+                    else
+                        entry.arrayTypeCode = nil
+                    end
+                    entry.dirty = true
+                    entry.lastSent = nil
+                    markDirty(entry)
+                end
+            end
+        end
+
+        if not force and #DirtyOrder <= 0 then return end
         if not force and now < NextFlush then return end
         NextFlush = now + NetworkFlushInterval
 
@@ -1147,65 +1475,39 @@ if SERVER then
             DirtyLookup[entry.name] = nil
 
             if entry.dirty and entry.enabled ~= false then
-                local due = force or not entry.lastSent or entry.interval <= 0 or now - entry.lastSent >= entry.interval
+                local due = force
+                    or not entry.lastSent
+                    or entry.interval <= 0
+                    or now - entry.lastSent >= entry.interval
                 if due and #records < NetworkMaxRecordsPerFlush then
                     entry.dirty = false
                     entry.lastSent = now
-                    records[#records + 1] = { entry.name, entry.value }
+                    records[#records + 1] = { entry.name, entry.value, entry.arrayTypeCode }
                 else
                     remaining[#remaining + 1] = entry
                     DirtyLookup[entry.name] = true
-                    NetworkReplicationStats.variablesDeferred = (NetworkReplicationStats.variablesDeferred or 0) + 1
+                    NetworkReplicationStats.variablesDeferred =
+                        (NetworkReplicationStats.variablesDeferred or 0) + 1
                 end
             end
         end
 
         DirtyOrder = remaining
         sendRecords(records)
-    end
-
-    function addNetworkedVariableTrigger(name, fn)
-        return NetVars[name]:addTrigger(fn)
-    end
-
-    local function normalizeStatePrefix(prefix)
-        if type(prefix) == "number" then return "State" .. prefix end
-        if type(prefix) == "string" and prefix ~= "" then return prefix end
-        return "State"
-    end
-
-    local function stateFieldSuffix(prefix, methodName, explicitName)
-        if type(explicitName) == "string" and explicitName ~= "" then return explicitName end
-        local suffix = tostring(methodName or "")
-        suffix = string.gsub(suffix, "^acf", "")
-        if string.sub(suffix, 1, #prefix) == prefix then suffix = string.sub(suffix, #prefix + 1) end
-        if suffix == "" then suffix = tostring(methodName or "Value") end
-        return suffix
+        if stopNetworkPumpIfIdle then stopNetworkPumpIfIdle() end
     end
 
     local function addStateField(prefix, spec, index)
-        local methodName, fieldName, fallback
-
-        if type(spec) == "string" then
-            methodName = spec
-        elseif type(spec) == "function" then
-            methodName = "Value" .. tostring(index or 1)
-        elseif type(spec) == "table" then
-            methodName = spec.method or spec[1] or spec.name
-            fieldName = spec.field or spec[2]
-            fallback = spec.fallback
-            if fallback == nil then fallback = spec.default end
-            if fallback == nil then fallback = spec[3] end
-        end
-
+        local methodName, fieldName, fallback, fn = readStateFieldSpec(spec, index)
         if type(methodName) ~= "string" or methodName == "" then return nil end
+
         local suffix = stateFieldSuffix(prefix, methodName, fieldName)
         if fallback == nil then fallback = 0 end
         local field = {
             name = prefix .. suffix,
             method = methodName,
             fallback = fallback,
-            fn = type(spec) == "function" and spec or type(spec) == "table" and spec.fn or nil
+            fn = fn
         }
         addNetworkedVariable(field.name, 0)
         StateFieldDefaults[suffix] = field.fallback
@@ -1225,6 +1527,7 @@ if SERVER then
             nextUpdate = existing and existing.nextUpdate or 0
         }
         NextStatePoll = 0
+        if ensureNetworkPump then ensureNetworkPump() end
     end
 
     function addStateSend(prefix, interval, ...)
@@ -1246,18 +1549,8 @@ if SERVER then
         prefix = normalizeGunPrefix(prefix)
         local names = stateNames(prefix)
         StateKinds[prefix] = "gun"
-        addNetworkedVariable(names.Name, 0)
-        addNetworkedVariable(names.Ready, interval)
-        if enableReloadTime then
-            addNetworkedVariable(names.ReloadTime, interval)
-            addNetworkedVariable(names.ReloadProgress, 0)
-            addNetworkedVariable(names.MaxReloadTime, 0)
-        end
-        addNetworkedVariable(names.AmmoType, interval)
-        addNetworkedVariable(names.AmmoCount, interval)
-        addNetworkedVariable(names.AmmoCountMax, interval)
-        addNetworkedVariable(names.MagSize, interval)
-        addNetworkedVariable(names.MagRounds, interval)
+        addNamedStateVars(names, GUN_STATE_FIELDS, interval)
+        if enableReloadTime then addNamedStateVars(names, GUN_RELOAD_STATE_FIELDS, interval) end
         addStatePoller("gun", prefix, interval)
         return true
     end
@@ -1266,8 +1559,7 @@ if SERVER then
         prefix = normalizePropArmorPrefix(prefix)
         local names = stateNames(prefix)
         StateKinds[prefix] = "propArmor"
-        addNetworkedVariable(names.Armor, interval)
-        addNetworkedVariable(names.ArmorMax, interval)
+        addNamedStateVars(names, PROP_ARMOR_STATE_FIELDS, interval)
         addStatePoller("propArmor", prefix, interval)
         return true
     end
@@ -1275,7 +1567,12 @@ if SERVER then
     local function resolveEntity(value)
         if type(value) == "table" and value.get then value = value:get() end
         local valueType = type(value)
-        if value == nil or valueType == "number" or valueType == "string" or valueType == "boolean" or valueType == "table" then return nil end
+        if value == nil
+            or valueType == "number"
+            or valueType == "string"
+            or valueType == "boolean"
+            or valueType == "table" then return nil end
+
         if isValid(value) then return value end
         return nil
     end
@@ -1351,7 +1648,9 @@ if SERVER then
         local prop = resolveEntity(inputOrProp)
         local updateStatic = staticStateChanged(prefix, prop)
         updateNetworkedVariable(names.Armor, acfValue(prop, "acfPropArmor", 0), interval)
-        if updateStatic then updateNetworkedVariable(names.ArmorMax, acfValue(prop, "acfPropArmorMax", 0), interval) end
+        if updateStatic then
+            updateNetworkedVariable(names.ArmorMax, acfValue(prop, "acfPropArmorMax", 0), interval)
+        end
         deferStatePoll(prefix, interval)
         return prop ~= nil
     end
@@ -1388,42 +1687,44 @@ if SERVER then
         return pcall(wire.delete, ent, inputName)
     end
 
-    hook.add("input", "SSSWH_Input", function(name, value)
+    local function cacheInputValue(name, value)
         InputValues[name] = value
-        InputValidity[name] = wire.self():isWired(name)
-        if SyncInputCommandsEnabled then _G[name] = InputValues[name] end
+        InputValidity[name] = WireSelf:isWired(name)
+    end
 
+    local function updateNetworkedInputValue(name, value)
         local entry = rawget(NetVars, name)
-        if entry and entry.input and entry.enabled then
-            if isDenseArray(value) then
-                local now = CurTime()
-                local nextUpdate = NetworkInputArrayNextUpdate[name] or 0
-                local interval = entry.interval
-                if interval == nil or interval <= 0 then interval = NetworkFlushInterval end
+        if not entry or not entry.input or not entry.enabled then return end
 
-                entry.value = value
-                NetVarValues[name] = value
+        if isDenseArray(value) then
+            local now = CurTime()
+            local nextUpdate = NetworkInputArrayNextUpdate[name] or 0
+            local interval = entry.interval
+            if interval == nil or interval <= 0 then interval = NetworkFlushInterval end
 
-                if not entry.dirty and now >= nextUpdate then
-                    NetworkInputArrayNextUpdate[name] = now + interval
-                    entry.typeCode = TYPE_ARRAY
-                    entry.dirty = true
-                    markDirty(entry)
-                    fireNetVarTriggers(name, value)
-                end
-            else
-                updateNetworkedVariable(name, value)
+            entry.value = value
+            NetVarValues[name] = value
+
+            if not entry.dirty and now >= nextUpdate then
+                NetworkInputArrayNextUpdate[name] = now + interval
+                entry.typeCode = TYPE_ARRAY
+                entry.arrayTypeCode = denseArrayTypeCode(value, #value)
+                entry.dirty = true
+                markDirty(entry)
+                fireNetVarTriggers(name, value)
             end
+            return
         end
+
+        updateNetworkedVariable(name, value)
+    end
+
+    hook.add("input", "SSSWH_Input", function(name, value)
+        cacheInputValue(name, value)
+        updateNetworkedInputValue(name, value)
 
         if NetworkedStatePollers[name] then markStaticStateDirty(name) end
-
-        local list = InputTriggers[name]
-        if list then
-            for i = 1, #list do
-                xpcall(list[i], function(err) print("[SS-SWH] input trigger error: ", err) end, value, name)
-            end
-        end
+        runTriggerList(InputTriggers[name], "[SS-SWH] input trigger error: ", value, name)
     end)
 
     local function pollNetworkedStates()
@@ -1448,26 +1749,53 @@ if SERVER then
         NextStatePoll = nextPoll or now + NetworkFlushInterval
     end
 
-    hook.add("think", "SSSWH_NetFlush", function()
-        pollNetworkedStates()
-        flush(false)
-    end)
+    local function hasStatePollers()
+        for _ in pairs(NetworkedStatePollers) do return true end
+        return false
+    end
 
-    timer.create("SSSWH_SendPending", NetworkFlushInterval, 0, function()
-        sendPendingRecords()
-    end)
+    stopNetworkPumpIfIdle = function()
+        if not NetworkPumpActive then return end
+        if NetworkForceResend
+            or #DirtyOrder > 0
+            or pendingRecordCount() > 0
+            or hasStatePollers() then return end
+
+        hook.remove("think", "SSSWH_NetFlush")
+        timer.remove("SSSWH_SendPending")
+        NetworkPumpActive = false
+    end
+
+    ensureNetworkPump = function()
+        if NetworkPumpActive then return end
+        NetworkPumpActive = true
+        hook.add("think", "SSSWH_NetFlush", function()
+            pollNetworkedStates()
+            flush(false)
+            stopNetworkPumpIfIdle()
+        end)
+
+        timer.create("SSSWH_SendPending", NetworkFlushInterval, 0, function()
+            sendPendingRecords()
+        end)
+    end
+
+    wakeNetworkPump = function()
+        ensureNetworkPump()
+    end
+
+    if NetworkForceResend or #DirtyOrder > 0 or pendingRecordCount() > 0 or hasStatePollers() then
+        ensureNetworkPump()
+    end
 
     local function sendCurrentRecordsToPlayer(ply)
         local records = {}
-        for name, value in pairs(NetVarValues) do records[#records + 1] = { name, clone(value) } end
+        for name, value in pairs(NetVarValues) do
+            local entry = rawget(NetVars, name)
+            records[#records + 1] = { name, clone(value), entry and entry.arrayTypeCode }
+        end
         if #records <= 0 then return end
         sendRecords(records, ply)
-    end
-
-    function sendNetworkedVariablesTo(target)
-        if not validRecipient(target) then return false end
-        sendCurrentRecordsToPlayer(target)
-        return true
     end
 
     local function addConnectSendTarget(ply)
@@ -1505,18 +1833,6 @@ else
         return entry
     end
 
-    function addNetworkedVariables(names, interval)
-        if type(names) ~= "table" then return 0 end
-
-        local count = 0
-        for i = 1, #names do
-            if addNetworkedVariable(names[i], interval) then
-                count = count + 1
-            end
-        end
-        return count
-    end
-
     function setNetworkedVariableInterval(name, interval)
         local entry = addNetworkedVariable(name, interval)
         return entry ~= nil
@@ -1533,53 +1849,11 @@ else
         return true
     end
 
-    function updateNetworkedVariables(values, interval)
-        if type(values) ~= "table" then return 0 end
-
-        local count = 0
-        for name, value in pairs(values) do
-            if updateNetworkedVariable(name, value, interval) then
-                count = count + 1
-            end
-        end
-        return count
-    end
-
-    function addNetworkedVariableTrigger(name, fn)
-        return NetVars[name]:addTrigger(fn)
-    end
-
-    local function normalizeStatePrefix(prefix)
-        if type(prefix) == "number" then return "State" .. prefix end
-        if type(prefix) == "string" and prefix ~= "" then return prefix end
-        return "State"
-    end
-
-    local function clientStateFieldSuffix(prefix, methodName, explicitName)
-        if type(explicitName) == "string" and explicitName ~= "" then return explicitName end
-        local suffix = tostring(methodName or "")
-        suffix = string.gsub(suffix, "^acf", "")
-        if string.sub(suffix, 1, #prefix) == prefix then suffix = string.sub(suffix, #prefix + 1) end
-        if suffix == "" then suffix = tostring(methodName or "Value") end
-        return suffix
-    end
-
     local function addClientStateField(prefix, spec, index)
-        local methodName, fieldName, fallback
-        if type(spec) == "string" then
-            methodName = spec
-        elseif type(spec) == "function" then
-            methodName = "Value" .. tostring(index or 1)
-        elseif type(spec) == "table" then
-            methodName = spec.method or spec[1] or spec.name
-            fieldName = spec.field or spec[2]
-            fallback = spec.fallback
-            if fallback == nil then fallback = spec.default end
-            if fallback == nil then fallback = spec[3] end
-        end
+        local methodName, fieldName, fallback = readStateFieldSpec(spec, index)
         if type(methodName) ~= "string" or methodName == "" then return nil end
 
-        local suffix = clientStateFieldSuffix(prefix, methodName, fieldName)
+        local suffix = stateFieldSuffix(prefix, methodName, fieldName)
         if fallback == nil then fallback = 0 end
         StateFieldDefaults[suffix] = fallback
         StateFieldSuffixes[suffix] = suffix
@@ -1605,51 +1879,35 @@ else
 
     function addNetworkedGunState(prefix, interval, enableReloadTime)
         prefix = normalizeGunPrefix(prefix)
+        local names = stateNames(prefix)
         StateKinds[prefix] = "gun"
-        addNetworkedVariable(prefix .. "Name", 0)
-        addNetworkedVariable(prefix .. "Ready", interval)
-        if enableReloadTime then
-            addNetworkedVariable(prefix .. "ReloadTime", interval)
-            addNetworkedVariable(prefix .. "ReloadProgress", interval)
-            addNetworkedVariable(prefix .. "MaxReloadTime", 0)
-        end
-        addNetworkedVariable(prefix .. "AmmoType", interval)
-        addNetworkedVariable(prefix .. "AmmoCount", interval)
-        addNetworkedVariable(prefix .. "AmmoCountMax", interval)
-        addNetworkedVariable(prefix .. "MagSize", interval)
-        addNetworkedVariable(prefix .. "MagRounds", interval)
+        addNamedStateVars(names, GUN_STATE_FIELDS, interval)
+        if enableReloadTime then addNamedStateVars(names, GUN_RELOAD_STATE_FIELDS, interval) end
         return true
     end
 
     function addNetworkedPropArmorState(prefix, interval)
         prefix = normalizePropArmorPrefix(prefix)
+        local names = stateNames(prefix)
         StateKinds[prefix] = "propArmor"
-        addNetworkedVariable(prefix .. "Armor", interval)
-        addNetworkedVariable(prefix .. "ArmorMax", interval)
+        addNamedStateVars(names, PROP_ARMOR_STATE_FIELDS, interval)
         return true
     end
 
     function updateNetworkedGunState(prefix, inputOrGun, interval)
         prefix = normalizeGunPrefix(prefix)
+        local names = stateNames(prefix)
         StateKinds[prefix] = "gun"
-        updateNetworkedVariable(prefix .. "Name", "", 0)
-        updateNetworkedVariable(prefix .. "Ready", false, interval)
-        updateNetworkedVariable(prefix .. "ReloadTime", 0, interval)
-        updateNetworkedVariable(prefix .. "ReloadProgress", 0, interval)
-        updateNetworkedVariable(prefix .. "MaxReloadTime", 0, interval)
-        updateNetworkedVariable(prefix .. "AmmoType", "", interval)
-        updateNetworkedVariable(prefix .. "AmmoCount", 0, interval)
-        updateNetworkedVariable(prefix .. "AmmoCountMax", 0, interval)
-        updateNetworkedVariable(prefix .. "MagSize", 0, interval)
-        updateNetworkedVariable(prefix .. "MagRounds", 0, interval)
+        updateDefaultStateVars(names, GUN_STATE_FIELDS, interval)
+        updateDefaultStateVars(names, GUN_RELOAD_STATE_FIELDS, interval)
         return false
     end
 
     function updateNetworkedPropArmorState(prefix, inputOrProp, interval)
         prefix = normalizePropArmorPrefix(prefix)
+        local names = stateNames(prefix)
         StateKinds[prefix] = "propArmor"
-        updateNetworkedVariable(prefix .. "Armor", 0, interval)
-        updateNetworkedVariable(prefix .. "ArmorMax", 0, interval)
+        updateDefaultStateVars(names, PROP_ARMOR_STATE_FIELDS, interval)
         return false
     end
 
@@ -1661,25 +1919,18 @@ else
         return false
     end
 
-    function sendNetworkedVariablesTo()
-        return false
-    end
+    local function readValue(depth)
+        depth = (depth or 0) + 1
+        if depth > NETWORK_MAX_READ_DEPTH then return nil end
 
-    local TYPE_NIL = 0
-    local TYPE_BOOL = 1
-    local TYPE_NUMBER = 2
-    local TYPE_STRING = 3
-    local TYPE_VECTOR = 4
-    local TYPE_ANGLE = 5
-    local TYPE_ENTITY = 6
-    local TYPE_ARRAY = 7
-    local TYPE_MAP = 8
-
-    local function readValue()
         local code = net.readUInt(4)
 
         if code == TYPE_NIL then return nil end
         if code == TYPE_BOOL then return net.readBool() end
+        if code == TYPE_INT8 then return net.readInt(8) end
+        if code == TYPE_INT16 then return net.readInt(16) end
+        if code == TYPE_INT24 then return net.readInt(24) end
+        if code == TYPE_INT32 then return net.readInt(32) end
         if code == TYPE_NUMBER then return net.readDouble() end
         if code == TYPE_STRING then return net.readString() end
         if code == TYPE_VECTOR then return net.readVector() end
@@ -1689,14 +1940,64 @@ else
         if code == TYPE_ARRAY then
             local out = {}
             local count = net.readUInt(16)
-            for i = 1, count do out[i] = readValue() end
+            for i = 1, count do out[i] = readValue(depth) end
             return out
         end
 
         if code == TYPE_MAP then
             local out = {}
             local count = net.readUInt(16)
-            for i = 1, count do out[readValue()] = readValue() end
+            for i = 1, count do
+                local key = readValue(depth)
+                local value = readValue(depth)
+                if key ~= nil then out[key] = value end
+            end
+            return out
+        end
+
+        return nil
+    end
+
+    local function streamReadData(stream)
+        local length = stream:readUInt32()
+        return stream:read(length)
+    end
+
+    local function streamReadValue(stream, depth)
+        depth = (depth or 0) + 1
+        if depth > NETWORK_MAX_READ_DEPTH then return nil end
+
+        local code = stream:readUInt8()
+        if code == TYPE_NIL then return nil end
+        if code == TYPE_BOOL then return stream:read(1) ~= "0" end
+        if code == TYPE_INT8 then return stream:readInt8() end
+        if code == TYPE_INT16 then return stream:readInt16() end
+        if code == TYPE_INT24 or code == TYPE_INT32 then return stream:readInt32() end
+        if code == TYPE_NUMBER then return stream:readDouble() end
+        if code == TYPE_STRING then return streamReadData(stream) end
+        if code == TYPE_VECTOR then
+            return Vector(stream:readFloat(), stream:readFloat(), stream:readFloat())
+        end
+        if code == TYPE_ANGLE then
+            return Angle(stream:readFloat(), stream:readFloat(), stream:readFloat())
+        end
+        if code == TYPE_ENTITY then return entity(stream:readUInt16()) end
+
+        if code == TYPE_ARRAY then
+            local out = {}
+            local count = math.min(stream:readUInt32(), NETWORK_MAX_TABLE_ITEMS)
+            for i = 1, count do out[i] = streamReadValue(stream, depth) end
+            return out
+        end
+
+        if code == TYPE_MAP then
+            local out = {}
+            local count = math.min(stream:readUInt32(), NETWORK_MAX_TABLE_ITEMS)
+            for i = 1, count do
+                local key = streamReadValue(stream, depth)
+                local value = streamReadValue(stream, depth)
+                if key ~= nil then out[key] = value end
+            end
             return out
         end
 
@@ -1713,27 +2014,57 @@ else
         return defaultNetVarValue(name)
     end
 
+    local function applyNetworkRecord(name, value)
+        local typeCode = inferNetVarTypeCode(value)
+        value = usableInputValue(name, value, typeCode)
+        local oldValue = NetVarValues[name]
+        local didChange = not same(oldValue, value)
+        local entry = netVar(name)
+        entry.typeCode = typeCode
+        NetVarValues[name] = clone(value)
+        InputValues[name] = clone(value)
+        InputValidity[name] = true
+        if didChange then fireNetVarTriggers(name, value) end
+
+        local list = InputTriggers[name]
+        if list and didChange then
+            runTriggerList(list, "[SS-SWH] client input trigger error: ", value, name)
+        end
+    end
+
+    local function applyStreamRecords(data)
+        local stream = bit.stringstream(data)
+        local count = math.min(stream:readUInt32(), NETWORK_MAX_TABLE_ITEMS)
+        for i = 1, count do
+            applyNetworkRecord(streamReadData(stream), streamReadValue(stream))
+        end
+    end
+
     net.receive(NET_MESSAGE, function()
         local count = net.readUInt(16)
-        for i = 1, count do
-            local name = net.readString()
-            local value = readValue()
-            local typeCode = inferNetVarTypeCode(value)
-            value = usableInputValue(name, value, typeCode)
-            local oldValue = NetVarValues[name]
-            local entry = netVar(name)
-            entry.typeCode = typeCode
-            NetVarValues[name] = clone(value)
-            InputValues[name] = clone(value)
-            InputValidity[name] = true
-            if not same(oldValue, value) then fireNetVarTriggers(name, value) end
+        if count == 0 then
+            local kind = net.readUInt(4)
+            if kind ~= NETWORK_STREAM_KIND then return end
 
-            local list = InputTriggers[name]
-            if list and not same(oldValue, value) then
-                for n = 1, #list do
-                    xpcall(list[n], function(err) print("[SS-SWH] client input trigger error: ", err) end, value, name)
-                end
+            local streamID = net.readUInt(16)
+            local first = net.readBool()
+            local last = net.readBool()
+            local length = net.readUInt(16)
+            local chunk = net.readData(length)
+            if first then NetworkClientStreams[streamID] = "" end
+            if NetworkClientStreams[streamID] == nil then return end
+
+            NetworkClientStreams[streamID] = NetworkClientStreams[streamID] .. chunk
+            if last then
+                local data = NetworkClientStreams[streamID]
+                NetworkClientStreams[streamID] = nil
+                applyStreamRecords(data)
             end
+            return
+        end
+
+        for i = 1, count do
+            applyNetworkRecord(net.readString(), readValue())
         end
     end)
 end
