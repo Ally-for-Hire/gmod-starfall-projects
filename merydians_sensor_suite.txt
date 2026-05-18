@@ -11,12 +11,15 @@ updateInputs("Radar1:entity Poll1:array Radar2:entity Poll2:array Radar3:entity 
 updateOutputs("Position:ARRAY Velocity:ARRAY Owner:ARRAY IDs:ARRAY Times:ARRAY")
 
 SELF = chip()
-THINK_DELAY = 0.15
-UPDATE_CAP = 0.05
-NextThink = 0
+PRUNE_INTERVAL = 0.05
+CONTACT_TTL = 0.3
+HEARTBEAT_INTERVAL = 0.5
+NextPrune = 0
+NextHeartbeat = 0
 Sensors = {}
-NextUpdate = 0
-ValuesQueued = false
+PendingSensorMask = 0
+ActiveSensorMask = 0
+BatchDirty = false
 
 Contacts = {}
 OutPosition = {}
@@ -24,98 +27,160 @@ OutVelocity = {}
 OutOwner = {}
 OutIDs = {}
 OutTimes = {}
+OutCount = 0
+IdList = {}
 
 curtime = timer.curtime
 
-local handleWirelinkData, publicContacts
+local handleWirelinkData, publishContacts
 
-hook.add("think", "MSS_main", function()
-    local time = curtime()
-    if time < NextThink then return end
-    NextThink = time + THINK_DELAY
+local function copyVector(value)
+    if value == nil then return ZERO_VEC end
+    return Vector(value[1], value[2], value[3])
+end
 
-    local changed = false
-    for id, contact in pairs(Contacts) do
-        if time - contact.Time >= (THINK_DELAY * 2) then
-            Contacts[id] = nil
-            changed = true
+local function sameVector(a, b)
+    if a == nil or b == nil then return a == b end
+    return a[1] == b[1] and a[2] == b[2] and a[3] == b[3]
+end
+
+local function sensorBit(num)
+    return 2 ^ (num - 1)
+end
+
+local function maskHasBit(mask, bit)
+    return math.floor(mask / bit) % 2 >= 1
+end
+
+local function rebuildActiveSensorMask()
+    local mask = 0
+
+    for i = 1, 4 do
+        if Sensors[i] ~= nil then
+            mask = mask + sensorBit(i)
         end
     end
 
-    if changed or ValuesQueued then
+    ActiveSensorMask = mask
+    PendingSensorMask = 0
+    BatchDirty = false
+end
+
+local function batchComplete()
+    return ActiveSensorMask == 0 or PendingSensorMask == ActiveSensorMask
+end
+
+hook.add("think", "MSS_main", function()
+    local time = curtime()
+    if time < NextPrune then return end
+    NextPrune = time + PRUNE_INTERVAL
+
+    local pruned = false
+    for id, contact in pairs(Contacts) do
+        if time - contact.Time >= CONTACT_TTL then
+            Contacts[id] = nil
+            pruned = true
+        end
+    end
+
+    if pruned then
+        BatchDirty = true
+    end
+
+    if batchComplete() and (BatchDirty or time >= NextHeartbeat) then
         publishContacts()
     end
 end)
 
 local function handlePositionInput(posWl, num)
     if Sensors[num] == nil then return end
+    if posWl == nil then return end
 
-    handleWirelinkData(posWl, Sensors[num])
-    publishContacts()
+    local valid, changed = handleWirelinkData(posWl, Sensors[num])
+    if not valid then return end
+
+    if changed then
+        BatchDirty = true
+    end
+
+    local bit = sensorBit(num)
+    if not maskHasBit(PendingSensorMask, bit) then
+        PendingSensorMask = PendingSensorMask + bit
+    end
+
+    if BatchDirty and batchComplete() then
+        publishContacts()
+    end
 end
 
 function handleWirelinkData(posWl, wl)
-    if #posWl == 0 then return end
+    if #posWl == 0 then return true, false end
 
     local velWl = wl.Velocity
     local ownerWl = wl.Owner
     local idsWl = wl.IDs
 
-    if (#velWl + #ownerWl + #idsWl) != #posWl * 3 then return end
+    if (#velWl + #ownerWl + #idsWl) ~= #posWl * 3 then return false, false end
 
     local time = curtime()
+    local changed = false
 
     for i = 1, #posWl do
         local id = idsWl[i]
         if id == nil then continue end
 
+        local pos = posWl[i]
+        local vel = velWl[i]
         local contact = Contacts[id]
 
         if contact == nil then
             contact = {}
             Contacts[id] = contact
-        elseif contact.Position == posWl[i] and contact.Velocity == velWl[i] and contact.Owner == ownerWl[i] then
+        elseif sameVector(contact.Position, pos) and sameVector(contact.Velocity, vel) and contact.Owner == ownerWl[i] then
             contact.Time = time
             continue
         end
 
-        contact.Position = posWl[i]
-        contact.Velocity = velWl[i]
+        contact.Position = copyVector(pos)
+        contact.Velocity = copyVector(vel)
         contact.Owner = ownerWl[i]
         contact.Time = time
+        changed = true
     end
+
+    return true, changed
 end
 
 local function handleRadarInput(ent, num)
-    if ent == nil or not isValid(ent) or ent:getClass() != "acf_radar" then
+    if ent == nil or not isValid(ent) or ent:getClass() ~= "acf_radar" then
         Sensors[num] = nil
         safeWireDelete(SELF, "Poll" .. num)
+        rebuildActiveSensorMask()
         return
     end
 
     Sensors[num] = ent:getWirelink()
     safeWireCreate(SELF, ent, "Poll" .. num, "Position")
+    rebuildActiveSensorMask()
 end
 
-function publishContacts()
-    OutPosition = {}
-    OutVelocity = {}
-    OutOwner = {}
-    OutIDs = {}
-    OutTimes = {}
-
-    local idList = {}
+publishContacts = function()
+    local time = curtime()
     local count = 0
 
     for id, _ in pairs(Contacts) do
         count = count + 1
-        idList[count] = id
+        IdList[count] = id
     end
 
-    table.sort(idList)
+    for i = count + 1, OutCount do
+        IdList[i] = nil
+    end
+
+    table.sort(IdList)
 
     for i = 1, count do
-        local id = idList[i]
+        local id = IdList[i]
         local contact = Contacts[id]
 
         OutPosition[i] = contact.Position
@@ -124,19 +189,24 @@ function publishContacts()
         OutIDs[i] = id
         OutTimes[i] = contact.Time
     end
-    
-    if curtime() > NextUpdate then
-        Outputs.Position:update(OutPosition)
-        Outputs.Velocity:update(OutVelocity)
-        Outputs.Owner:update(OutOwner)
-        Outputs.IDs:update(OutIDs)
-        Outputs.Times:update(OutTimes)
-        NextUpdate = curtime() + UPDATE_CAP
-        ValuesQueued = false
-        return
+
+    for i = count + 1, OutCount do
+        OutPosition[i] = nil
+        OutVelocity[i] = nil
+        OutOwner[i] = nil
+        OutIDs[i] = nil
+        OutTimes[i] = nil
     end
-    
-    ValuesQueued = true
+    OutCount = count
+
+    Outputs.Position:update(OutPosition)
+    Outputs.Velocity:update(OutVelocity)
+    Outputs.Owner:update(OutOwner)
+    Outputs.IDs:update(OutIDs)
+    Outputs.Times:update(OutTimes)
+    NextHeartbeat = time + HEARTBEAT_INTERVAL
+    PendingSensorMask = 0
+    BatchDirty = false
 end
 
 Inputs.Radar1:addTrigger(function(ent) handleRadarInput(ent, 1) end)
