@@ -224,6 +224,7 @@ if CLIENT then
     color = _setColor
     text = _drawText
     textSimple = _drawSimpleText
+    simpleText = _drawSimpleText
     plus = drawPlus
     function line (x1, y1, x2, y2, thickness)
         if thickness ~= nil then
