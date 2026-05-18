@@ -9,16 +9,15 @@ require("allylib/simple_server-side_wire_helper.txt")
 require("allylib/general_algorithms.txt")
 require("allylib/helpful_hud_functions.txt")
 
-PI =  3.14159265359
-RWR_RANGE = 400
+local PI =  3.14159265359
+local RWR_RANGE = 400
 
-C = chip()
-O = owner()
-P = player()
+local C = chip()
+local O = owner()
+local P = player()
 
 if SERVER then
     updateInputs("Base:ENTITY RWR:ENTITY RWR_Angles:ARRAY MWR_Positions:ARRAY MWR_Velocities:array WEP:ENTITY HORZ:ENTITY WYPT:ENTITY")
-    syncInputCommands(true)
 
     local function syncMWRContacts(ply)
         local positions = InputValues.MWR_Positions
@@ -55,48 +54,44 @@ if SERVER then
 
     hook.add("ClientInitialized", "MFDU_sendWireData", function(ply)
         tryNetSend("MFDU_initialWireSync", function()
-            net.writeEntity(sanitizeEntityInput(RWR, C))
-            net.writeEntity(sanitizeEntityInput(WEP, C))
-            net.writeEntity(sanitizeEntityInput(HORZ, C))
-            net.writeEntity(sanitizeEntityInput(WYPT, C))
-            net.writeEntity(sanitizeEntityInput(Base, C))
+            net.writeEntity(sanitizeEntityInput(InputValues.RWR, C))
+            net.writeEntity(sanitizeEntityInput(InputValues.WEP, C))
+            net.writeEntity(sanitizeEntityInput(InputValues.HORZ, C))
+            net.writeEntity(sanitizeEntityInput(InputValues.WYPT, C))
+            net.writeEntity(sanitizeEntityInput(InputValues.Base, C))
         end, ply)
         syncMWRContacts(ply)
     end)
 end
 
 if CLIENT then
-    RWR = nil
-    WEP = nil
-    HORZ = nil
-    WYPT = nil
-    RWRAngles = {}
-    MWRPositions = {}
-    MWRVelocities = {}
-    Base = chip()
+    local RWR, WEP, HORZ, WYPT
+    local RWRAngles = {}
+    local MWRPositions = {}
+    local MWRVelocities = {}
+    local Base = chip()
+    local X, Y = 256, 256
+    local LastUpdate = timer.curtime()
     
-    X, Y = 256, 256
-    LastUpdate = timer.curtime()
-    
-    baseYaw = 0
-    basePitch = 0
-    baseRoll = 0
-    basePos = Vector()
-    directions = {"E", "S", "W", "N"}
+    local baseYaw = 0
+    local basePitch = 0
+    local baseRoll = 0
+    local basePos = Vector()
+    local directions = {"E", "S", "W", "N"}
 
-    GEN_background = initRT("Generic Background")
-    RWR_background = initRT("RWR Background")
-    RWR_ticks = initRT("RWR Ticks")
-    RWR_tickText = initRT("RWR Directional Text")
-    HORZ_background = initRT("HORZ Background")
-    HORZ_data = initRT("HORZ Insides")
-    HORZ_ladder = initRT("HORZ Ladder")
-    WYPT_all = initRT("WYPT All Elements")
-    WYPT_background = initRT("WYPT_background")
-    FONT_MAIN = render.createFont("Default", 16, 12000)
-    FONT_SMALL = render.createFont("Default", 8, 12000)
-    COL_GREEN2 = Color(0, 255, 0, 100)
-    COL_YGREEN = Color(200, 255, 0)
+    local RT_genericBackground = initRT("Generic Background")
+    local RT_rwrBackground = initRT("RWR Background")
+    local RT_rwrTicks = initRT("RWR Ticks")
+    local RT_rwrTickText = initRT("RWR Directional Text")
+    local RT_horzBackground = initRT("HORZ Background")
+    local RT_horzData = initRT("HORZ Insides")
+    local RT_horzLadder = initRT("HORZ Ladder")
+    local RT_wyptAll = initRT("WYPT All Elements")
+    local RT_wyptBackgriund = initRT("RT_wyptBackgriund")
+    local FONT_MAIN = render.createFont("Default", 16, 12000)
+    local FONT_SMALL = render.createFont("Default", 8, 12000)
+    local COL_GREEN2 = Color(0, 255, 0, 100)
+    local COL_YGREEN = Color(200, 255, 0)
 
     hook.add("render", "MFDU_mainRenderHook", function()
         local screenEnt = render.getScreenEntity()
@@ -104,15 +99,15 @@ if CLIENT then
         
         if screenEnt == RWR then
             color(COL_WHITE)
-            drawCenterRT(X, Y, RWR_background)
+            drawCenterRT(X, Y, RT_rwrBackground)
             
             local m = Matrix()
             m:translate(Vector(X, Y, 0))
             m:rotate(Angle(0, -baseYaw, 0))
             render.pushMatrix(m)
-                drawCenterRT(0, 0, RWR_ticks)
+                drawCenterRT(0, 0, RT_rwrTicks)
             render.popMatrix()
-            drawCenterRT(X, Y, RWR_tickText)
+            drawCenterRT(X, Y, RT_rwrTickText)
             
         elseif screenEnt == HORZ then
             color(COL_WHITE)
@@ -120,7 +115,7 @@ if CLIENT then
             m:translate(Vector(X, Y, 0))
             m:rotate(Angle(0, baseRoll, 0))
             render.pushMatrix(m)
-                drawCenterRT(0, -basePitch * 11.37, HORZ_ladder, 0.5)
+                drawCenterRT(0, -basePitch * 11.37, RT_horzLadder, 0.5)
             render.popMatrix()
             
             color(COL_BLACK)
@@ -130,13 +125,13 @@ if CLIENT then
             centerRect(X, Y + 256 + 200, 512, 512)
             
             color(COL_WHITE)
-            drawCenterRT(X, Y, HORZ_background)
-            drawCenterRT(X, Y, HORZ_data)
+            drawCenterRT(X, Y, RT_horzBackground)
+            drawCenterRT(X, Y, RT_horzData)
             
         elseif screenEnt == WYPT then
             color(COL_WHITE)
-            drawCenterRT(X, Y, WYPT_all)
-            drawCenterRT(X, Y, WYPT_background)
+            drawCenterRT(X, Y, RT_wyptAll)
+            drawCenterRT(X, Y, RT_wyptBackgriund)
             
         else
             color(COL_RED)
@@ -144,14 +139,14 @@ if CLIENT then
         end
         
         color(COL_WHITE)
-        drawCenterRT(X, Y, GEN_background)
+        drawCenterRT(X, Y, RT_genericBackground)
     end)
 
     hook.add("renderoffscreen", "MFDU_drawStaticElements", function()
         local X, Y = 512, 512
         font(FONT_MAIN)
         
-        selectClearRT(GEN_background)
+        selectClearRT(RT_genericBackground)
             color(COL_GREEN)
             centerRectOutline(X, Y, 512, 512)
             text(X - 210, Y - 245, "RWR/MWR", TEXT_ALIGN.CENTER)
@@ -160,7 +155,7 @@ if CLIENT then
             text(X, Y - 245, "WYPT", TEXT_ALIGN.CENTER)
             text(X + 70, Y - 245, "RAD", TEXT_ALIGN.CENTER)
             
-        selectClearRT(RWR_background)
+        selectClearRT(RT_rwrBackground)
             color(COL_GREEN2)
             circle(X, Y, (50 + 195) / 2)
             line(X, Y + 50, X, Y + 195)
@@ -178,7 +173,7 @@ if CLIENT then
             color(COL_WHITE)
             circle(X, Y, 200)
             
-        selectClearRT(RWR_ticks)
+        selectClearRT(RT_rwrTicks)
             color(COL_GREEN)
             centerRect(X, Y, 1, 15)
             centerRect(X, Y, 15, 1)
@@ -198,7 +193,7 @@ if CLIENT then
                 line(X + sx * 200, Y + sy * 200, X + sx * 210, Y + sy * 210)
             end
             
-        selectClearRT(WYPT_background)
+        selectClearRT(RT_wyptBackgriund)
             color(COL_YELLOW)
             text(X - 220, Y + 180, "TOT          0S", TEXT_ALIGN.LEFT) 
             text(X - 220, Y - 150, "N           90* 90", TEXT_ALIGN.LEFT) 
@@ -222,7 +217,7 @@ if CLIENT then
             text(X - 220, Y + 180, "TOT", TEXT_ALIGN.LEFT)  
             text(X - 220, Y + 210, "GSPD", TEXT_ALIGN.LEFT) 
         
-        selectClearRT(HORZ_background)
+        selectClearRT(RT_horzBackground)
             color(COL_GREEN)
             centerRectOutline(X - 70, Y - 237, 44, 20)
             centerRect(X + 25, Y + 5, 4, 10)
@@ -236,7 +231,7 @@ if CLIENT then
             centerRectOutline(X + 200, Y, 50, 20)
             centerRectOutline(X - 210, Y, 70, 20)
             
-        selectClearRT(HORZ_ladder)
+        selectClearRT(RT_horzLadder)
             font(FONT_SMALL)
             for i = 0, 18 do
                 local tempy = i / 18 * 1024 - 4
@@ -283,8 +278,8 @@ if CLIENT then
         basePos = Base:getPos()
         font(FONT_MAIN)
         
-        if RWR != nil then
-            selectClearRT(RWR_tickText)
+        if RWR ~= nil then
+            selectClearRT(RT_rwrTickText)
             color(COL_WHITE)
             local num = -180 / 6 
             for i = 0, 2 * PI, PI / 6 do
@@ -358,8 +353,8 @@ if CLIENT then
             end
         end
         
-        if WYPT != nil then
-            selectClearRT(WYPT_all)
+        if WYPT ~= nil then
+            selectClearRT(RT_wyptAll)
             color(COL_YELLOW)    
             text(X - 220, Y - 60, "ELEV      " .. math.round(basePos.z / 39.37 + 300) .. "M", TEXT_ALIGN.LEFT)   
             text(X - 220, Y + 60, "0/S GRID      " .. math.round(basePos.x / 39.37) .. "," .. math.round(basePos.y / 39.37), TEXT_ALIGN.LEFT)  
@@ -367,8 +362,8 @@ if CLIENT then
             text(X - 220, Y + 210, "GSPD        " .. math.round(baseVel:getLength() / 10.9361) .. "KMH", TEXT_ALIGN.LEFT) 
         end
         
-        if HORZ != nil then
-            selectClearRT(HORZ_data)
+        if HORZ ~= nil then
+            selectClearRT(RT_horzData)
             color(COL_WHITE)
             text(X + 178, Y - 8, math.round(basePos.z / 39.37 + 300) .. "M")
             text(X - 240, Y - 8, math.round(baseVel:getLength() / 10.9361) .. "KMH")
