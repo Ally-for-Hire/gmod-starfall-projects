@@ -15,18 +15,13 @@ GEARING_TYPE: 1 = RPM, 2 = speed, 3 = hybrid.
 
 require("allylib/simple_server-side_wire_helper.txt")
 
-syncInputCommands(true) -- init-only toggle; do not call per-tick
 updateInputs("Engine:ENTITY MainGearbox:ENTITY Base:ENTITY Pod:WIRELINK")
 updateOutputs("Throttle:NORMAL LeftWeldLatch:NORMAL RightWeldLatch:NORMAL")
 
 EngineStateDirty = true
 
-local function markEngineDirty()
-    EngineStateDirty = true
-end
-
-Inputs.Engine:addTrigger(markEngineDirty)
-Inputs.MainGearbox:addTrigger(markEngineDirty)
+Inputs.Engine:addTrigger(function() EngineStateDirty = true end)
+Inputs.MainGearbox:addTrigger(function() EngineStateDirty = true end)
 
 --- Config
 SPEEDCONV = 1 / 17.6
@@ -35,7 +30,7 @@ BRAKE_SPEED_GATE = 30
 THINK_DT = 0.1
 
 GEARING_TYPE          = 3
-MAX_BRAKE_POWER       = 150
+MAX_BRAKE_POWER       = 100
 SCALE_BRAKES          = false
 WHEEL_DIAMETER        = 28
 FINAL_RATIO           = 0.18
@@ -44,15 +39,21 @@ DISABLE_NEUTRAL_STEER = false
 
 HAS_WHEELS = false
 WHEEL_COAST_WITHOUT_THROTTLE = true
-INVERTED_TRANSFERS = 1
+INVERTED_TRANSFERS = true
+INVERT_BRAKE_STEER = true
 
-YAW_DEADZONE = 15
+-- Countersteer only runs when driving straight. It uses the same side convention as A/D:
+-- A / left turn brakes the left side, D / right turn brakes the right side.
+YAW_DEADZONE = 25
 COUNTERSTEER_STRENGTH = 2 -- legacy P gain (kept for compatibility)
 COUNTERSTEER_MIN_BRAKE = 35
 COUNTERSTEER_KI = 0
 COUNTERSTEER_KD = 0.05 -- small D term for easier damping tuning
+
+-- Optional "reverse bite" for split-transfer neutral steer.
+-- 0 disables it; 1 is a full opposite-gear bite after ACTUAL_COUNTERSTEER_THRESHOLD.
 ACTUAL_COUNTERSTEER_THRESHOLD = 0.5
-ACTUAL_COUNTERSTEER_ENGAGEMENT = 1.0 -- 0 disables it; keep this low because 1 is a full reverse bite
+ACTUAL_COUNTERSTEER_ENGAGEMENT = 1.0
 
 INVERT_REVERSE_STEER = false
 CLUTCH_START = 0.8
@@ -60,6 +61,9 @@ CLUTCH_START = 0.8
 --- Internal Variables
 CLUTCH_TURN = 1
 CLUTCH_BRAKE = 1
+-- ACF transfer wire values: 1 is forward, 2 is reverse.
+FORWARD_TRANSFER_GEAR = 1
+REVERSE_TRANSFER_GEAR = 2
 INLINE_TRANSFERS = true
 AUTO_DETECT_INLINE_TRANSFERS = true
 GearCount = 0
@@ -85,7 +89,7 @@ DetectedDualClutch = false
 OutputGear = 1
 OutputGearSlot = 1
 OutputThrottle = 0
-OutputRightGear, OutputLeftGear = 1, 1
+OutputRightGear, OutputLeftGear = FORWARD_TRANSFER_GEAR, FORWARD_TRANSFER_GEAR
 OutputRightClutch, OutputLeftClutch = CLUTCH_BRAKE, CLUTCH_BRAKE
 OutputRightBrake, OutputLeftBrake = MAX_BRAKE_POWER, MAX_BRAKE_POWER
 LeftTransfer, RightTransfer = nil, nil
@@ -256,8 +260,9 @@ local function updateEngineVariables()
         if type == "Transfer Case" or type == "Transfer" then
             transfers = transfers + 1
             local y = MainGearbox:worldToLocal(link:getPos()).y
-            if y * INVERTED_TRANSFERS < 0 then RightTransfer = link end
-            if y * INVERTED_TRANSFERS > 0 then LeftTransfer = link end
+            local transferY = INVERTED_TRANSFERS and -y or y
+            if transferY < 0 then RightTransfer = link end
+            if transferY > 0 then LeftTransfer = link end
         end
     end
 
@@ -295,6 +300,11 @@ PrevEngine = nil
 PrevMainGearbox = nil
 
 local function think()
+    Engine = Inputs.Engine:get()
+    MainGearbox = Inputs.MainGearbox:get()
+    Base = Inputs.Base:get()
+    Pod = Inputs.Pod:get()
+
     -- 1) Refresh cached ACF/wirelink data only when entities change or a cached entity disappears.
     local needsRefresh = EngineStateDirty or Engine ~= PrevEngine or MainGearbox ~= PrevMainGearbox
     if not needsRefresh then
@@ -314,8 +324,8 @@ local function think()
     if not MainGearbox or not Base or not Pod or not isValid(MainGearbox) or not isValid(Base) or not EngineReady then
         OutputGearSlot = 1
         OutputGear = (GearSlots[1] or ReverseGearSlots[1] or 1)
-        OutputLeftGear = 1
-        OutputRightGear = 1
+        OutputLeftGear = FORWARD_TRANSFER_GEAR
+        OutputRightGear = FORWARD_TRANSFER_GEAR
         OutputThrottle = 0
         OutputLeftBrake = MAX_BRAKE_POWER
         OutputRightBrake = MAX_BRAKE_POWER
@@ -344,11 +354,13 @@ local function think()
     local hasInput = hasDriveInput or (neutralSteerEnabled and hasSteerInput) or steerOnlyDrive
 
     -- 4) Start each tick from the plain "hold still" output state, then loosen it as needed.
-    OutputLeftGear = 1
-    OutputRightGear = 1
+    OutputLeftGear = FORWARD_TRANSFER_GEAR
+    OutputRightGear = FORWARD_TRANSFER_GEAR
 
     if not hasInput and speed < 1 and rpm < BiteRPM then
         OutputThrottle = IDLE_THROTTLE
+        OutputLeftGear = FORWARD_TRANSFER_GEAR
+        OutputRightGear = FORWARD_TRANSFER_GEAR
         OutputLeftBrake = MAX_BRAKE_POWER
         OutputRightBrake = MAX_BRAKE_POWER
         OutputLeftClutch = CLUTCH_BRAKE
@@ -456,16 +468,16 @@ local function think()
     if neutralSteerEnabled then
         if not hasDriveInput and hasSteerInput then
             if steerDir < 0 then
-                OutputLeftGear = 2
-                OutputRightGear = 1
+                OutputLeftGear = REVERSE_TRANSFER_GEAR
+                OutputRightGear = FORWARD_TRANSFER_GEAR
             else
-                OutputLeftGear = 1
-                OutputRightGear = 2
+                OutputLeftGear = FORWARD_TRANSFER_GEAR
+                OutputRightGear = REVERSE_TRANSFER_GEAR
             end
         else
             if driveDir < 0 then
-                OutputLeftGear = 2
-                OutputRightGear = 2
+                OutputLeftGear = REVERSE_TRANSFER_GEAR
+                OutputRightGear = REVERSE_TRANSFER_GEAR
             end
 
             if steerDir < 0 then
@@ -480,14 +492,17 @@ local function think()
         end
     elseif brakeSteerEnabled then
         if CanNeutralSteer and driveDir < 0 and ReverseGears == 0 then
-            OutputLeftGear = 2
-            OutputRightGear = 2
+            OutputLeftGear = REVERSE_TRANSFER_GEAR
+            OutputRightGear = REVERSE_TRANSFER_GEAR
         end
 
         if hasSteerInput and (hasDriveInput or speed > 1 or steerOnlyDrive) and
             (CanNeutralSteer or DetectedDualClutch) then
             local turnDir = steerDir
             if driveDir < 0 and INVERT_REVERSE_STEER then
+                turnDir = -turnDir
+            end
+            if INVERT_BRAKE_STEER then
                 turnDir = -turnDir
             end
 
@@ -516,32 +531,40 @@ local function think()
                 + ((err - CounterSteerPrevError) / THINK_DT / MAX_YAW_RATE) * COUNTERSTEER_KD,
                 0
             ), 1)
-            local actualAssist = 0
-            if CanNeutralSteer and ACTUAL_COUNTERSTEER_ENGAGEMENT > 0 and ACTUAL_COUNTERSTEER_THRESHOLD < 1 then
-                actualAssist = math.clamp((pidNorm - ACTUAL_COUNTERSTEER_THRESHOLD) / (1 - ACTUAL_COUNTERSTEER_THRESHOLD), 0, 1)
-            end
-
-            local counterSteerWeight = math.min(math.max(COUNTERSTEER_MIN_BRAKE, pidNorm * brakePower), brakePower) * (1 - actualAssist)
-
             CounterSteerPrevError = err
 
-            local direction = driveDir ~= 0 and driveDir or 1
+            local counterSteerBrake = math.min(math.max(COUNTERSTEER_MIN_BRAKE, pidNorm * brakePower), brakePower)
+            local reverseBiteActive = false
+            if CanNeutralSteer and ACTUAL_COUNTERSTEER_ENGAGEMENT > 0 and ACTUAL_COUNTERSTEER_THRESHOLD < 1 then
+                local biteStart = ACTUAL_COUNTERSTEER_THRESHOLD
+                local biteRange = 1 - biteStart
+                local biteScale = math.clamp(ACTUAL_COUNTERSTEER_ENGAGEMENT, 0, 1)
+                local reverseBiteAmount = math.clamp((pidNorm - biteStart) / biteRange, 0, 1) * biteScale
+                reverseBiteActive = reverseBiteAmount > 0
+            end
 
-            if yawRate * direction < 0 then
-                OutputLeftBrake = math.max(OutputLeftBrake, counterSteerWeight)
-                if actualAssist > 0 then
-                    OutputLeftGear = OutputLeftGear == 1 and 2 or 1
-                    OutputLeftClutch = math.max(OutputLeftClutch, 1 - actualAssist * math.clamp(ACTUAL_COUNTERSTEER_ENGAGEMENT, 0, 1))
-                else
-                    OutputLeftClutch = math.max(OutputLeftClutch, CLUTCH_TURN)
+            local yawWhileDriving = yawRate * driveDir
+
+            -- Match brake steering: right correction uses the right brake, left correction uses the left brake.
+            if yawWhileDriving < 0 then
+                OutputRightBrake = math.max(OutputRightBrake, counterSteerBrake)
+                OutputRightClutch = math.max(OutputRightClutch, CLUTCH_TURN)
+                if reverseBiteActive then
+                    if OutputRightGear == FORWARD_TRANSFER_GEAR then
+                        OutputRightGear = REVERSE_TRANSFER_GEAR
+                    else
+                        OutputRightGear = FORWARD_TRANSFER_GEAR
+                    end
                 end
             else
-                OutputRightBrake = math.max(OutputRightBrake, counterSteerWeight)
-                if actualAssist > 0 then
-                    OutputRightGear = OutputRightGear == 1 and 2 or 1
-                    OutputRightClutch = math.max(OutputRightClutch, 1 - actualAssist * math.clamp(ACTUAL_COUNTERSTEER_ENGAGEMENT, 0, 1))
-                else
-                    OutputRightClutch = math.max(OutputRightClutch, CLUTCH_TURN)
+                OutputLeftBrake = math.max(OutputLeftBrake, counterSteerBrake)
+                OutputLeftClutch = math.max(OutputLeftClutch, CLUTCH_TURN)
+                if reverseBiteActive then
+                    if OutputLeftGear == FORWARD_TRANSFER_GEAR then
+                        OutputLeftGear = REVERSE_TRANSFER_GEAR
+                    else
+                        OutputLeftGear = FORWARD_TRANSFER_GEAR
+                    end
                 end
             end
         else
