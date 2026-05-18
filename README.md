@@ -22,7 +22,7 @@ Main release folder for my Garry's Mod Starfall chips and shared libraries.
 - `allylib/general_algorithms.txt`
 - `allylib/helpful_hud_functions.txt`
 - `allylib/merys_integrated_ballistics_computer.txt`
-- `allylib/simple_server-side_wire_helper.txt`
+- `allylib/simple_wire_helper.txt`
 
 ## Usage
 1. Keep the same folder structure under `garrysmod/data/starfall/`.

@@ -1,11 +1,11 @@
 --@name 2024 Cam Controller and Hud
 --@author Ally for Hire / Merydian9
 --@model models/jaanus/wiretool/wiretool_range.mdl
---@include ../allylib/simple_server-side_wire_helper.txt
+--@include ../allylib/simple_wire_helper.txt
 --@include ../allylib/helpful_hud_functions.txt
 --@shared
 
-require( "../allylib/simple_server-side_wire_helper.txt" )
+require( "../allylib/simple_wire_helper.txt" )
 require( "../allylib/helpful_hud_functions.txt" )
 
 if CLIENT then

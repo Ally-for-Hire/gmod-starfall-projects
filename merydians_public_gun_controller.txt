@@ -1,12 +1,12 @@
 --@name Merydian's Public Gun Controller
 --@author Ally for Hire / Merydian9
 --@include allylib/general_algorithms.txt
---@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_wire_helper.txt
 --@include allylib/merys_integrated_ballistics_computer.txt
 --@server
 
 require("allylib/general_algorithms.txt")
-require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_wire_helper.txt")
 require("allylib/merys_integrated_ballistics_computer.txt")
 
 updateInputs("Lock:NORMAL Active:NORMAL Gun:ENTITY Base:ENTITY HitPos:VECTOR LoadPitch:NORMAL")

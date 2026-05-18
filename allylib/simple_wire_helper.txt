@@ -1,12 +1,12 @@
 --@name Simple Wire Helper
 --@author Ally for Hire / Merydian9
---@include simple_server-side_wire_helper.txt
+--@include starfall_wire_networking_interface.txt
 --@shared
 
 --[[
-Direct-global wire helper layered over simple_server-side_wire_helper.txt.
+Direct-global wire helper layered over starfall_wire_networking_interface.txt.
 
-SSSWH remains the compatibility backend. This helper changes the front-end style:
+The networking interface remains the compatibility backend. This helper changes the front-end style:
 - `updateInputs("Base:ENTITY RWR:ENTITY")` creates globals `Base` and `RWR`.
 - `networkInputs("Base RWR", interval)` chooses which input globals replicate to clients.
 - `addNetworkedVariable("TargetState", interval, {})` creates a global `TargetState`.
@@ -16,7 +16,7 @@ SSSWH remains the compatibility backend. This helper changes the front-end style
 Do not declare direct globals as `local`. Reads and writes must go through `_G`.
 ]]--
 
-local base = require("simple_server-side_wire_helper.txt")
+local base = require("starfall_wire_networking_interface.txt")
 
 DirectWireValues = DirectWireValues or {}
 DirectWireRegistered = DirectWireRegistered or {}

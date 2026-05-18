@@ -1,6 +1,6 @@
 --@name Ally Mobility Hours
 --@author Ally for Hire / Merydian9
---@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_wire_helper.txt
 --@server
 
 --- Version 0.13.12
@@ -13,7 +13,7 @@ Outputs: Throttle, LeftWeldLatch, RightWeldLatch.
 GEARING_TYPE: 1 = RPM, 2 = speed, 3 = hybrid.
 ]]--
 
-require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_wire_helper.txt")
 
 updateInputs("Engine:ENTITY MainGearbox:ENTITY Base:ENTITY Pod:WIRELINK")
 updateOutputs("Throttle:NORMAL LeftWeldLatch:NORMAL RightWeldLatch:NORMAL")
@@ -44,7 +44,7 @@ INVERT_BRAKE_STEER = true
 
 -- Countersteer only runs when driving straight. It uses the same side convention as A/D:
 -- A / left turn brakes the left side, D / right turn brakes the right side.
-YAW_DEADZONE = 25
+YAW_DEADZONE = 15
 COUNTERSTEER_STRENGTH = 2 -- legacy P gain (kept for compatibility)
 COUNTERSTEER_MIN_BRAKE = 35
 COUNTERSTEER_KI = 0

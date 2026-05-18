@@ -1,11 +1,11 @@
 --@name Lowlag Multi Function Displays
 --@author Ally for Hire / Merydian9
---@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_wire_helper.txt
 --@include allylib/general_algorithms.txt
 --@include allylib/helpful_hud_functions.txt
 --@shared
 
-require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_wire_helper.txt")
 require("allylib/general_algorithms.txt")
 require("allylib/helpful_hud_functions.txt")
 

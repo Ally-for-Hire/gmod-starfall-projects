@@ -1,6 +1,6 @@
 --@name Fixed Camera Controller Example
 --@author Ally for Hire / Merydian9
---@include ../allylib/simple_server-side_wire_helper.txt
+--@include ../allylib/simple_wire_helper.txt
 --@shared
 
 --[[
@@ -17,7 +17,7 @@ What To Learn:
   does not redefine the same owner-gated message flow.
 ]]--
 
-require("../allylib/simple_server-side_wire_helper.txt")
+require("../allylib/simple_wire_helper.txt")
 
 local INPUTS   = {}
 local USER     = player()

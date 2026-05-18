@@ -1,4 +1,4 @@
---@name Simple Server-Side Wire Helper
+--@name Starfall Wire Networking Interface
 --@author Ally for Hire / Merydian9
 
 --[[

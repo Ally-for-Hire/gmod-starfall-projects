@@ -2,14 +2,14 @@
 --@author Ally for Hire / Merydian9
 --@model models/jaanus/wiretool/wiretool_range.mdl
 --@shared
---@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_wire_helper.txt
 --@include allylib/general_algorithms.txt
 
 -- Version 1.6.0
 -- Seat-driver camera controller. Helper owns wire, cached input reads, and NetVar sync.
 
 require("allylib/general_algorithms.txt")
-require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_wire_helper.txt")
 
 local CHIP = chip()
 local OWNER = owner()

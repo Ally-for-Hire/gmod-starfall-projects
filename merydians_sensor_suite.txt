@@ -1,10 +1,10 @@
 --@name Merydian's Sensor Suite
 --@author Ally for Hire / Merydian9
---@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_wire_helper.txt
 --@include allylib/general_algorithms.txt
 --@server
 
-require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_wire_helper.txt")
 require("allylib/general_algorithms.txt")
 
 updateInputs("Radar1:entity Poll1:array Radar2:entity Poll2:array Radar3:entity Poll3:array Radar4:entity Poll4:array")

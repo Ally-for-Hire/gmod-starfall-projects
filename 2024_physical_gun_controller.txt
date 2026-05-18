@@ -1,11 +1,11 @@
 --@name 2024 Physical Gun Controller
 --@author Ally for Hire / Merydian9
 --@include allylib/general_algorithms.txt
---@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_wire_helper.txt
 --@server
 
 require("allylib/general_algorithms.txt")
-require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_wire_helper.txt")
 
 updateInputs("Aimer:ENTITY HitPos:VECTOR R:NORMAL TargetPos:VECTOR LeadPos:VECTOR TargetName:STRING")
 updateOutputs("GunTarget:VECTOR")
@@ -20,7 +20,7 @@ KP = 450
 KI = 15
 KD = 40
 
-Abs = math.abs
+_abs = math.abs
 
 Gun = nil
 Inertia = Angle()
@@ -152,10 +152,10 @@ hook.add("tick", "main", function()
 
     local force = zeroRoll(Gun:worldToLocalAngles(gunAng))
 
-    if Abs(force.yaw) > 45 then
+    if _abs(force.yaw) > 45 then
         force.pitch = 0
         Integral = Angle()
-    elseif Abs(force.pitch) + Abs(force.yaw) < 5 then
+    elseif _abs(force.pitch) + _abs(force.yaw) < 5 then
         Integral = Integral + force
         Integral = clampAngle(Integral, negateAngle(ROTATE_SPEED), ROTATE_SPEED)
     else

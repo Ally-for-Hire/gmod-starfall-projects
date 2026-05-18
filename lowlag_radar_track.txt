@@ -1,10 +1,10 @@
 --@name Lowlag Radar Track
 --@author Ally for Hire / Merydian9
---@include allylib/simple_server-side_wire_helper.txt
+--@include allylib/simple_wire_helper.txt
 --@include allylib/helpful_hud_functions.txt
 --@shared
 
-require("allylib/simple_server-side_wire_helper.txt")
+require("allylib/simple_wire_helper.txt")
 require("allylib/helpful_hud_functions.txt")
 
 OUTPUT_UPDATE_CAP = 0.1
